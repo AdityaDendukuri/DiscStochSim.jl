@@ -4,6 +4,7 @@ using Catalyst
 using SparseArrays
 using Expokit
 using DifferentialEquations
+using Random
 
 include("util/helper_functions.jl")
 include("state_space/rstep_expanders.jl")
