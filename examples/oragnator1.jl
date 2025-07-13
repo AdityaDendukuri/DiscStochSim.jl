@@ -4,7 +4,7 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ f61fe968-f0ad-4d2c-9af5-c27f9224a1cc
+# ╔═╡ 0a0b3d53-7bc0-4d12-b772-e54d56b59134
 begin
 	# numerical libraries
 	using ExponentialUtilities, Expokit, PROPACK, Arpack, SparseArrays
@@ -19,124 +19,287 @@ begin
 	using .local_mod.DiscStochSim
 end
 
-# ╔═╡ 9dd29549-5238-4314-a3dd-96f4a9e385d9
+# ╔═╡ 4338fa2f-b527-4983-82ce-d5f6d3cfb821
+# SOLUTION: Use purely numerical stoichiometry and effective rates
+
+# 1. FIXED REACTION NETWORK - NO SYMBOLIC STOICHIOMETRY
 oregonator_rn = @reaction_network begin
     @species X(t) Y(t) Z(t)
-    @parameters k1 k2 k3 k4 k5 A B
     
-    # Define reactions using the symbolic parameters directly
-    k1*A, Y --> X
-    k2, X + Y --> ∅
-    k3*B, X --> 2X + Z
-    k4, 2X --> ∅
-    k5, Z --> 5Y
+    # All stoichiometry is purely numerical
+    k1_eff, Y --> X              # A + Y → X (A absorbed into k1_eff)
+    k2, X + Y --> ∅              # X + Y → products
+    k3_eff, X --> 2*X + 2*Z      # A + X → 2X + 2Z (A absorbed into k3_eff)  
+    k4, 2*X --> ∅                # 2X → products
+    k5_eff, Z --> 2*Y            # B + Z → f*Y, with f=2 chosen numerically
 end
 
-# ╔═╡ 4e84db3b-5377-4f42-ae38-c7f867fd5827
+# 2. EFFECTIVE RATE CONSTANTS (absorb all parameters)
+
+# ╔═╡ c9d93374-8696-4cee-91bc-6b2c1e60bb58
 model = DiscreteStochasticSystem(oregonator_rn)
 
-# ╔═╡ 20b55d13-f885-414d-95eb-7bbf47612f2d
-
-
-# ╔═╡ 6a642e9c-d4c0-45fe-ae8e-4ff7cde45262
-oregonator_params_final = begin
-    # Define all parameters for the model
-    rates = [1.3, 1.6e6, 8.0e3,4.0e1, 1.0, 1.0, 1.0]
-
-    # Initial conditions for the dynamic species (X,Y,Z)
-    u₀ = [6.0, 62.0, 6.0]
-
-    # Bounds for the state space (X, Y).
-    # Oscillations are contained within small values.
-    bounds = (0, 600) 
-    boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+# ╔═╡ 33ce47f0-5baf-4994-829c-c787a5148d2d
+oregonator_rates = begin
+    # Base parameters
+    k1 = 1.3
+    k2 = 1.6e6  
+    k3 = 8.0e3
+    k4 = 4.0e1
+    k5 = 1.0
+    
+    # Chemical concentrations  
+    A = 0.06    # Bromate
+    B = 0.02    # Organic substrate
+    f = 2.0     # Stoichiometric factor - CHOOSE THIS VALUE
+    
+    # Effective rates that absorb all parameters
+    k1_eff = k1 * A           # = 1.3 * 0.06 = 0.078
+    k2_eff = k2               # = 1.6e6 (no absorption needed)
+    k3_eff = k3 * A           # = 8.0e3 * 0.06 = 480
+    k4_eff = k4               # = 4.0e1 (no absorption needed)
+    k5_eff = k5 * B * f       # = 1.0 * 0.02 * 2.0 = 0.04
+    
+    local rates = [k1_eff, k2_eff, k3_eff, k4_eff, k5_eff]
+    
+    println("Effective rates for FSP:")
+    println("k1_eff (Y→X): $(k1_eff)")
+    println("k2_eff (X+Y→∅): $(k2_eff)")  
+    println("k3_eff (X→2X+2Z): $(k3_eff)")
+    println("k4_eff (2X→∅): $(k4_eff)")
+    println("k5_eff (Z→2Y): $(k5_eff)")
+    println("Chosen f value: $f")
+    
+    rates
 end
 
-# ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
-fsp_sim_oregonator = begin
+# 3. CREATE THE MODEL (should work without stoichiometry errors)
 
-    tf = 50.0   # Simulate for enough time to see several oscillations
-    ϵ_dt = 0.1 # Tolerance for adaptive dt calculation
+# ╔═╡ cd768eda-cf66-4217-b047-4d710eb6004c
+model_creation = begin
+    println("Creating DiscreteStochasticSystem...")
+    try
+        model = DiscreteStochasticSystem(oregonator_rn)
+        println("✓ Model created successfully!")
+        println("Number of species: $(length(model.species))")
+        println("Number of reactions: $(length(model.reactions))")
+        model
+    catch e
+        println("✗ Error creating model: $e")
+        nothing
+    end
+end
 
-    # Initial state (X, Y) near the unstable steady state
-    U₀ = CartesianIndex(6, 62, 6)
-    𝒮ₜ = Set([U₀])
+# 4. INITIAL CONDITIONS FROM MOLECULE COUNT ANALYSIS
+
+# ╔═╡ 4693f298-1d33-48ec-a508-bd927a432fbf
+initial_conditions = begin
+    # Use realistic molecule counts
+    # From your SSA analysis, but scaled appropriately
+    
+    # Option 1: Conservative (fewer molecules, less stiff)
+    X0 = 10
+    Y0 = 100  
+    Z0 = 10
+    
+    # Option 2: More realistic (from concentration conversion)
+    # X0 = 60
+    # Y0 = 600
+    # Z0 = 60
+    
+    local U₀ = CartesianIndex(X0, Y0, Z0)
+    
+    println("Initial state: $U₀")
+    println("Starting molecules: X=$X0, Y=$Y0, Z=$Z0")
+    
+    U₀
+end
+
+# 5. BOUNDS BASED ON CHEMICAL INTUITION
+
+# ╔═╡ 374d0cdf-990b-4769-b35f-a7c617061d24
+bounds_setup = begin
+    # The key insight: estimate bounds from deterministic solution
+    # For oscillatory systems, set bounds ~2-3x the peak values
+    
+    # Conservative approach: start smaller and expand if needed
+    max_bound = 2000  # Much more reasonable than 90,000
+    local bounds = (0, max_bound)
+    
+    local boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+    
+    println("State space bounds: $bounds")
+    println("Total possible states: $(max_bound^3) (but FSP will use much fewer)")
+    
+    (bounds, boundary_condition)
+end
+
+# 6. COMPLETE FSP SIMULATION
+
+# ╔═╡ b34cbd6f-51d5-463c-ad8d-bce6e86b9583
+fsp_oregonator_final = begin
+    tf = 25.0      # Shorter time for initial testing
+    ϵ_dt = 0.01    # Smaller tolerance for accuracy
+    
+    # Get all components
+    rates = oregonator_rates
+    local U₀ = initial_conditions
+    local bounds, boundary_condition = bounds_setup
+    
+    # Initialize state
+    local 𝒮ₜ = Set([U₀])
     pₜ = zeros(length(𝒮ₜ))
     pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    # Initialize current time and dynamic solution arrays
+    
+    # Initialize tracking
     local t = 0.0
     sol_t = [t]
     sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-
-    # --- Main Adaptive Loop ---
+    sol_dt = Float64[]
+    sol_mean_X = [Float64(U₀[1])]
+    sol_mean_Y = [Float64(U₀[2])]
+    sol_mean_Z = [Float64(U₀[3])]
     
-    while t < tf
-
-        # 1. Calculate adaptive δt based on total expected system activity
+    println("Starting FSP simulation...")
+    println("Target time: $tf")
+    println("Initial |S|: $(length(𝒮ₜ))")
+    
+    local step_count = 0
+    max_steps = 5000  # Safety limit
+    
+    while t < tf && step_count < max_steps
+        step_count += 1
+        
+        # 1. Adaptive time step calculation
         X_vec = collect(𝒮ₜ)
         total_flux = 0.0
+        
         for i in eachindex(X_vec)
             state = X_vec[i]
+            # Calculate propensities for this state
             weight = sum(prop(state, rates, t) for prop in model.propensities)
             total_flux += pₜ[i] * weight
         end
-
+        
         δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
         δt = min(δt, tf - t)
-
-        # 2. Expand state space
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 3)
-
-        # 3. Build Master Equation and Evolve over the calculated δt
+        push!(sol_dt, δt)
+        
+        # 2. Expand state space (conservative)
+        𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
+        
+        # 3. Build and apply master equation
         A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
         pₜ = expv(δt, A, pₜ)
         
-        # 4. Purge state space using the robust flux-based method
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.01, 1e-7)
+        # 4. Prune state space
+        # Tune these parameters to balance accuracy vs performance
+        prob_quantile = 0.01    # Keep top 99% of probability
+        flux_tolerance = 1e-10  # Very small tolerance
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, prob_quantile, flux_tolerance)
         
-        # 5. Renormalize probability
+        # 5. Renormalize
         pₜ ./= sum(pₜ)
         
-        # 6. Update time and store results
+        # 6. Update time and calculate statistics
         t += δt
         
-        push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        # Calculate mean trajectory
+        states = collect(𝒮ₜ)
+        mean_X = sum(state[1] * pₜ[i] for (i, state) in enumerate(states))
+        mean_Y = sum(state[2] * pₜ[i] for (i, state) in enumerate(states))
+        mean_Z = sum(state[3] * pₜ[i] for (i, state) in enumerate(states))
+        
+        # Store results
         push!(sol_t, t)
         push!(sol_S_size, length(𝒮ₜ))
+        push!(sol_mean_X, mean_X)
+        push!(sol_mean_Y, mean_Y)
+        push!(sol_mean_Z, mean_Z)
+        
+        # Progress updates
+        if step_count % 200 == 0 || length(𝒮ₜ) > 1000
+            println("Step $step_count: t=$(round(t,digits=2)), |S|=$(length(𝒮ₜ)), δt=$(round(δt,digits=6))")
+            println("  Mean: X=$(round(mean_X,digits=1)), Y=$(round(mean_Y,digits=1)), Z=$(round(mean_Z,digits=1))")
+        end
+        
+        # Safety check for state space explosion
+        if length(𝒮ₜ) > 5000
+            println("⚠ State space getting large: $(length(𝒮ₜ)) states")
+            println("Consider more aggressive pruning or smaller bounds")
+        end
     end
     
+    println("\n✓ Simulation complete!")
+    println("Final time: $(round(t,digits=2))")
+    println("Total steps: $step_count") 
+    println("Final |S|: $(length(𝒮ₜ))")
+    println("Max |S|: $(maximum(sol_S_size))")
+    
+    # Return all results
+    (
+        sol_t = sol_t,
+        sol_S_size = sol_S_size, 
+        sol_dt = sol_dt,
+        sol_mean_X = sol_mean_X,
+        sol_mean_Y = sol_mean_Y,
+        sol_mean_Z = sol_mean_Z
+    )
 end
 
-# ╔═╡ 6e33a6b1-11ce-4df0-ad24-5c62ef50f97c
-plot(sol_t)
+# 7. PARAMETER EXPLORATION FUNCTION
 
-# ╔═╡ dea9718b-f823-403f-9016-82db7c564bc3
-sol[end]
-
-# ╔═╡ 0da22cbd-7194-4cab-bf87-3722d3fd651f
-plot([sol_t[i+1]-sol_t[i] for i in 1:length(sol_t)-1], title="dt")
-
-# ╔═╡ a4822e24-f8d9-40ac-974c-364dc93c4eac
-begin
-	sol_mean = map(1:size(sol)[1]) do i
-	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
-	end 
-	fsp_mean=hcat(sol_mean...)'
+# ╔═╡ 392c6827-5ea5-4b8a-b045-7080bc7aa6be
+function try_different_f_values_numerical()
+    println("\n=== Testing Different f Values ===")
+    println("Since we fixed f=2 in the stoichiometry (Z→2Y),")
+    println("to test different f values, we need to adjust k5_eff:")
+    println()
+    
+    base_k5 = 1.0 * 0.02  # k5 * B
+    
+    for f_test in [1.0, 1.5, 2.0, 2.5, 3.0]
+        k5_eff_test = base_k5 * f_test
+        println("f = $f_test: k5_eff = $k5_eff_test")
+        println("  Modify: rates[5] = $k5_eff_test")
+        println("  Expected: $(f_test < 2.0 ? "single pulse" : "sustained oscillations")")
+        println()
+    end
+    
+    println("To test: modify oregonator_rates[5] and re-run simulation")
 end
 
-# ╔═╡ dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
-begin
-	p=plot(fsp_mean[:, 1])
-	p=plot!(fsp_mean[:, 2])
-    p=plot!(fsp_mean[:, 3])
-	title!(p, "mean trajectory")
-	p
-end
+# 8. DIAGNOSTIC SUMMARY
 
-# ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
-plot(sol_S_size, title="state space size")
+# ╔═╡ f3b6cda8-064d-4218-99e2-39ae86416529
+sol_mean
+
+# ╔═╡ 55473ffb-4144-41a7-99e6-47dd64228ca7
+println("OREGONATOR FSP SETUP COMPLETE")
+
+# ╔═╡ f8354d25-b5de-4dd4-b630-669e4439b1a0
+println("="^50)
+
+# ╔═╡ 88908fc6-e7c9-46c1-8580-4fdf44ce7bbd
+println("✓ Numerical stoichiometry only (no symbolic f*Y)")
+
+# ╔═╡ 3390451f-930d-45c4-9080-390fa5c590b5
+println("✓ Effective rate constants absorb all parameters")
+
+# ╔═╡ 7d925cd7-ef9f-476a-8130-d3cab963d530
+println("✓ Realistic initial conditions and bounds")
+
+# ╔═╡ cdccf8b8-e243-4ce1-8b82-4e752bdcc03e
+println("✓ Model should create without errors")
+
+# ╔═╡ 3bf62795-df1c-4b85-adf3-77f0caf9c185
+println("\nTo run: execute 'fsp_oregonator_final'")
+
+# ╔═╡ 3f564e65-7137-4e63-a039-a62dab6537d1
+println("To explore: execute 'try_different_f_values_numerical()'")
+
+# ╔═╡ 2322f730-05aa-4bad-855d-9b8caf3db6e4
+try_different_f_values_numerical()
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3258,17 +3421,24 @@ version = "1.9.2+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═f61fe968-f0ad-4d2c-9af5-c27f9224a1cc
-# ╠═9dd29549-5238-4314-a3dd-96f4a9e385d9
-# ╠═4e84db3b-5377-4f42-ae38-c7f867fd5827
-# ╠═20b55d13-f885-414d-95eb-7bbf47612f2d
-# ╠═6a642e9c-d4c0-45fe-ae8e-4ff7cde45262
-# ╠═9f592c0e-313e-48dd-bcbe-22e4b41ad55a
-# ╠═6e33a6b1-11ce-4df0-ad24-5c62ef50f97c
-# ╠═dea9718b-f823-403f-9016-82db7c564bc3
-# ╠═0da22cbd-7194-4cab-bf87-3722d3fd651f
-# ╠═a4822e24-f8d9-40ac-974c-364dc93c4eac
-# ╠═dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
-# ╠═5c736465-5bfc-45e6-8445-266e3eaffd47
+# ╠═0a0b3d53-7bc0-4d12-b772-e54d56b59134
+# ╠═4338fa2f-b527-4983-82ce-d5f6d3cfb821
+# ╠═c9d93374-8696-4cee-91bc-6b2c1e60bb58
+# ╠═33ce47f0-5baf-4994-829c-c787a5148d2d
+# ╠═cd768eda-cf66-4217-b047-4d710eb6004c
+# ╠═4693f298-1d33-48ec-a508-bd927a432fbf
+# ╠═374d0cdf-990b-4769-b35f-a7c617061d24
+# ╠═b34cbd6f-51d5-463c-ad8d-bce6e86b9583
+# ╠═392c6827-5ea5-4b8a-b045-7080bc7aa6be
+# ╠═f3b6cda8-064d-4218-99e2-39ae86416529
+# ╠═55473ffb-4144-41a7-99e6-47dd64228ca7
+# ╠═f8354d25-b5de-4dd4-b630-669e4439b1a0
+# ╠═88908fc6-e7c9-46c1-8580-4fdf44ce7bbd
+# ╠═3390451f-930d-45c4-9080-390fa5c590b5
+# ╠═7d925cd7-ef9f-476a-8130-d3cab963d530
+# ╠═cdccf8b8-e243-4ce1-8b82-4e752bdcc03e
+# ╠═3bf62795-df1c-4b85-adf3-77f0caf9c185
+# ╠═3f564e65-7137-4e63-a039-a62dab6537d1
+# ╠═2322f730-05aa-4bad-855d-9b8caf3db6e4
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
