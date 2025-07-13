@@ -70,7 +70,6 @@ begin
 	# Create three side-by-side axes
 	for (i, m_) in enumerate([mm_ϵₜ, lv_ϵₜ, ts_ϵₜ[1:70]])
 	    ax = Axis(fig[1, i])  # Place in row 1, column i
-		println(length(m_))
 	    create_plot(ax, times[i], m_, hline_pts[i], titles[i], ylables[i])
 	end
 	

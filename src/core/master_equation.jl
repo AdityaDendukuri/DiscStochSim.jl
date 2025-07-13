@@ -52,7 +52,7 @@ function MasterEquationNonDiagonal(data::MasterEquationData{T,ElementType,ModelT
         xᵢ = active_states[i]
         S = xᵢ - xj         # Reaction vector.
         k = FindElement(S, model.stoichvecs)
-        α = model.propensities[k](xᵢ, rates, t)
+        α = model.propensities[k](xj, rates, t)
         (i, j, α)
     end for (i, sources) in enumerate(source_states) for xj in sources]
 
@@ -84,7 +84,7 @@ function MasterEquationDiagonal(data::MasterEquationData{T,ElementType,ModelType
     # Compute diagonal entries.
     diagonal_entries = [
         begin
-            αs = [((xᵢ + S) in active_states) ? model.propensities[k](xᵢ + S, rates, t) : 0.0
+            αs = [((xᵢ + S) in active_states) ? model.propensities[k](xᵢ, rates, t) : 0.0
                   for (k, S) in enumerate(model.stoichvecs)]
             (i, -sum(αs))
         end for (i, xᵢ) in enumerate(active_states)

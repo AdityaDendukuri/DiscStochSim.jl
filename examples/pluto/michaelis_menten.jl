@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.4
+# v0.20.13
 
 using Markdown
 using InteractiveUtils
@@ -52,6 +52,7 @@ init_fsp_vars = begin
 end;
 
 # ╔═╡ 06b23060-9fe9-40e7-932d-c5ecc9387cd2
+#=
 fsp_sim = begin
 	
 	# copy initial values 
@@ -70,7 +71,7 @@ fsp_sim = begin
 	@progress for (iter, t) ∈ enumerate(T)
 		
 		# expand state space
-	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates , t, boundary_condition, 3)
+	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  boundary_condition, 3)
 		global size_𝒮ₜ[iter] = length(𝒮ₜ)
 		A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
 		
@@ -87,10 +88,79 @@ fsp_sim = begin
 	end
 	
 end
+=#
+
+# ╔═╡ 155d9fe8-4481-4abd-86a6-0abbf007a1a6
+fsp_sim = begin
+    # --- Initialization ---
+    # Set final time and adaptive step-size tolerance
+    tf = 200.0 
+    ϵ_dt = 0.1 # Tolerance for dt calculation
+
+    # Define initial state for Michaelis-Menten (E,S,ES,P)
+    local U₀ = CartesianIndex(50, 10, 1, 1)
+    𝒮ₜ = Set([U₀])
+    pₜ = zeros(length(𝒮ₜ))
+    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+
+    # Initialize current time and dynamic solution arrays
+    t = 0.0
+    sol_t = [t]
+    sol_S_size = [length(𝒮ₜ)]
+    sol = [(copy(𝒮ₜ), copy(pₜ))]
+
+    # --- Main Adaptive Loop ---
+    while t < tf
+        # 1. Calculate adaptive δt based on the CURRENT state space 𝒮ₜ
+        X_vec = collect(𝒮ₜ)
+        max_w = 0.0
+        for state in X_vec
+            # Calculate w(x) = sum of all outgoing propensities
+            weight = sum(prop(state, rates, t) for prop in model.propensities)
+            if weight > max_w
+                max_w = weight
+            end
+        end
+        
+        δt = (max_w > 0.0) ? (ϵ_dt / max_w) : (tf - t)
+        δt = min(δt, tf - t)
+
+        # 2. Expand state space (using expansion factor for this model)
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
+
+        # 3. Build Master Equation and Evolve over the calculated δt
+        A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
+        pₜ = expmv(δt, A, pₜ)
+        
+        # 4. Purge state space using the robust flux-based method
+        # Using a probability quantile from your original code
+        purge!(𝒮ₜ, pₜ, model, rates, t, 0.1, 1e-9)
+        
+        # 5. Renormalize probability
+        pₜ ./= sum(pₜ)
+        
+        # 6. Update time and store results
+        global t += δt
+        
+        push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        push!(sol_t, t)
+        push!(sol_S_size, length(𝒮ₜ))
+    end
+    # The final solution is now stored in the `sol` and related arrays
+end
+
+# ╔═╡ a02bf0a4-571e-44b1-9b31-05e349b04ef7
+plot(sol_S_size)
+
+# ╔═╡ bbb72fce-f5c8-421f-b54e-70beac64ab35
+begin
+	i=30
+	sol_t[i]-sol_t[i-1]
+end
 
 # ╔═╡ 916640c8-dace-4d46-88a2-730f6d5a7cd5
 begin
-	sol_mean = map(1:length(T)) do i
+	sol_mean = map(1:size(sol)[1]) do i
 	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
 	end 
 	fsp_mean=hcat(sol_mean...)'
@@ -202,7 +272,7 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.3"
+julia_version = "1.11.5"
 manifest_format = "2.0"
 project_hash = "a2f1917f4aebadbefabe8fb9cc561a5493c14507"
 
@@ -2114,7 +2184,7 @@ version = "3.2.4+0"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+2"
+version = "0.8.5+0"
 
 [[deps.OpenMPI_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Hwloc_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "MPIPreferences", "TOML", "Zlib_jll"]
@@ -3407,6 +3477,9 @@ version = "3.6.0+0"
 # ╠═500db25b-748a-4f71-b7cf-8181a83d990e
 # ╠═764c6e7b-059d-41fd-85a9-d1aac2a43e92
 # ╠═06b23060-9fe9-40e7-932d-c5ecc9387cd2
+# ╠═155d9fe8-4481-4abd-86a6-0abbf007a1a6
+# ╠═a02bf0a4-571e-44b1-9b31-05e349b04ef7
+# ╠═bbb72fce-f5c8-421f-b54e-70beac64ab35
 # ╠═916640c8-dace-4d46-88a2-730f6d5a7cd5
 # ╠═98f9f0ec-a27e-4e65-a0ba-6537349bc5bb
 # ╠═16390d62-4dd5-448a-843c-8bd16a617303

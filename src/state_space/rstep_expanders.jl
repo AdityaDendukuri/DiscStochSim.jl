@@ -60,6 +60,55 @@ function purge!(X::Set{Element}, p::Vector{T}, percentage::Number) where {Elemen
     return new_X, new_p
 end
 
+
+function purge!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number,
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+    
+    X_vec = collect(X)
+
+    # 1. Candidate Selection: Find states with low probability mass
+    candidate_idxs = findLowestValuesPercent_naive(p, prob_quantile)
+    
+    # 2. Adaptive Flux Filtering
+    # First, calculate the flux for all states to get a total for reference
+    flux_vector = zeros(T, length(p))
+    for i in eachindex(X_vec)
+        current_state = X_vec[i]
+        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * weight
+    end
+    
+    total_flux = sum(flux_vector)
+    
+    # Set an adaptive threshold based on the total system flux
+    flux_threshold = total_flux * flux_tolerance
+
+    # Filter the candidates based on this adaptive threshold
+    final_idxs_to_prune = Set{Int}()
+    for idx in candidate_idxs
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs_to_prune, idx)
+        end
+    end
+
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+    
+    return new_X, new_p
+end
+
+
+
+
 # -------------------------------------------------------------------
 # Overloads that use additional parameters (rates and time `t`)
 # -------------------------------------------------------------------
@@ -84,6 +133,7 @@ end
     expand!(X, model, rates, t, boundary_condition, N)
 
 Repeatedly applies the above `expand1!` (with `rates` and `t`) for `N` iterations.
+    println(X)
 """
 function expand!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
     for _ in 1:N
