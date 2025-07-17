@@ -29,7 +29,7 @@ oregonator_rn = @reaction_network begin
     k2, X + Y --> ∅
     k3*B, X --> 2X + Z
     k4, 2X --> ∅
-    k5, Z --> 5Y
+    k5, Z --> Y
 end
 
 # ╔═╡ 4e84db3b-5377-4f42-ae38-c7f867fd5827
@@ -94,7 +94,7 @@ fsp_sim_oregonator = begin
         pₜ = expv(δt, A, pₜ)
         
         # 4. Purge state space using the robust flux-based method
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.01, 1e-7)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.1, 1e-7)
         
         # 5. Renormalize probability
         pₜ ./= sum(pₜ)
@@ -137,6 +137,9 @@ end
 
 # ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
 plot(sol_S_size, title="state space size")
+
+# ╔═╡ f0de5260-35fb-4b19-ada4-13d7764151f8
+sol_S_size
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3270,5 +3273,6 @@ version = "1.9.2+0"
 # ╠═a4822e24-f8d9-40ac-974c-364dc93c4eac
 # ╠═dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
 # ╠═5c736465-5bfc-45e6-8445-266e3eaffd47
+# ╠═f0de5260-35fb-4b19-ada4-13d7764151f8
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
