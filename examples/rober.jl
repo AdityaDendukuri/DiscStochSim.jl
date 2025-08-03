@@ -9,10 +9,10 @@ begin
 	# numerical libraries
 	using ExponentialUtilities, PROPACK, Arpack, SparseArrays
 	# output and plotting
-	using ProgressLogging, JLD, CairoMakie
+	using ProgressLogging, JLD, CairoMakie, Expokit
 	# modelling and statistics 
 	using Catalyst, JumpProcesses, StatsBase, DifferentialEquations
-	using Interpolations
+	using Interpolations, LinearAlgebra, NaNMath
 	# importing local fsp package
 	using Revise
 	local_mod = include("../src/DiscStochSim.jl")
@@ -23,7 +23,7 @@ end
 rn = @reaction_network begin
     k1, A --> B
     k2, 2B --> C + B
-    k3, C + B --> A + B 
+    k3, C + B --> A + C
 end
 
 # ╔═╡ 068fa5b2-629c-44a7-aaa1-f1e2ed68c840
@@ -31,27 +31,113 @@ model = DiscreteStochasticSystem(rn);
 
 # ╔═╡ 60d1b852-a518-42a3-be5b-f8466fd8d9c5
 rober_params = begin
-    # Reaction rates for the Robertson problem
-    # k1 = 0.04, k2 = 3e7, k3 = 1e4
     rates = [0.04, 3e7, 1e4]
-
-    # Boundary conditions. Populations are small, so bounds can be tight.
-    bounds = (0, 5000) 
+    bounds = (0, 5100) 
     boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
 end
+
+# ╔═╡ 08430a94-9c7f-4616-9141-7846bd7e2c7a
+function dob_coefficient(Q)
+    rs = -diag(Q)                # total exit rates
+    P  = Q ./ rs                 # element-wise; P_ii = 0 by construction
+    # Dobrushin δ:
+    δ = 0.0
+    for i in 1:size(P,1), j in (i+1):size(P,1)
+        s = sum(abs.(P[i,:] .- P[j,:]))
+        δ = max(δ, 0.5*s)
+    end
+    return δ
+end
+
+# ╔═╡ bc78fcfc-4834-4ef0-a1fa-469766559c4b
+function min_pairwise_row_min(Q::AbstractMatrix{T}) where T<:Real
+    n = size(Q, 1)
+    γ = typemax(T)  # start with +∞
+
+    # Loop over all unordered row pairs (i,j)
+    for i in 1:n
+        for j in (i+1):n
+            # Compute sum_k min(q[i,k], q[j,k])
+            s = zero(T)
+            for k in 1:n
+                s += min(Q[i, k], Q[j, k])
+            end
+            γ = min(γ, s)
+        end
+    end
+
+    return γ
+end
+
+
+# ╔═╡ 7251f7ba-7f9c-49d7-8465-3736432bff48
+function candidate_prune(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t::Real;
+    prob_quantile::Real = 0.4,
+    flux_tolerance::Real = 1e-9,
+) where {Element, T<:Real, Model}
+
+    X_vec = collect(X)
+    N = length(X_vec)
+
+    # 1. Select low-mass states
+    candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    # 2. Compute outgoing flux vector for all states
+    flux_vector = zeros(T, N)
+    for i in eachindex(X_vec)
+        state = X_vec[i]
+        flux = sum(prop(state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * flux
+    end
+    total_flux = sum(flux_vector)
+    flux_threshold = total_flux * flux_tolerance
+
+    # 3. Filter out low-flux candidates
+    final_idxs_to_prune = Set{Int}()
+    for idx in candidate_idxs
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs_to_prune, idx)
+        end
+    end
+
+    # 4. Safety: ensure we don't prune all active states
+    active_idxs = findall(>(0), flux_vector)
+    if !isempty(active_idxs) && all(i in final_idxs_to_prune for i in active_idxs)
+        @warn "Prune would remove all active states — skipping"
+        return copy(X), copy(p)
+    end
+
+    # 5. Construct new state set and probability vector
+    new_X = Set( X_vec[i] for i in 1:N if i ∉ final_idxs_to_prune )
+    new_p = [ p[i] for i in 1:N if i ∉ final_idxs_to_prune ]
+
+    return new_X, new_p
+end
+
+
+# ╔═╡ a1206e2b-7e9d-4de0-b6b5-07616692d598
+
 
 # ╔═╡ 655b46ff-bec5-4dfe-9cfc-45e3418d8be5
 fsp_sim_rober = begin
     # --- Initialization ---
-    # Set final time and adaptive step-size tolerance
-    tf = 1e5  # Stiff problems often require long simulation times
-    ϵ_dt = 0.1 # Tolerance for dt calculation
+    tf = 1e4
+    ϵ_dt = 0.1 # Tolerance for adaptive dt calculation
 
     # Define initial state for the Robertson problem
-    local U₀ = CartesianIndex(3000, 0, 0)
+    local U₀ = CartesianIndex(1000, 0, 0)
     global 𝒮ₜ = Set([U₀])
     pₜ = zeros(length(𝒮ₜ))
     pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+    
+    # Arrays to store diagnostic data
+    flx = []
+    tresh = []
 
     # Initialize current time and dynamic solution arrays
     local t = 0.0
@@ -59,35 +145,29 @@ fsp_sim_rober = begin
     sol_S_size = [length(𝒮ₜ)]
     sol = [(copy(𝒮ₜ), copy(pₜ))]
 
+	local δt = 1e-3
+    
     # --- Main Adaptive Loop ---
     while t < tf
-        # 1. Calculate adaptive δt based on the TOTAL EXPECTED system activity
-# --------------------------------------------------------------------
-X_vec = collect(𝒮ₜ)
-total_flux = 0.0
-for i in eachindex(X_vec)
-    state = X_vec[i]
-    # w(x) = sum of all outgoing propensities
-    weight = sum(prop(state, rates, t) for prop in model.propensities)
-    # flux = p(x) * w(x)
-    total_flux += pₜ[i] * weight
-end
+        # 1. Expand the state space before calculating the time step
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 10)
 
-# The new δt calculation
-δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-δt = min(δt, tf - t)
+        # 2. Calculate adaptive δt based on the TOTAL EXPECTED system activity
+        X_vec = collect(𝒮ₜ)
 
-        # 2. Expand state space
-        # A small expansion factor is suitable for this model's simple stoichiometry
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
+        # 3. Build Master Equation and Evolve
+        global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
+        pₜ = expv(δt, A, pₜ)
 
-        # 3. Build Master Equation and Evolve over the calculated δt
-        A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, 0.1)
-        pₜ = expmv(δt, A, pₜ)
+		# 4. total flux
+		total_flux = -dot(diag(A), pₜ)
+
+        # The robust δt calculation
+        δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t)
         
-        # 4. Purge state space using the robust flux-based method
-        # This is CRITICAL for stiff systems to avoid pruning important transient states
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.1, 1e-9)
+        # 4. Purge state space and collect diagnostic outputs
+        𝒮ₜ, pₜ, flux_threshold, total_flux_after_purge = purge!(𝒮ₜ, pₜ, model, rates, t, 0.4, 1e-9)
         
         # 5. Renormalize probability
         pₜ ./= sum(pₜ)
@@ -98,15 +178,126 @@ end
         push!(sol, (copy(𝒮ₜ), copy(pₜ)))
         push!(sol_t, t)
         push!(sol_S_size, length(𝒮ₜ))
+        push!(flx, total_flux_after_purge)
+        push!(tresh, flux_threshold)
     end
-    # The final solution is now stored in the `sol` and related arrays
 end
 
-# ╔═╡ b03ffb3e-20a4-47e7-b382-06b8602830b4
-plot(sol_t[end-500:end] .- sol_t[end-501:end-1])
+# ╔═╡ ac8c249b-0284-4355-b410-8d47efcc829b
+begin
+	
+	
+	sol_mean = map(1:length(sol)) do i
+	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
+	end 
+	fsp_mean=hcat(sol_mean...)'
+end
 
-# ╔═╡ 59fe779a-3398-4d41-bb22-b428b6fe3df3
-sol_S_size
+# ╔═╡ 1a3f749e-6dce-42e8-9b2e-bd096e24e665
+begin
+	
+	# --- Define a Camera-Ready Theme for SIAM Publications ---
+	siam_theme = Theme(
+	    # Set a professional, clean font (Computer Modern is standard for TeX/LaTeX)
+	    font = "Computer Modern",
+	    fontsize = 18, # Base font size for the figure
+	    
+	    Axis = (
+	        # Axis labels and title settings
+	        titlefont = :bold,
+	        titlesize = 22,
+	        xlabelsize = 20,
+	        ylabelsize = 20,
+	        xticklabelsize = 16,
+	        yticklabelsize = 16,
+	        
+	        # Grid settings for a clean look
+	        xgridstyle = :dash,
+	        ygridstyle = :dash,
+	        xgridwidth = 0.7,
+	        ygridwidth = 0.7,
+	        xgridcolor = :gray80,
+	        ygridcolor = :gray80,
+			xscale=log10,
+	
+	        # Spine (box around the plot) settings
+	        leftspinevisible = true,
+	        rightspinevisible = false,
+	        topspinevisible = false,
+	        bottomspinevisible = true,
+	    ),
+	
+	    Legend = (
+	        framevisible = false,
+	        patchsize = (30, 10),
+	        labelsize = 16,
+	    ),
+	
+	    Lines = (
+	        color = :black,
+	        linewidth = 2.0,
+	    )
+	)
+	
+	# --- Generate the 4-Panel Figure ---
+	begin
+	    # Apply the custom theme for all subsequent plots
+	    set_theme!(siam_theme)
+	
+	    # Prepare the data from your simulation results
+	    # Ensure all vectors are the same length for plotting
+	    local num_steps = length(sol_t)
+	    local time_points = sol_t[1:num_steps]
+	    global dt_values = vcat([0.0], sol_t[2:end] .- sol_t[1:end-1])
+	    local state_space_sizes = sol_S_size[1:num_steps]
+	    local total_fluxes = flx[1:num_steps-1] # Assuming flx has one less element
+	    local flux_thresholds = tresh[1:num_steps-1] # Assuming tresh has one less element
+	    
+	    # Ensure fsp_mean has dimensions (timesteps, species)
+	    mean_A = fsp_mean[1:num_steps, 1]
+	    mean_B = fsp_mean[1:num_steps, 2]
+	    mean_C = fsp_mean[1:num_steps, 3]
+	
+	    # Create the figure with a 2x2 grid layout
+	    local fig = Figure(size = (1200, 800))
+	
+	    # --- Top Row ---
+	    
+	    # Panel 1: Mean Trajectories
+	    ax11 = Axis(fig[1, 1], title = "Mean Trajectories", xlabel = "Simulation Time, t", ylabel = "Mean Population")
+	    lines!(ax11, time_points, mean_A, label = "A (y₁)")
+	    lines!(ax11, time_points, mean_B .* 1e3, label = "B (y₂) * 2.5e5", linestyle = :dash)
+	    lines!(ax11, time_points, mean_C, label = "C (y₃)", linestyle = :dot)
+	    axislegend(ax11, position = :rc)
+	
+	    # Panel 2: State Space Size
+	    ax12 = Axis(fig[1, 2], title = "State Space Size", xlabel = "Simulation Time, t", ylabel = "|S|")
+	    lines!(ax12, time_points, state_space_sizes)
+	    
+	
+	    # Panel 3: Adaptive Time Step (dt)
+	    ax21 = Axis(fig[2, 1], title = "Adaptive Time Step", xlabel = "Simulation Time, t", ylabel = "δt")
+	    lines!(ax21, time_points, dt_values)
+	
+	    # Panel 4: Flux Diagnostics
+	    ax22 = Axis(fig[2, 2], title = "Flux Diagnostics", xlabel = "Simulation Time, t", ylabel = "Flux Value")
+	    lines!(ax22, time_points[2:end], total_fluxes, label = "Total Flux")
+	    lines!(ax22, time_points[2:end], flux_thresholds, label = "Flux Threshold", linestyle = :dash)
+	    axislegend(ax22, position = :rc)
+	    
+	    # Link all x-axes for synchronized zooming/panning
+	    linkxaxes!(ax11, ax12, ax21, ax22)
+	
+	    # Add spacing between rows for clarity
+	    rowgap!(fig.layout, 1, 60)
+	
+	    # Display the final figure
+	    fig
+	end
+end
+
+# ╔═╡ b3056167-a873-4c15-8fff-f7da4ae09622
+dt_values
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -115,10 +306,13 @@ Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+NaNMath = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
@@ -130,10 +324,12 @@ Arpack = "~0.5.4"
 CairoMakie = "~0.13.10"
 Catalyst = "~15.0.8"
 DifferentialEquations = "~7.16.1"
+Expokit = "~0.2.0"
 ExponentialUtilities = "~1.27.0"
 Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
+NaNMath = "~1.1.3"
 PROPACK = "~0.5.0"
 ProgressLogging = "~0.1.5"
 Revise = "~3.8.0"
@@ -146,7 +342,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.5"
 manifest_format = "2.0"
-project_hash = "1a82682329d4467006de4a4e77e0bec36907a846"
+project_hash = "86e82fdbde1a7cee831f6b25706ec98ea3d80676"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -355,9 +551,9 @@ version = "0.1.6"
 
 [[deps.BlockArrays]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra"]
-git-tree-sha1 = "a8c0f363186263d75e97a41878d10dd842797561"
+git-tree-sha1 = "291532989f81db780e435452ccb2a5f902ff665f"
 uuid = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
-version = "1.6.3"
+version = "1.7.0"
 weakdeps = ["Adapt", "BandedMatrices"]
 
     [deps.BlockArrays.extensions]
@@ -939,6 +1135,12 @@ git-tree-sha1 = "d55dffd9ae73ff72f1c0482454dcf2ec6c6c4a63"
 uuid = "2e619515-83b5-522b-bb60-26c02a35a201"
 version = "2.6.5+0"
 
+[[deps.Expokit]]
+deps = ["LinearAlgebra", "SparseArrays", "Test"]
+git-tree-sha1 = "b0313f5f1825aabb1adb186c837e0d339d02f351"
+uuid = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
+version = "0.2.0"
+
 [[deps.ExponentialUtilities]]
 deps = ["Adapt", "ArrayInterface", "GPUArraysCore", "GenericSchur", "LinearAlgebra", "PrecompileTools", "Printf", "SparseArrays", "libblastrampoline_jll"]
 git-tree-sha1 = "cae251c76f353e32d32d76fae2fea655eab652af"
@@ -966,9 +1168,9 @@ version = "0.1.6"
 
 [[deps.FFMPEG_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
+git-tree-sha1 = "8cc47f299902e13f90405ddb5bf87e5d474c0d38"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.4.4+1"
+version = "6.1.2+0"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
@@ -1492,9 +1694,9 @@ weakdeps = ["FastBroadcast"]
 
 [[deps.KernelDensity]]
 deps = ["Distributions", "DocStringExtensions", "FFTW", "Interpolations", "StatsBase"]
-git-tree-sha1 = "7d703202e65efa1369de1279c162b915e245eed1"
+git-tree-sha1 = "ba51324b894edaf1df3ab16e2cc6bc3280a2f1a7"
 uuid = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
-version = "0.6.9"
+version = "0.6.10"
 
 [[deps.Krylov]]
 deps = ["LinearAlgebra", "Printf", "SparseArrays"]
@@ -1699,9 +1901,9 @@ version = "2.10.0"
 
 [[deps.LinearSolve]]
 deps = ["ArrayInterface", "ChainRulesCore", "ConcreteStructs", "DocStringExtensions", "EnumX", "GPUArraysCore", "InteractiveUtils", "Krylov", "LazyArrays", "Libdl", "LinearAlgebra", "MKL_jll", "Markdown", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLOperators", "Setfield", "StaticArraysCore", "UnPack"]
-git-tree-sha1 = "062c11f1d84ffc80d00fddaa515f7e37e8e9f9d5"
+git-tree-sha1 = "989a36162c76f5b4d0c3028333725600bb1481b7"
 uuid = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
-version = "3.18.2"
+version = "3.19.2"
 
     [deps.LinearSolve.extensions]
     LinearSolveBandedMatricesExt = "BandedMatrices"
@@ -1763,9 +1965,9 @@ version = "1.11.0"
 
 [[deps.LoweredCodeUtils]]
 deps = ["Compiler", "JuliaInterpreter"]
-git-tree-sha1 = "bc54ba0681bb71e56043a1b923028d652e78ee42"
+git-tree-sha1 = "b882a7dd7ef37643066ae8f9380beea8fdd89cae"
 uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
-version = "3.4.1"
+version = "3.4.2"
 
 [[deps.Lz4_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -1966,9 +2168,9 @@ version = "1.2.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
-git-tree-sha1 = "aeb6fb02e63b4d4f90337ed90ce54ceb4c0efe77"
+git-tree-sha1 = "d2ec18c1e4eccbb70b64be2435fc3b06fbcdc0a1"
 uuid = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
-version = "4.9.0"
+version = "4.10.0"
 
     [deps.NonlinearSolve.extensions]
     NonlinearSolveFastLevenbergMarquardtExt = "FastLevenbergMarquardt"
@@ -2299,9 +2501,9 @@ version = "1.3.0"
 
 [[deps.OrdinaryDiffEqStabilizedRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "RecursiveArrayTools", "Reexport", "StaticArrays"]
-git-tree-sha1 = "1b0d894c880e25f7d0b022d7257638cf8ce5b311"
+git-tree-sha1 = "74d79a14f1ac3f92ed2dc5fc4ba2dc5516b64977"
 uuid = "358294b1-0aab-51c3-aafe-ad5ab194a2ad"
-version = "1.1.0"
+version = "1.1.1"
 
 [[deps.OrdinaryDiffEqSymplecticRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "Polyester", "RecursiveArrayTools", "Reexport"]
@@ -2408,10 +2610,10 @@ uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
 version = "1.4.3"
 
 [[deps.PoissonRandom]]
-deps = ["Random"]
-git-tree-sha1 = "a0f1159c33f846aa77c3f30ebbc69795e5327152"
+deps = ["LogExpFunctions", "Random"]
+git-tree-sha1 = "bb178012780b34046c6d1600a315d8dbee89d83d"
 uuid = "e409e4f3-bfea-5376-8464-e040bb5c01ab"
-version = "0.4.4"
+version = "0.4.5"
 
 [[deps.Polyester]]
 deps = ["ArrayInterface", "BitTwiddlingConvenienceFunctions", "CPUSummary", "IfElse", "ManualMemory", "PolyesterWeave", "Static", "StaticArrayInterface", "StrideArraysCore", "ThreadingUtilities"]
@@ -2438,9 +2640,9 @@ version = "0.2.4"
 
 [[deps.PreallocationTools]]
 deps = ["Adapt", "ArrayInterface", "ForwardDiff"]
-git-tree-sha1 = "6d98eace73d82e47f5b16c393de198836d9f790a"
+git-tree-sha1 = "2cc315bb7f6e4d59081bad744cdb911d6374fc7f"
 uuid = "d236fae5-4411-538c-8e31-a6e3d9e00b46"
-version = "0.4.27"
+version = "0.4.29"
 
     [deps.PreallocationTools.extensions]
     PreallocationToolsReverseDiffExt = "ReverseDiff"
@@ -2645,9 +2847,9 @@ version = "0.5.15"
 
 [[deps.SCCNonlinearSolve]]
 deps = ["CommonSolve", "PrecompileTools", "Reexport", "SciMLBase", "SymbolicIndexingInterface"]
-git-tree-sha1 = "80d305585f80e7a3a93816495a7825b3a0bd699f"
+git-tree-sha1 = "5595105cef621942aceb1aa546b883c79ccbfa8f"
 uuid = "9dfe8606-65a1-4bb3-9748-cb89d1561431"
-version = "1.3.1"
+version = "1.4.0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -2666,9 +2868,9 @@ version = "0.1.0"
 
 [[deps.SciMLBase]]
 deps = ["ADTypes", "Accessors", "Adapt", "ArrayInterface", "CommonSolve", "ConstructionBase", "Distributed", "DocStringExtensions", "EnumX", "FunctionWrappersWrappers", "IteratorInterfaceExtensions", "LinearAlgebra", "Logging", "Markdown", "Moshi", "PrecompileTools", "Preferences", "Printf", "RecipesBase", "RecursiveArrayTools", "Reexport", "RuntimeGeneratedFunctions", "SciMLOperators", "SciMLStructures", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface"]
-git-tree-sha1 = "31587e20cdea9fba3a689033313e658dfc9aae78"
+git-tree-sha1 = "50c540cd0569d43d5cec57b9610e7f1361d3532d"
 uuid = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-version = "2.102.1"
+version = "2.103.1"
 
     [deps.SciMLBase.extensions]
     SciMLBaseChainRulesCoreExt = "ChainRulesCore"
@@ -3025,9 +3227,9 @@ version = "3.29.0"
 
 [[deps.Symbolics]]
 deps = ["ADTypes", "ArrayInterface", "Bijections", "CommonWorldInvalidations", "ConstructionBase", "DataStructures", "DiffRules", "Distributions", "DocStringExtensions", "DomainSets", "DynamicPolynomials", "LaTeXStrings", "Latexify", "Libdl", "LinearAlgebra", "LogExpFunctions", "MacroTools", "Markdown", "NaNMath", "OffsetArrays", "PrecompileTools", "Primes", "RecipesBase", "Reexport", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SpecialFunctions", "StaticArraysCore", "SymbolicIndexingInterface", "SymbolicLimits", "SymbolicUtils", "TermInterface"]
-git-tree-sha1 = "df665535546bb07078ee42e0972527b5d6bd3f69"
+git-tree-sha1 = "3d7b491b60bf3d24a5c2a74821db4520f0307c72"
 uuid = "0c5d862f-8b57-4792-8d23-62f2024744c7"
-version = "6.43.0"
+version = "6.44.0"
 
     [deps.Symbolics.extensions]
     SymbolicsForwardDiffExt = "ForwardDiff"
@@ -3313,9 +3515,9 @@ version = "1.3.8+0"
 
 [[deps.libwebp_jll]]
 deps = ["Artifacts", "Giflib_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libglvnd_jll", "Libtiff_jll", "libpng_jll"]
-git-tree-sha1 = "d2408cac540942921e7bd77272c32e58c33d8a77"
+git-tree-sha1 = "4e4282c4d846e11dce56d74fa8040130b7a95cb3"
 uuid = "c5f90fcd-3b7e-5836-afba-fc50a0988cb2"
-version = "1.5.0+0"
+version = "1.6.0+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -3334,16 +3536,16 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
 
 [[deps.x264_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4fea590b89e6ec504593146bf8b988b2c00922b2"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "14cc7083fc6dff3cc44f2bc435ee96d06ed79aa7"
 uuid = "1270edf5-f2f9-52d2-97e9-ab00b5d0237a"
-version = "2021.5.5+0"
+version = "10164.0.1+0"
 
 [[deps.x265_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "ee567a171cce03570d77ad3a43e90218e38937a9"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "dcc541bb19ed5b0ede95581fb2e41ecf179527d2"
 uuid = "dfaa095f-4041-5dcd-9319-2fabd8486b76"
-version = "3.5.0+0"
+version = "3.6.0+0"
 """
 
 # ╔═╡ Cell order:
@@ -3351,8 +3553,13 @@ version = "3.5.0+0"
 # ╠═eef14334-d43c-49d2-b40b-fe16a3747fb2
 # ╠═068fa5b2-629c-44a7-aaa1-f1e2ed68c840
 # ╠═60d1b852-a518-42a3-be5b-f8466fd8d9c5
+# ╠═08430a94-9c7f-4616-9141-7846bd7e2c7a
+# ╠═bc78fcfc-4834-4ef0-a1fa-469766559c4b
+# ╠═7251f7ba-7f9c-49d7-8465-3736432bff48
+# ╠═a1206e2b-7e9d-4de0-b6b5-07616692d598
 # ╠═655b46ff-bec5-4dfe-9cfc-45e3418d8be5
-# ╠═b03ffb3e-20a4-47e7-b382-06b8602830b4
-# ╠═59fe779a-3398-4d41-bb22-b428b6fe3df3
+# ╠═ac8c249b-0284-4355-b410-8d47efcc829b
+# ╠═1a3f749e-6dce-42e8-9b2e-bd096e24e665
+# ╠═b3056167-a873-4c15-8fff-f7da4ae09622
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

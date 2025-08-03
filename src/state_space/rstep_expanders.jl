@@ -60,6 +60,21 @@ function purge!(X::Set{Element}, p::Vector{T}, percentage::Number) where {Elemen
     return new_X, new_p
 end
 
+"""
+    purge!(X, p, percentage)
+
+Removes from `X` the elements with the lowest probability values.
+The indices to remove are determined by `findLowestValuesPercent_naive(p, percentage)`.
+Returns the purged set and the updated probability vector.
+"""
+function purge!(X::Set{Element}, p::Vector{T}, percentage::Number) where {Element,T}
+    X_vec = collect(X)
+    idxs = findLowestValuesPercent_naive(p, percentage)
+    new_p = [p[i] for i in eachindex(p) if i ∉ idxs]
+    new_X = setdiff(X, Set(X_vec[idxs]))
+    return new_X, new_p
+end
+
 
 function purge!(
     X::Set{Element}, 
@@ -103,9 +118,61 @@ function purge!(
     states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
     new_X = setdiff(X, states_to_remove)
     
-    return new_X, new_p
+    return new_X, new_p, flux_threshold, total_flux
 end
 
+
+   function purge1!(
+    X::Set{Element},
+    p::Vector{T},
+    model::Model,
+    rates,
+    t,
+    mass_frac::Real,     # fraction of total probability mass to remove (0–1)
+    flux_frac::Real      # fraction of those candidates (0–1) to remove by lowest flux
+) where {Element,T<:Real,Model}
+
+    # 1) Mass‐based candidate selection (fraction API)
+    X_vec = collect(X)
+    idxs_by_p = sortperm(p)       # indices ascending by p
+    running = zero(T)
+    candidate = Int[]
+    for i in idxs_by_p
+        if running + p[i] > mass_frac
+            break
+        end
+        push!(candidate, i)
+        running += p[i]
+    end
+
+    # 2) Compute flux for every state
+    flux = similar(p)
+    for (i, state) in enumerate(X_vec)
+        a_sum = zero(T)
+        for prop in model.propensities
+            a_sum += prop(state, rates, t)
+        end
+        flux[i] = p[i] * a_sum
+    end
+
+    # 3) Flux‐quantile pruning among candidates
+    #    sort candidate indices by their flux
+    sorted_cand = sort(candidate, by = i -> flux[i])
+    n_prune = floor(Int, flux_frac * length(sorted_cand))
+    to_prune = Set(sorted_cand[1:min(n_prune, end)])
+
+    # 4) Build new state set & probability vector
+    new_X = Set{Element}()
+    new_p = Vector{T}()
+    for (i, state) in enumerate(X_vec)
+        if i ∉ to_prune
+            push!(new_X, state)
+            push!(new_p, p[i])
+        end
+    end
+
+    return new_X, new_p
+end
 
 
 
