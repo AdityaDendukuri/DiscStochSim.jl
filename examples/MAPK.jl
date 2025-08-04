@@ -47,8 +47,8 @@ model = DiscreteStochasticSystem(rn_mapk)
 
 # ╔═╡ 644f0772-6d69-11f0-3aa7-c3868042e342
 begin
-    tf = 500.0 
-    ϵ_dt = 1.0  
+    tf = 1e5 
+    ϵ_dt = 1.0
 	
     # Total conserved molecule counts
     S_total = 120; K_total = 120; P_total = 120;
@@ -88,13 +88,13 @@ begin
         δt = min(δt, tf - t) 
         
         # Expand
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1; flux_tol=1e-4)
 		# Evolve
         A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
         pₜ = expv(δt, A, pₜ)     
 		
 		# Purge and re-normalize
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.9, 0.8)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.5, 1e-2)
         pₜ ./= sum(pₜ)
 
 		# update tike 
@@ -172,31 +172,39 @@ begin
 	axislegend(ax_mean, position=:rt)
 	
 	# ===== BOTTOM SECTION: DISTRIBUTIONS (3 rows x 3 columns) =====
-	for i in 1:9
-	    # Calculate grid position (rows 2, 3, 4)
-	    row = 2 + ceil(Int, i/3) - 1
-	    col = ((i-1) % 3) + 1
-	    
-	    # Create axis for this species
-	    ax = Axis(f[row, col], 
-	              xlabel="$(species_names[i]) Count", 
-	              ylabel="Probability",
-	              title="$(species_names[i]) Distribution")
-	    
-	    # Extract values for this species (i-th component of each state)
-	    species_values = [state[i] for state in final_states]
-	    
-	    # Create scatter plot
-	    scatter!(ax, species_values, final_probs, 
-	             markersize=6, 
-	             alpha=0.7,
-	             color=:darkgreen)
-	    
-	    # Add some styling
-	    if maximum(final_probs) > 0
-	        ylims!(ax, 0, maximum(final_probs) * 1.1)
-	    end
-	end
+	 for i in 1:9
+        # Calculate grid position
+        row = 2 + ceil(Int, i/3) - 1
+        col = ((i-1) % 3) + 1
+        
+        ax = Axis(f[row, col], 
+                  xlabel="$(species_names[i]) Count", 
+                  ylabel="Probability",
+                  title="$(species_names[i]) Marginal Distribution")
+        xlims!(ax, 0, 120)
+        # --- CORRECTED MARGINAL CALCULATION ---
+        # Create a dictionary to hold the marginal probabilities
+        marginal_dist = Dict{Int, Float64}()
+        
+        # Iterate through all final states and sum probabilities
+        for (j, state) in enumerate(final_states)
+            species_count = state[i]
+            prob = final_probs[j]
+            # Add the probability to the entry for this count
+            marginal_dist[species_count] = get(marginal_dist, species_count, 0.0) + prob
+        end
+        
+        # Extract the counts and probabilities for plotting
+        counts = sort(collect(keys(marginal_dist)))
+        probs = [marginal_dist[c] for c in counts]
+        
+        # Plot as a bar chart (histogram)
+        barplot!(ax, counts, probs, color=:darkgreen)
+        
+        if !isempty(probs)
+            ylims!(ax, 0, maximum(probs) * 1.1)
+        end
+    end
 	
 	# Add section labels
 	Label(f[0, :], "MAPK Cascade: System Dynamics and Final State Analysis", 
@@ -206,6 +214,9 @@ begin
 	
 	f
 end
+
+# ╔═╡ e5cfa6ad-4096-4983-9b02-17aadbc82018
+
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3459,5 +3470,6 @@ version = "3.6.0+0"
 # ╠═b634f09a-4a38-43c7-8f07-0ffda5def408
 # ╠═644f0772-6d69-11f0-3aa7-c3868042e342
 # ╠═7b3561a8-d251-468b-b525-59c7628e860a
+# ╠═e5cfa6ad-4096-4983-9b02-17aadbc82018
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

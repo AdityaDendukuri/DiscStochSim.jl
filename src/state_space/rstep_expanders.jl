@@ -180,22 +180,63 @@ end
 # Overloads that use additional parameters (rates and time `t`)
 # -------------------------------------------------------------------
 
-"""
-    expand1!(X, model, rates, t, boundary_condition)
 
-Performs an in-place expansion of `X` using `SSA_STEP` with the provided `rates` and time `t`.
-For each element `x` in `X`, computes `new_x = SSA_STEP(x, model, rates, t)`.
-If `boundary_condition(new_x)` is `true`, `new_x` is added to `X`; otherwise `x` is retained.
 """
-function expand1!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function) where {Element,Model}
-    for x in copy(X)
-        new_x = ssa_step(x, model, rates, t)
-        # Add new_x if it meets the boundary condition; otherwise, re-add x (which is redundant if x ∈ X)
-        union!(X, boundary_condition(new_x) ? Set([new_x]) : Set([x]))
+    expand1!(X, p, model, rates, t, boundary_condition; flux_tolerance=1e-9)
+
+Performs an in-place, exhaustive expansion of `X` using an adaptive flux filter.
+
+Instead of a fixed propensity threshold, this function expands along a reaction
+pathway only if the probability flux of that specific reaction is significant
+relative to the total flux of the entire system.
+"""
+function expand1!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model, 
+    rates::AbstractArray, 
+    t::Number, 
+    boundary_condition::Function; 
+    flux_tolerance::Number=1e-9
+) where {Element, T, Model}
+    
+    X_vec = collect(X)
+    local X_original = copy(X_vec)
+    
+    total_flux = zero(T)
+    for (i, state) in enumerate(X_vec)
+        weight = sum(prop(state, rates, t) for prop in model.propensities)
+        total_flux += p[i] * weight
     end
-    return X
-end
+    
+    flux_threshold = total_flux * flux_tolerance
 
+    for (i, x) in enumerate(X_vec)
+        for (j, prop) in enumerate(model.propensities)
+            reaction_flux = p[i] * prop(x, rates, t)
+            
+            if reaction_flux > flux_threshold
+                new_x = x + model.stoichvecs[j]
+                
+                if boundary_condition(new_x)
+                    push!(X, new_x)
+                end
+            end
+        end
+    end
+    X_final_vec = collect(X)
+    p_new = zeros(T, length(X_final_vec))
+
+    index_map = Dict(state => i for (i, state) in enumerate(X_final_vec))
+
+    for (i, old_state) in enumerate(X_original)
+        new_idx = index_map[old_state]
+        p_new[new_idx] = p[i]
+    end
+
+    return X, p_new
+    
+end
 """
     expand!(X, model, rates, t, boundary_condition, N)
 
@@ -215,16 +256,12 @@ end
 Expands `X` using `SSA_STEP` (with `rates` and `t`) for `N` iterations and updates the probability vector.
 Returns the expanded set and the new probability vector.
 """
-function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int;flux_tol=1e-9) where {Element,Model}
     X_prev = collect(X)
     for _ in 1:N
-        expand1!(X, model, rates, t, boundary_condition)
+        X, pₜ=expand1!(X, pₜ, model, rates, t, boundary_condition; flux_tolerance=flux_tol)
     end
-    X_vec = collect(X)
-    idxs = [findfirst(==(x), X_vec) for x in X_prev]
-    qₜ = zeros(length(X_vec))
-    qₜ[idxs] = pₜ
-    return X, qₜ
+    return X, pₜ
 end
 
 # Export the public functions.

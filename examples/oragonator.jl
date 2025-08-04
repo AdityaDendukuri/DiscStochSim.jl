@@ -33,6 +33,9 @@ oregonator_rn = @reaction_network begin
     k5, Z --> Y            # Z → Y
 end
 
+# ╔═╡ 5086e1d1-8e34-4bfb-8fb7-6994b1dfc201
+Catalyst.parameters(oregonator_rn)
+
 # ╔═╡ 4e84db3b-5377-4f42-ae38-c7f867fd5827
 model = DiscreteStochasticSystem(oregonator_rn)
 
@@ -59,12 +62,9 @@ oregonator_params = begin
     U₀ = CartesianIndex(500, 1000, 2000)  # (X, Y, Z)
     
     # Bounds for the state space - larger to accommodate oscillations
-    bounds = (0, 5000) 
+    bounds = (0, 10000) 
     boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
 end
-
-# ╔═╡ 21e0aedd-aa0c-4e95-ab22-768886d6a512
-
 
 # ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
 fsp_sim_oregonator = begin
@@ -82,9 +82,10 @@ fsp_sim_oregonator = begin
     sol_t = [t]
     sol_S_size = [length(𝒮ₜ)]
     sol = [(copy(𝒮ₜ), copy(pₜ))]
+	flx=[]
 
     # --- Main Adaptive Loop ---
-    
+    δt = 0.1
     while t < tf
 
         # 1. Calculate adaptive δt based on total expected system activity
@@ -92,19 +93,19 @@ fsp_sim_oregonator = begin
         total_flux = 0.0
         for i in eachindex(X_vec)
             state = X_vec[i]
-            weight = maximum([prop(state, rates, t) for prop in model.propensities])
+            weight = sum([prop(state, rates, t) for prop in model.propensities])
             total_flux += pₜ[i] * weight
         end
-		total_flux = total_flux / length(𝒮ₜ)
-	
-        δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t)
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 3)
+        
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 5; flux_tol=1e-9)
 
         A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
         pₜ = expv(δt, A, pₜ)
+
+		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        global δt = min(δt, tf - t)
         
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.9, 0.5)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.3, 1e-9)
         
         pₜ ./= sum(pₜ)
         
@@ -112,6 +113,7 @@ fsp_sim_oregonator = begin
         
         push!(sol, (copy(𝒮ₜ), copy(pₜ)))
         push!(sol_t, t)
+		push!(flx, total_flux)
         push!(sol_S_size, length(𝒮ₜ))
     end
     
@@ -248,6 +250,9 @@ begin
 	end
 	
 end
+
+# ╔═╡ 6d7e2eb2-8826-404d-81d0-c586062ae4ed
+plot(flx)
 
 # ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
 plot(sol_S_size, title="state space size")
@@ -3507,10 +3512,11 @@ version = "3.5.0+0"
 # ╔═╡ Cell order:
 # ╠═f61fe968-f0ad-4d2c-9af5-c27f9224a1cc
 # ╠═9dd29549-5238-4314-a3dd-96f4a9e385d9
+# ╠═5086e1d1-8e34-4bfb-8fb7-6994b1dfc201
 # ╠═4e84db3b-5377-4f42-ae38-c7f867fd5827
 # ╠═64061d79-cbfe-4219-a7a8-cdc57ffb9344
-# ╠═21e0aedd-aa0c-4e95-ab22-768886d6a512
 # ╠═9f592c0e-313e-48dd-bcbe-22e4b41ad55a
+# ╠═6d7e2eb2-8826-404d-81d0-c586062ae4ed
 # ╠═a4822e24-f8d9-40ac-974c-364dc93c4eac
 # ╠═dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
 # ╠═5c736465-5bfc-45e6-8445-266e3eaffd47
