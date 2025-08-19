@@ -75,104 +75,121 @@ function purge!(X::Set{Element}, p::Vector{T}, percentage::Number) where {Elemen
     return new_X, new_p
 end
 
-
 function purge!(
-    X::Set{Element}, 
-    p::Vector{T}, 
-    model::Model,
-    rates,
-    t,
-    prob_quantile::Number,
-    flux_tolerance::Number = 1e-9 
-) where {Element, T, Model}
-    
+    X::Set{Element},
+    p::Vector{T},
+    flux_vector::AbstractVector,   # a0(x) per state (sum of propensities)
+    prob_quantile::Real;           # in [0,1], fraction of states (by count) to drop by φ
+    renormalize::Bool = false      # if true, renormalize remaining mass
+) where {Element,T<:Real}
+
+    @assert length(p) == length(flux_vector) "p and flux_vector size mismatch"
+    @assert 0 ≤ prob_quantile ≤ 1 "prob_quantile must be in [0,1]"
+
     X_vec = collect(X)
 
-    # 1. Candidate Selection: Find states with low probability mass
-    candidate_idxs = findLowestValuesPercent_naive(p, prob_quantile)
-    
-    # 2. Adaptive Flux Filtering
-    # First, calculate the flux for all states to get a total for reference
-    flux_vector = zeros(T, length(p))
-    for i in eachindex(X_vec)
-        current_state = X_vec[i]
-        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
-        flux_vector[i] = p[i] * weight
-    end
-    
-    total_flux = sum(flux_vector)
-    
-    # Set an adaptive threshold based on the total system flux
-    flux_threshold = total_flux * flux_tolerance
+    # φ_i = p_i * a0(x_i)  (outgoing probability flux from state i)
+    ϕ = p .* flux_vector
 
-    # Filter the candidates based on this adaptive threshold
-    final_idxs_to_prune = Set{Int}()
-    for idx in candidate_idxs
-        if flux_vector[idx] < flux_threshold
-            push!(final_idxs_to_prune, idx)
+    # Rank states by ϕ ascending; choose bottom fraction to remove
+    idx = sortperm(ϕ; rev=false)
+    k = round(Int, prob_quantile * length(idx))            # number of states to remove
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+
+    # Build new containers
+    keep_mask = trues(length(p))
+    keep_mask[drop_idxs] .= false
+    new_p = p[keep_mask]
+    new_X = Set(X_vec[findall(keep_mask)])
+
+    # Optional renormalization (typical FSP uses a sink instead; renorm biases)
+    if renormalize
+        s = sum(new_p)
+        if s > 0
+            new_p ./= s
         end
     end
 
-    # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
-    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    # Diagnostics (optional/handy)
+    total_out_flux = sum(ϕ)
+    removed_out_flux = sum(ϕ[drop_idxs])
+    kept_out_flux = total_out_flux - removed_out_flux
+
+    return new_X, new_p, removed_out_flux, kept_out_flux
+end
+
+
+function purge2!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    flux_vector::Vector,
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+    
+    X_prev = collect(X)
+    
+    candidate_idxs = findLowestValuesPercent_naive(p, prob_quantile)
+    
+    total_flux = sum(flux_vector)
+    flux_threshold = total_flux * flux_tolerance
+    
+    final_idxs = Int[]  
+    for idx in candidate_idxs  
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs, idx)  
+        end
+    end
+    
+    
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs]
+    
+    states_to_remove = Set(X_prev[i] for i in final_idxs)
     new_X = setdiff(X, states_to_remove)
     
     return new_X, new_p, flux_threshold, total_flux
 end
 
-
-   function purge1!(
-    X::Set{Element},
-    p::Vector{T},
+function purge1!(
+    X::Set{Element}, 
+    p::Vector{T}, 
     model::Model,
     rates,
     t,
-    mass_frac::Real,     # fraction of total probability mass to remove (0–1)
-    flux_frac::Real      # fraction of those candidates (0–1) to remove by lowest flux
-) where {Element,T<:Real,Model}
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+    
+    X_prev = collect(X)
 
-    # 1) Mass‐based candidate selection (fraction API)
-    X_vec = collect(X)
-    idxs_by_p = sortperm(p)       # indices ascending by p
-    running = zero(T)
-    candidate = Int[]
-    for i in idxs_by_p
-        if running + p[i] > mass_frac
-            break
-        end
-        push!(candidate, i)
-        running += p[i]
+    #  Candidate Selection: Find states with low probability mass
+    candidate_idxs = findLowestValuesPercent_naive(p, prob_quantile)
+
+    # compute total flux  
+    flux_vector = zeros(T, length(p))
+    for i in eachindex(X_prev)
+        current_state = X_prev[i]
+        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * weight
     end
+    total_flux = sum(flux_vector)
+    flux_threshold = total_flux * flux_tolerance
 
-    # 2) Compute flux for every state
-    flux = similar(p)
-    for (i, state) in enumerate(X_vec)
-        a_sum = zero(T)
-        for prop in model.propensities
-            a_sum += prop(state, rates, t)
-        end
-        flux[i] = p[i] * a_sum
+    low_flux_states = findall(x->x<flux_threshold, flux_vector)
+    if length(low_flux_states) != 0
+        final_idxs = candidate_idxs[low_flux_states[1]]
+    else
+        final_idxs = candidate_idxs
     end
-
-    # 3) Flux‐quantile pruning among candidates
-    #    sort candidate indices by their flux
-    sorted_cand = sort(candidate, by = i -> flux[i])
-    n_prune = floor(Int, flux_frac * length(sorted_cand))
-    to_prune = Set(sorted_cand[1:min(n_prune, end)])
-
-    # 4) Build new state set & probability vector
-    new_X = Set{Element}()
-    new_p = Vector{T}()
-    for (i, state) in enumerate(X_vec)
-        if i ∉ to_prune
-            push!(new_X, state)
-            push!(new_p, p[i])
-        end
-    end
-
-    return new_X, new_p
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs]
+    new_X = setdiff!(X, Set(X_prev[final_idxs]))
+    
+    return new_X, new_p, flux_threshold, total_flux
 end
+
 
 
 
@@ -182,61 +199,21 @@ end
 
 
 """
-    expand1!(X, p, model, rates, t, boundary_condition; flux_tolerance=1e-9)
+    expand1!(X, model, rates, t, boundary_condition)
 
-Performs an in-place, exhaustive expansion of `X` using an adaptive flux filter.
-
-Instead of a fixed propensity threshold, this function expands along a reaction
-pathway only if the probability flux of that specific reaction is significant
-relative to the total flux of the entire system.
+Performs an in-place expansion of `X` using `SSA_STEP` with the provided `rates` and time `t`.
+For each element `x` in `X`, computes `new_x = SSA_STEP(x, model, rates, t)`.
+If `boundary_condition(new_x)` is `true`, `new_x` is added to `X`; otherwise `x` is retained.
 """
-function expand1!(
-    X::Set{Element}, 
-    p::Vector{T}, 
-    model::Model, 
-    rates::AbstractArray, 
-    t::Number, 
-    boundary_condition::Function; 
-    flux_tolerance::Number=1e-9
-) where {Element, T, Model}
-    
-    X_vec = collect(X)
-    local X_original = copy(X_vec)
-    
-    total_flux = zero(T)
-    for (i, state) in enumerate(X_vec)
-        weight = sum(prop(state, rates, t) for prop in model.propensities)
-        total_flux += p[i] * weight
+function expand1!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function) where {Element,Model}
+    for x in copy(X)
+        new_x = ssa_step(x, model, rates, t)
+        # Add new_x if it meets the boundary condition; otherwise, re-add x (which is redundant if x ∈ X)
+        union!(X, boundary_condition(new_x) ? Set([new_x]) : Set([x]))
     end
-    
-    flux_threshold = total_flux * flux_tolerance
-
-    for (i, x) in enumerate(X_vec)
-        for (j, prop) in enumerate(model.propensities)
-            reaction_flux = p[i] * prop(x, rates, t)
-            
-            if reaction_flux > flux_threshold
-                new_x = x + model.stoichvecs[j]
-                
-                if boundary_condition(new_x)
-                    push!(X, new_x)
-                end
-            end
-        end
-    end
-    X_final_vec = collect(X)
-    p_new = zeros(T, length(X_final_vec))
-
-    index_map = Dict(state => i for (i, state) in enumerate(X_final_vec))
-
-    for (i, old_state) in enumerate(X_original)
-        new_idx = index_map[old_state]
-        p_new[new_idx] = p[i]
-    end
-
-    return X, p_new
-    
+    return X
 end
+
 """
     expand!(X, model, rates, t, boundary_condition, N)
 
@@ -256,12 +233,16 @@ end
 Expands `X` using `SSA_STEP` (with `rates` and `t`) for `N` iterations and updates the probability vector.
 Returns the expanded set and the new probability vector.
 """
-function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int;flux_tol=1e-9) where {Element,Model}
+function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
     X_prev = collect(X)
     for _ in 1:N
-        X, pₜ=expand1!(X, pₜ, model, rates, t, boundary_condition; flux_tolerance=flux_tol)
+        expand1!(X, model, rates, t, boundary_condition)
     end
-    return X, pₜ
+    X_vec = collect(X)
+    idxs = [findfirst(==(x), X_vec) for x in X_prev]
+    qₜ = zeros(length(X_vec))
+    qₜ[idxs] = pₜ
+    return X, qₜ
 end
 
 # Export the public functions.

@@ -4,22 +4,22 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ be9447bb-ae33-4c70-b727-486b5802144e
+# ╔═╡ 6588837a-323e-47b4-b19a-f5cc8b5c1429
 begin
 	# numerical libraries
-	using ExponentialUtilities, PROPACK, Arpack, SparseArrays
+	using ExponentialUtilities, Expokit, PROPACK, Arpack, SparseArrays
 	# output and plotting
-	using ProgressLogging, JLD, Plots, CairoMakie, Expokit
+	using ProgressLogging, JLD
 	# modelling and statistics 
 	using Catalyst, JumpProcesses, StatsBase, DifferentialEquations
-	using Interpolations, LinearAlgebra
+	using Interpolations, LinearAlgebra, CairoMakie
 	# importing local fsp package
-	using Revise
+	using Revise, Plots, Printf
 	local_mod = include("../src/DiscStochSim.jl")
 	using .local_mod.DiscStochSim
 end
 
-# ╔═╡ 12d3e221-9915-4ea7-b17b-951bd672bb22
+# ╔═╡ f925a629-2b98-4027-aabd-0eeeab278427
 rn_mapk = @reaction_network begin
     # 1) Fus3 + Ste7 ⇌ Fus3·Ste7 → Fus3P + Ste7
     k1,    K  + KK  --> K_KK
@@ -43,90 +43,201 @@ rn_mapk = @reaction_network begin
 end
 
 
-# ╔═╡ b634f09a-4a38-43c7-8f07-0ffda5def408
-model = DiscreteStochasticSystem(rn_mapk)
+# ╔═╡ 415a295b-38b6-4ef7-bb89-2a0b216c754b
+model = DiscreteStochasticSystem(rn_mapk);
 
-# ╔═╡ 7c044db1-3a6c-4c2e-94af-49c739d40578
-rn_mapk |> species
-
-# ╔═╡ 644f0772-6d69-11f0-3aa7-c3868042e342
+# ╔═╡ 257f271c-a33d-41cd-9ac7-fdaaab00d871
 begin
-    tf = 80*60        # CHANGE: 80 minutes -> seconds (paper uses seconds)
-    ϵ_dt = 0.1
+	function log_step(iter, t, δt, state_size)
+	    @printf("iter=%6d | t = %8.2f s | δt = %.4g s | state size = %d\n",
+	            iter, t, δt, state_size)
+	    flush(stdout)  # ensure it appears immediately
+	end
+end
 
-    M_total = 9000
-    MAPKK_total = 900
-    MKP_total = 1800
-    U₀ = CartesianIndex(M_total, MAPKK_total, 0, 0, 0, 0, MKP_total, 0, 0)
+# ╔═╡ a170f1f2-f7bf-43bc-bcb9-15e426279a5a
+#############################
+# Bistability two-branch run
+#############################
 
-    rates = [ 0.00275, 2.5, 0.025,
-              0.00445, 2.5, 37.5,
-              0.00625, 2.5, 0.23,
-              0.0014,  2.5, 1.25 ]
+# Helper to build the two canonical initial conditions at fixed totals
+make_init = function(M_total, MAPKK_total, MKP_total; branch::Symbol)
+    if branch === :low
+        # Mostly unphosphorylated K; no complexes
+        return CartesianIndex(M_total, MAPKK_total, 0, 0, 0, 0, MKP_total, 0, 0)
+    elseif branch === :high
+        # Mostly Kpp; same totals, complexes empty
+        return CartesianIndex(0, MAPKK_total, 0, M_total, 0, 0, MKP_total, 0, 0)
+    else
+        error("branch must be :low or :high")
+    end
+end
 
-    bounds = (0, M_total + MAPKK_total + MKP_total + 10)
+# Minimal-changes simulation (your loop) parametrized by branch
+
+# ╔═╡ 7e9e666f-5dad-46fd-a654-67c84ae74279
+function simulate_mapk_branch(; tf_minutes=80.0, 
+							    ϵ_dt=0.1, 
+							    flux_tol=1e-9, 
+							    rsteps=1,
+							    α= 1e-3,
+							    outflow_tol=1e-6,
+    							M_total=9000, 
+								MAPKK_total=900,
+								MKP_total=1800,
+    							rates = [0.00275, 2.5, 0.025,
+             							 0.00445, 2.5, 37.5,
+             							 0.00625, 2.5, 0.23,
+             							 0.0014,  2.5, 1.25],
+    							branch::Symbol = :low,
+                                exit_flux_threshold = 1e-9)
+
+    tf = tf_minutes*60       # minutes -> seconds
+    U₀ = make_init(M_total, MAPKK_total, MKP_total; branch)
+    bounds = (0, M_total + MAPKK_total + MKP_total + 200)  # slight pad
     boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
-    𝒮ₜ = Set([U₀])
-    pₜ = [1.0]
-    t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = []
 
-    # --- bootstrap once using flows (keep consistent with later loop) ---
+    global 𝒮ₜ = Set([U₀])
+    global pₜ = [1.0]
+    t = 0.0
+	
+    global sol_t = [t]
+    global sol_S_size = [length(𝒮ₜ)]
+    global sol = [(copy(𝒮ₜ), copy(pₜ))]
+    flx = Float64[]
+
     global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
-    global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)  
-    global A = MasterEquation(in_flow, out_flow)                                     
-    global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)            # CHANGE: init both fluxes
-    δt = 1e-5
+    global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)
+    global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
+
+	# CME mat = A = in_flow (diagonals) + out_flow (non-diagonals)
+	global A = MasterEquation(in_flow, out_flow)
 
     iter = 0
     while t < tf
-        # --- Expand state space on outbound frontier (prevents under-resolving the switch) ---
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, out_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-4)  # CHANGE
+        # Expand only if total outbound hazard exceeds threshold
+        if sum(out_flux) > exit_flux_threshold
+            global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, out_flux, model, rates, t,
+                                     boundary_condition, rsteps;
+                                     flux_tol=flux_tol)
+        end
 
         # Recompute flows / generator
-        global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)
+        global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
+											   model, 
+											   rates, 
+											   boundary_condition,
+											   t)
+		
         A = MasterEquation(in_flow, out_flow)
+		
         global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
 
-        # --- δt from total outbound hazard (SSA-inspired) ---
-        total_out = sum(out_flux)                                  # out_flux ≥ 0
-        δt = (total_out > 0 ? ϵ_dt / total_out : tf - t)
-        δt = min(δt, tf - t, 10.0)                                 # CHANGE: sane cap (sec), avoids skipping dynamics
+        # δt from outbound hazard with sane cap
+        total_out = sum(out_flux)
+        δt = (total_out > 0 ? ϵ_dt/total_out : tf - t)
+        δt = min(δt, tf - t, 10.0)   # seconds
 
-        # Evolve probability distribution
+        # Evolve distribution
         pₜ = expv(δt, A, pₜ)
 
-        # --- Conservative pruning (don’t kill the thin second mode shoulder) ---
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, model, rates, t, 1e-3; flux_tolerance=1e-6)   # CHANGE: use out_flux, mass=1e-3
+        # Conservative pruning (don't erase thin 2nd mode)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, model, rates, t, α;
+                         flux_tolerance = outflow_tol)
 
-        # Guard / normalize
-        local s = sum(pₜ)
+        s = sum(pₜ)
         if s <= 0
-            @warn "All probability mass lost in pruning – skipping renormalization this step"
+            @warn "All probability mass lost; skipping renormalization this step"
             s = 1.0
         end
         pₜ ./= s
+        t += δt
 
-        # Advance time
-        global t += δt
-
-        # Sparse logging
-        if iter % 1_000 == 0
+        if iter % 1000 == 0
             push!(sol, (copy(𝒮ₜ), copy(pₜ)))
             push!(sol_t, t)
             push!(sol_S_size, length(𝒮ₜ))
+			log_step(iter, t, δt, length(𝒮ₜ))
         end
-        global iter = iter + 1
+        iter += 1
     end
 
-    (sol, sol_t, sol_S_size)
+    return (sol=sol, sol_t=sol_t, sol_S_size=sol_S_size,
+            final_states=copy(𝒮ₜ), final_p=copy(pₜ))
 end
 
 
-# ╔═╡ 7b3561a8-d251-468b-b525-59c7628e860a
+# ╔═╡ 0b91794e-c128-4d13-ae30-c5d015a8dcb0
+function mean_Kpp(final_states::Set{CartesianIndex{9}}, final_p::Vector{Float64})
+    S = collect(final_states)
+    idxmap = Dict(S[i] => i for i in eachindex(S))
+    μ = 0.0
+    for (st, pr) in zip(S, final_p)
+        μ += st[4] * pr    # Kpp is the 4th coordinate in your state tuple
+    end
+    return μ
+end
+
+# Run two branches back-to-back at the SAME parameters to demonstrate bistability
+
+# ╔═╡ d05981af-495d-4aee-94c6-4c67e59c01dc
+function run_bistability_demo(; M_total=9000, 
+							    MAPKK_total=900, 
+							    MKP_total=1800,
+    							tf_minutes=80.0, 
+							    ϵ_dt=0.1,  
+							    flux_tol=1e-9,
+							  	α = 1e-3,
+							    outflow_tol=1e-6,
+							    rsteps=1, 
+							    rates=[0.00275, 2.5, 0.025,
+                 					   0.00445, 2.5, 37.5,
+                                       0.00625, 2.5, 0.23,
+                                       0.0014,  2.5, 1.25],
+							 exit_flux_threshold = 1e-9)
+
+    @info "Running LOW-branch (same params, different init)…"
+    low = simulate_mapk_branch(; tf_minutes, ϵ_dt, flux_tol, 
+							    rsteps,
+							    α,
+							    outflow_tol,
+							    M_total, MAPKK_total, MKP_total,    rates, exit_flux_threshold,branch=:low)
+
+    @info "Running HIGH-branch (same params, different init)…"
+    high = simulate_mapk_branch(; tf_minutes, ϵ_dt,flux_tol, 
+							    rsteps,
+							    α,
+							    outflow_tol, M_total, MAPKK_total, MKP_total, rates, exit_flux_threshold,branch=:high)
+
+    μ_low  = mean_Kpp(low.final_states,  low.final_p)
+    μ_high = mean_Kpp(high.final_states, high.final_p)
+
+    println("---- Bistability summary (same parameters) ----")
+    println("Totals: K=$(M_total), KK=$(MAPKK_total), P=$(MKP_total), horizon=$(tf_minutes) min")
+    println("E[Kpp] final — LOW init : $(round(μ_low,  digits=2))")
+    println("E[Kpp] final — HIGH init: $(round(μ_high, digits=2))")
+    println("Δ mean Kpp              : $(round(μ_high - μ_low, digits=2))")
+    return (low=low, high=high, μ_low=μ_low, μ_high=μ_high)
+end
+
+# === Example call (inside bistable window) ===
+# result = run_bistability_demo(; MAPKK_total=900)  # two steady states expected
+#
+# === Transient binary response (not steady-state bistability) ===
+# result_tb = run_bistability_demo(; MAPKK_total=1062)
+
+# ╔═╡ 62157be0-1e90-4278-8e72-67bea11429e0
+result = run_bistability_demo(;
+    MAPKK_total = 900, 
+    ϵ_dt        = 1.0, 
+    flux_tol    = 1e-5,     
+    rsteps      = 1,        
+	α           = 2e-1,
+    outflow_tol = 1e-1,
+	exit_flux_threshold = 1.0
+)
+
+# ╔═╡ e8aed5a5-3c6b-40c9-ad98-30dbc7959b12
 begin
 	# Extract final states and probabilities
 	i=length(sol)
@@ -233,9 +344,6 @@ species_names = ["K", "KK", "K_KK", "Kp", "Kp_KK", "Kpp", "P", "Kpp_P", "Kp_P"]
 	f
 end 
 
-# ╔═╡ 161b7d9e-47cf-4680-81a9-4e4301653d4d
-sol[end-5][2] |> Plots.plot
-
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -251,6 +359,7 @@ JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
@@ -267,7 +376,7 @@ Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
 PROPACK = "~0.5.0"
-Plots = "~1.40.16"
+Plots = "~1.40.17"
 ProgressLogging = "~0.1.5"
 Revise = "~3.8.0"
 StatsBase = "~0.34.5"
@@ -279,7 +388,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "d34f3cde196670b68436b35818005ff6870291e0"
+project_hash = "34afb016c66edcdcd84e19f70d562dbc995d66aa"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -493,9 +602,9 @@ version = "0.1.6"
 
 [[deps.BlockArrays]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra"]
-git-tree-sha1 = "a8c0f363186263d75e97a41878d10dd842797561"
+git-tree-sha1 = "291532989f81db780e435452ccb2a5f902ff665f"
 uuid = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
-version = "1.6.3"
+version = "1.7.0"
 weakdeps = ["Adapt", "BandedMatrices"]
 
     [deps.BlockArrays.extensions]
@@ -1913,9 +2022,9 @@ version = "2.10.0"
 
 [[deps.LinearSolve]]
 deps = ["ArrayInterface", "ChainRulesCore", "ConcreteStructs", "DocStringExtensions", "EnumX", "GPUArraysCore", "InteractiveUtils", "Krylov", "LazyArrays", "Libdl", "LinearAlgebra", "MKL_jll", "Markdown", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLOperators", "Setfield", "StaticArraysCore", "UnPack"]
-git-tree-sha1 = "062c11f1d84ffc80d00fddaa515f7e37e8e9f9d5"
+git-tree-sha1 = "989a36162c76f5b4d0c3028333725600bb1481b7"
 uuid = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
-version = "3.18.2"
+version = "3.19.2"
 
     [deps.LinearSolve.extensions]
     LinearSolveBandedMatricesExt = "BandedMatrices"
@@ -1983,9 +2092,9 @@ version = "1.1.0"
 
 [[deps.LoweredCodeUtils]]
 deps = ["Compiler", "JuliaInterpreter"]
-git-tree-sha1 = "bc54ba0681bb71e56043a1b923028d652e78ee42"
+git-tree-sha1 = "b882a7dd7ef37643066ae8f9380beea8fdd89cae"
 uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
-version = "3.4.1"
+version = "3.4.2"
 
 [[deps.Lz4_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2197,9 +2306,9 @@ version = "1.2.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
-git-tree-sha1 = "aeb6fb02e63b4d4f90337ed90ce54ceb4c0efe77"
+git-tree-sha1 = "d2ec18c1e4eccbb70b64be2435fc3b06fbcdc0a1"
 uuid = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
-version = "4.9.0"
+version = "4.10.0"
 
     [deps.NonlinearSolve.extensions]
     NonlinearSolveFastLevenbergMarquardtExt = "FastLevenbergMarquardt"
@@ -2536,9 +2645,9 @@ version = "1.3.0"
 
 [[deps.OrdinaryDiffEqStabilizedRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "RecursiveArrayTools", "Reexport", "StaticArrays"]
-git-tree-sha1 = "1b0d894c880e25f7d0b022d7257638cf8ce5b311"
+git-tree-sha1 = "74d79a14f1ac3f92ed2dc5fc4ba2dc5516b64977"
 uuid = "358294b1-0aab-51c3-aafe-ad5ab194a2ad"
-version = "1.1.0"
+version = "1.1.1"
 
 [[deps.OrdinaryDiffEqSymplecticRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "Polyester", "RecursiveArrayTools", "Reexport"]
@@ -2652,9 +2761,9 @@ version = "1.4.3"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "55818b50883d7141bd98cdf5fc2f4ced96ee075f"
+git-tree-sha1 = "3db9167c618b290a05d4345ca70de6d95304a32a"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.40.16"
+version = "1.40.17"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -2671,10 +2780,10 @@ version = "1.40.16"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [[deps.PoissonRandom]]
-deps = ["Random"]
-git-tree-sha1 = "a0f1159c33f846aa77c3f30ebbc69795e5327152"
+deps = ["LogExpFunctions", "Random"]
+git-tree-sha1 = "bb178012780b34046c6d1600a315d8dbee89d83d"
 uuid = "e409e4f3-bfea-5376-8464-e040bb5c01ab"
-version = "0.4.4"
+version = "0.4.5"
 
 [[deps.Polyester]]
 deps = ["ArrayInterface", "BitTwiddlingConvenienceFunctions", "CPUSummary", "IfElse", "ManualMemory", "PolyesterWeave", "Static", "StaticArrayInterface", "StrideArraysCore", "ThreadingUtilities"]
@@ -2701,9 +2810,9 @@ version = "0.2.4"
 
 [[deps.PreallocationTools]]
 deps = ["Adapt", "ArrayInterface", "ForwardDiff"]
-git-tree-sha1 = "6d98eace73d82e47f5b16c393de198836d9f790a"
+git-tree-sha1 = "2cc315bb7f6e4d59081bad744cdb911d6374fc7f"
 uuid = "d236fae5-4411-538c-8e31-a6e3d9e00b46"
-version = "0.4.27"
+version = "0.4.29"
 
     [deps.PreallocationTools.extensions]
     PreallocationToolsReverseDiffExt = "ReverseDiff"
@@ -2938,9 +3047,9 @@ version = "0.5.15"
 
 [[deps.SCCNonlinearSolve]]
 deps = ["CommonSolve", "PrecompileTools", "Reexport", "SciMLBase", "SymbolicIndexingInterface"]
-git-tree-sha1 = "80d305585f80e7a3a93816495a7825b3a0bd699f"
+git-tree-sha1 = "5595105cef621942aceb1aa546b883c79ccbfa8f"
 uuid = "9dfe8606-65a1-4bb3-9748-cb89d1561431"
-version = "1.3.1"
+version = "1.4.0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -2959,9 +3068,9 @@ version = "0.1.0"
 
 [[deps.SciMLBase]]
 deps = ["ADTypes", "Accessors", "Adapt", "ArrayInterface", "CommonSolve", "ConstructionBase", "Distributed", "DocStringExtensions", "EnumX", "FunctionWrappersWrappers", "IteratorInterfaceExtensions", "LinearAlgebra", "Logging", "Markdown", "Moshi", "PrecompileTools", "Preferences", "Printf", "RecipesBase", "RecursiveArrayTools", "Reexport", "RuntimeGeneratedFunctions", "SciMLOperators", "SciMLStructures", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface"]
-git-tree-sha1 = "31587e20cdea9fba3a689033313e658dfc9aae78"
+git-tree-sha1 = "50c540cd0569d43d5cec57b9610e7f1361d3532d"
 uuid = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-version = "2.102.1"
+version = "2.103.1"
 
     [deps.SciMLBase.extensions]
     SciMLBaseChainRulesCoreExt = "ChainRulesCore"
@@ -3323,9 +3432,9 @@ version = "3.29.0"
 
 [[deps.Symbolics]]
 deps = ["ADTypes", "ArrayInterface", "Bijections", "CommonWorldInvalidations", "ConstructionBase", "DataStructures", "DiffRules", "Distributions", "DocStringExtensions", "DomainSets", "DynamicPolynomials", "LaTeXStrings", "Latexify", "Libdl", "LinearAlgebra", "LogExpFunctions", "MacroTools", "Markdown", "NaNMath", "OffsetArrays", "PrecompileTools", "Primes", "RecipesBase", "Reexport", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SpecialFunctions", "StaticArraysCore", "SymbolicIndexingInterface", "SymbolicLimits", "SymbolicUtils", "TermInterface"]
-git-tree-sha1 = "df665535546bb07078ee42e0972527b5d6bd3f69"
+git-tree-sha1 = "3d7b491b60bf3d24a5c2a74821db4520f0307c72"
 uuid = "0c5d862f-8b57-4792-8d23-62f2024744c7"
-version = "6.43.0"
+version = "6.44.0"
 
     [deps.Symbolics.extensions]
     SymbolicsForwardDiffExt = "ForwardDiff"
@@ -3806,12 +3915,15 @@ version = "1.9.2+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═be9447bb-ae33-4c70-b727-486b5802144e
-# ╠═12d3e221-9915-4ea7-b17b-951bd672bb22
-# ╠═b634f09a-4a38-43c7-8f07-0ffda5def408
-# ╠═7c044db1-3a6c-4c2e-94af-49c739d40578
-# ╠═644f0772-6d69-11f0-3aa7-c3868042e342
-# ╠═7b3561a8-d251-468b-b525-59c7628e860a
-# ╠═161b7d9e-47cf-4680-81a9-4e4301653d4d
+# ╠═6588837a-323e-47b4-b19a-f5cc8b5c1429
+# ╠═f925a629-2b98-4027-aabd-0eeeab278427
+# ╠═415a295b-38b6-4ef7-bb89-2a0b216c754b
+# ╠═257f271c-a33d-41cd-9ac7-fdaaab00d871
+# ╠═a170f1f2-f7bf-43bc-bcb9-15e426279a5a
+# ╠═7e9e666f-5dad-46fd-a654-67c84ae74279
+# ╠═0b91794e-c128-4d13-ae30-c5d015a8dcb0
+# ╠═d05981af-495d-4aee-94c6-4c67e59c01dc
+# ╠═62157be0-1e90-4278-8e72-67bea11429e0
+# ╠═e8aed5a5-3c6b-40c9-ad98-30dbc7959b12
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

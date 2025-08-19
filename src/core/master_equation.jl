@@ -123,6 +123,22 @@ function MasterEquation(active_states::Set{ElementType}, model::ModelType, rates
     S₁ + S₂
 end
 
+function MasterEquation(active_states::Set{ElementType}, model::ModelType, rates::Vector{T},
+    boundary_condition::Function, t::T) where {T,ElementType,ModelType}
+    # Prepare the active states and mapping.
+    active_states_vec = collect(active_states)
+    state_id_map = Dict(s => i for (i, s) in enumerate(active_states_vec))
+
+    # Create the data container.
+    data = MasterEquationData(active_states_vec, state_id_map, boundary_condition, model, rates, t)
+
+    # Assemble the non-diagonal and diagonal parts.
+    S₁ = MasterEquationNonDiagonal(data)
+    S₂ = MasterEquationDiagonal(data)
+
+    # Return the complete operator.
+    S₁ + S₂, S₁, S₂
+end
 # Export the MasterEquation function for external use.
 export MasterEquation
 
