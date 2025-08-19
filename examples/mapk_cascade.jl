@@ -78,7 +78,7 @@ end
 # ╔═╡ 7e9e666f-5dad-46fd-a654-67c84ae74279
 function simulate_mapk_branch(; tf_minutes=80.0, 
 							    ϵ_dt=0.1, 
-							    flux_tol=1e-9, 
+							    flux_tol=0.0, 
 							    rsteps=1,
 							    α= 1e-3,
 							    outflow_tol=1e-6,
@@ -106,60 +106,56 @@ function simulate_mapk_branch(; tf_minutes=80.0,
     global sol = [(copy(𝒮ₜ), copy(pₜ))]
     flx = Float64[]
 
-    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
-    global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)
-    global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
-
-	# CME mat = A = in_flow (diagonals) + out_flow (non-diagonals)
-	global A = MasterEquation(in_flow, out_flow)
-
     iter = 0
+    δt = 1e-5
+
+	iter = 0
     while t < tf
-        # Expand only if total outbound hazard exceeds threshold
-        if sum(out_flux) > exit_flux_threshold
-            global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, out_flux, model, rates, t,
-                                     boundary_condition, rsteps;
-                                     flux_tol=flux_tol)
+		
+        # Expand state space 
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 2)
+
+        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
+
+		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
+		total_flux = sum(in_flux)
+
+		# based on out-flux, compute δt
+		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t) 
+
+		# sanity checks
+		@assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
+		@assert isapprox(in_flux .- out_flux, Vector(A * pₜ))  
+
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+
+		out_flux = Vector(-out_flow * pₜ)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.01; renormalize=true)
+
+		@assert sum(pₜ) ≈ 1.0
+		
+        if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – skipping"
         end
 
-        # Recompute flows / generator
-        global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
-											   model, 
-											   rates, 
-											   boundary_condition,
-											   t)
-		
-        A = MasterEquation(in_flow, out_flow)
-		
-        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
-
-        # δt from outbound hazard with sane cap
-        total_out = sum(out_flux)
-        δt = (total_out > 0 ? ϵ_dt/total_out : tf - t)
-        δt = min(δt, tf - t, 10.0)   # seconds
-
-        # Evolve distribution
-        pₜ = expv(δt, A, pₜ)
-
-        # Conservative pruning (don't erase thin 2nd mode)
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, model, rates, t, α;
-                         flux_tolerance = outflow_tol)
-
-        s = sum(pₜ)
-        if s <= 0
-            @warn "All probability mass lost; skipping renormalization this step"
-            s = 1.0
-        end
-        pₜ ./= s
+        # 8. Advance time
         t += δt
 
-        if iter % 1000 == 0
-            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-            push!(sol_t, t)
-            push!(sol_S_size, length(𝒮ₜ))
-			log_step(iter, t, δt, length(𝒮ₜ))
-        end
-        iter += 1
+        # note .. im storing values in logarithemic intervals 
+		# (too many snapshots to save)
+		#if iter % 1e3 == 0
+        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        	push!(sol_t, t)
+        	push!(sol_S_size, length(𝒮ₜ))
+        	push!(tresh, total_flux)
+		#end
+		global iter = iter + 1
     end
 
     return (sol=sol, sol_t=sol_t, sol_S_size=sol_S_size,

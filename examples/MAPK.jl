@@ -74,54 +74,55 @@ begin
     sol = [(copy(𝒮ₜ), copy(pₜ))]
     flx = []
 
-    # --- bootstrap once using flows (keep consistent with later loop) ---
-    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 3)
-    global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)  
-    global A = MasterEquation(in_flow, out_flow)                                     
-    global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)            # CHANGE: init both fluxes
     δt = 1e-5
 
-    iter = 0
+	iter = 0
     while t < tf
-        # --- Expand state space on outbound frontier (prevents under-resolving the switch) ---
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, out_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-4)  # CHANGE
+		
+        # Expand state space 
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 1)
 
-        # Recompute flows / generator
-        global in_flow, out_flow = ComputeFlow(𝒮ₜ, model, rates, boundary_condition, t)
-        A = MasterEquation(in_flow, out_flow)
-        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
+        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
 
-        # --- δt from total outbound hazard (SSA-inspired) ---
-        total_out = sum(out_flux)                                  # out_flux ≥ 0
-        δt = (total_out > 0 ? ϵ_dt / total_out : tf - t)
-        δt = min(δt, tf - t, 10.0)                                 # CHANGE: sane cap (sec), avoids skipping dynamics
+		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
+		total_flux = sum(in_flux)
 
-        # Evolve probability distribution
-        pₜ = expv(δt, A, pₜ)
+		# based on out-flux, compute δt
+		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t) 
 
-        # --- Conservative pruning (don’t kill the thin second mode shoulder) ---
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, model, rates, t, 1e-3; flux_tolerance=1e-6)   # CHANGE: use out_flux, mass=1e-3
+		# sanity checks
+		@assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
+		@assert isapprox(in_flux .- out_flux, Vector(A * pₜ))  
 
-        # Guard / normalize
-        local s = sum(pₜ)
-        if s <= 0
-            @warn "All probability mass lost in pruning – skipping renormalization this step"
-            s = 1.0
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+
+		out_flux = Vector(-out_flow * pₜ)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.05; renormalize=true)
+
+		@assert sum(pₜ) ≈ 1.0
+		
+        if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – skipping"
         end
-        pₜ ./= s
 
-        # Advance time
+        # 8. Advance time
         global t += δt
 
-        # Sparse logging
-        if iter % 1_000 == 0
-            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-            push!(sol_t, t)
-            push!(sol_S_size, length(𝒮ₜ))
-        end
-        global iter = iter + 1
+        # note .. im storing values in logarithemic intervals 
+		# (too many snapshots to save)
+		#if iter % 1e3 == 0
+        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        	push!(sol_t, t)
+        	push!(sol_S_size, length(𝒮ₜ))
+		#end
+		global iter = iter + 1
     end
-
     (sol, sol_t, sol_S_size)
 end
 
@@ -267,7 +268,7 @@ Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
 PROPACK = "~0.5.0"
-Plots = "~1.40.16"
+Plots = "~1.40.17"
 ProgressLogging = "~0.1.5"
 Revise = "~3.8.0"
 StatsBase = "~0.34.5"
@@ -279,7 +280,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "d34f3cde196670b68436b35818005ff6870291e0"
+project_hash = "3d7ab311adfb7d847b2fdbb9a70e41d8a9c6bfb7"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -493,9 +494,9 @@ version = "0.1.6"
 
 [[deps.BlockArrays]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra"]
-git-tree-sha1 = "a8c0f363186263d75e97a41878d10dd842797561"
+git-tree-sha1 = "291532989f81db780e435452ccb2a5f902ff665f"
 uuid = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
-version = "1.6.3"
+version = "1.7.0"
 weakdeps = ["Adapt", "BandedMatrices"]
 
     [deps.BlockArrays.extensions]
@@ -1913,9 +1914,9 @@ version = "2.10.0"
 
 [[deps.LinearSolve]]
 deps = ["ArrayInterface", "ChainRulesCore", "ConcreteStructs", "DocStringExtensions", "EnumX", "GPUArraysCore", "InteractiveUtils", "Krylov", "LazyArrays", "Libdl", "LinearAlgebra", "MKL_jll", "Markdown", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLOperators", "Setfield", "StaticArraysCore", "UnPack"]
-git-tree-sha1 = "062c11f1d84ffc80d00fddaa515f7e37e8e9f9d5"
+git-tree-sha1 = "989a36162c76f5b4d0c3028333725600bb1481b7"
 uuid = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
-version = "3.18.2"
+version = "3.19.2"
 
     [deps.LinearSolve.extensions]
     LinearSolveBandedMatricesExt = "BandedMatrices"
@@ -1983,9 +1984,9 @@ version = "1.1.0"
 
 [[deps.LoweredCodeUtils]]
 deps = ["Compiler", "JuliaInterpreter"]
-git-tree-sha1 = "bc54ba0681bb71e56043a1b923028d652e78ee42"
+git-tree-sha1 = "b882a7dd7ef37643066ae8f9380beea8fdd89cae"
 uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
-version = "3.4.1"
+version = "3.4.2"
 
 [[deps.Lz4_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2197,9 +2198,9 @@ version = "1.2.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
-git-tree-sha1 = "aeb6fb02e63b4d4f90337ed90ce54ceb4c0efe77"
+git-tree-sha1 = "d2ec18c1e4eccbb70b64be2435fc3b06fbcdc0a1"
 uuid = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
-version = "4.9.0"
+version = "4.10.0"
 
     [deps.NonlinearSolve.extensions]
     NonlinearSolveFastLevenbergMarquardtExt = "FastLevenbergMarquardt"
@@ -2536,9 +2537,9 @@ version = "1.3.0"
 
 [[deps.OrdinaryDiffEqStabilizedRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "RecursiveArrayTools", "Reexport", "StaticArrays"]
-git-tree-sha1 = "1b0d894c880e25f7d0b022d7257638cf8ce5b311"
+git-tree-sha1 = "74d79a14f1ac3f92ed2dc5fc4ba2dc5516b64977"
 uuid = "358294b1-0aab-51c3-aafe-ad5ab194a2ad"
-version = "1.1.0"
+version = "1.1.1"
 
 [[deps.OrdinaryDiffEqSymplecticRK]]
 deps = ["DiffEqBase", "FastBroadcast", "MuladdMacro", "OrdinaryDiffEqCore", "Polyester", "RecursiveArrayTools", "Reexport"]
@@ -2652,9 +2653,9 @@ version = "1.4.3"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "55818b50883d7141bd98cdf5fc2f4ced96ee075f"
+git-tree-sha1 = "3db9167c618b290a05d4345ca70de6d95304a32a"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.40.16"
+version = "1.40.17"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -2671,10 +2672,10 @@ version = "1.40.16"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [[deps.PoissonRandom]]
-deps = ["Random"]
-git-tree-sha1 = "a0f1159c33f846aa77c3f30ebbc69795e5327152"
+deps = ["LogExpFunctions", "Random"]
+git-tree-sha1 = "bb178012780b34046c6d1600a315d8dbee89d83d"
 uuid = "e409e4f3-bfea-5376-8464-e040bb5c01ab"
-version = "0.4.4"
+version = "0.4.5"
 
 [[deps.Polyester]]
 deps = ["ArrayInterface", "BitTwiddlingConvenienceFunctions", "CPUSummary", "IfElse", "ManualMemory", "PolyesterWeave", "Static", "StaticArrayInterface", "StrideArraysCore", "ThreadingUtilities"]
@@ -2701,9 +2702,9 @@ version = "0.2.4"
 
 [[deps.PreallocationTools]]
 deps = ["Adapt", "ArrayInterface", "ForwardDiff"]
-git-tree-sha1 = "6d98eace73d82e47f5b16c393de198836d9f790a"
+git-tree-sha1 = "2cc315bb7f6e4d59081bad744cdb911d6374fc7f"
 uuid = "d236fae5-4411-538c-8e31-a6e3d9e00b46"
-version = "0.4.27"
+version = "0.4.29"
 
     [deps.PreallocationTools.extensions]
     PreallocationToolsReverseDiffExt = "ReverseDiff"
@@ -2938,9 +2939,9 @@ version = "0.5.15"
 
 [[deps.SCCNonlinearSolve]]
 deps = ["CommonSolve", "PrecompileTools", "Reexport", "SciMLBase", "SymbolicIndexingInterface"]
-git-tree-sha1 = "80d305585f80e7a3a93816495a7825b3a0bd699f"
+git-tree-sha1 = "5595105cef621942aceb1aa546b883c79ccbfa8f"
 uuid = "9dfe8606-65a1-4bb3-9748-cb89d1561431"
-version = "1.3.1"
+version = "1.4.0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -2959,9 +2960,9 @@ version = "0.1.0"
 
 [[deps.SciMLBase]]
 deps = ["ADTypes", "Accessors", "Adapt", "ArrayInterface", "CommonSolve", "ConstructionBase", "Distributed", "DocStringExtensions", "EnumX", "FunctionWrappersWrappers", "IteratorInterfaceExtensions", "LinearAlgebra", "Logging", "Markdown", "Moshi", "PrecompileTools", "Preferences", "Printf", "RecipesBase", "RecursiveArrayTools", "Reexport", "RuntimeGeneratedFunctions", "SciMLOperators", "SciMLStructures", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface"]
-git-tree-sha1 = "31587e20cdea9fba3a689033313e658dfc9aae78"
+git-tree-sha1 = "50c540cd0569d43d5cec57b9610e7f1361d3532d"
 uuid = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-version = "2.102.1"
+version = "2.103.1"
 
     [deps.SciMLBase.extensions]
     SciMLBaseChainRulesCoreExt = "ChainRulesCore"
@@ -3323,9 +3324,9 @@ version = "3.29.0"
 
 [[deps.Symbolics]]
 deps = ["ADTypes", "ArrayInterface", "Bijections", "CommonWorldInvalidations", "ConstructionBase", "DataStructures", "DiffRules", "Distributions", "DocStringExtensions", "DomainSets", "DynamicPolynomials", "LaTeXStrings", "Latexify", "Libdl", "LinearAlgebra", "LogExpFunctions", "MacroTools", "Markdown", "NaNMath", "OffsetArrays", "PrecompileTools", "Primes", "RecipesBase", "Reexport", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SpecialFunctions", "StaticArraysCore", "SymbolicIndexingInterface", "SymbolicLimits", "SymbolicUtils", "TermInterface"]
-git-tree-sha1 = "df665535546bb07078ee42e0972527b5d6bd3f69"
+git-tree-sha1 = "3d7b491b60bf3d24a5c2a74821db4520f0307c72"
 uuid = "0c5d862f-8b57-4792-8d23-62f2024744c7"
-version = "6.43.0"
+version = "6.44.0"
 
     [deps.Symbolics.extensions]
     SymbolicsForwardDiffExt = "ForwardDiff"
