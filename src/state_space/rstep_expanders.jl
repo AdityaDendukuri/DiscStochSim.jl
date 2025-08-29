@@ -78,22 +78,17 @@ end
 function purge!(
     X::Set{Element},
     p::Vector{T},
-    flux_vector::AbstractVector,   # a0(x) per state (sum of propensities)
-    prob_quantile::Real;           # in [0,1], fraction of states (by count) to drop by φ
-    renormalize::Bool = false      # if true, renormalize remaining mass
+    flux_vector::AbstractVector, 
+    prob_quantile::Real;        
+    renormalize::Bool = false  
 ) where {Element,T<:Real}
-
-    @assert length(p) == length(flux_vector) "p and flux_vector size mismatch"
-    @assert 0 ≤ prob_quantile ≤ 1 "prob_quantile must be in [0,1]"
 
     X_vec = collect(X)
 
-    # φ_i = p_i * a0(x_i)  (outgoing probability flux from state i)
     ϕ = p .* flux_vector
 
-    # Rank states by ϕ ascending; choose bottom fraction to remove
     idx = sortperm(ϕ; rev=false)
-    k = round(Int, prob_quantile * length(idx))            # number of states to remove
+    k = round(Int, prob_quantile * length(idx))            
     drop_idxs = k > 0 ? idx[1:k] : Int[]
 
     # Build new containers
@@ -102,7 +97,6 @@ function purge!(
     new_p = p[keep_mask]
     new_X = Set(X_vec[findall(keep_mask)])
 
-    # Optional renormalization (typical FSP uses a sink instead; renorm biases)
     if renormalize
         s = sum(new_p)
         if s > 0
@@ -110,7 +104,6 @@ function purge!(
         end
     end
 
-    # Diagnostics (optional/handy)
     total_out_flux = sum(ϕ)
     removed_out_flux = sum(ϕ[drop_idxs])
     kept_out_flux = total_out_flux - removed_out_flux
@@ -156,11 +149,12 @@ end
 function purge1!(
     X::Set{Element}, 
     p::Vector{T}, 
+    flux_vector::Vector{T},
     model::Model,
     rates,
     t,
     prob_quantile::Number;
-    flux_tolerance::Number = 1e-9 
+    flux_tolerance::Number = 1e-9
 ) where {Element, T, Model}
     
     X_prev = collect(X)
@@ -168,13 +162,6 @@ function purge1!(
     #  Candidate Selection: Find states with low probability mass
     candidate_idxs = findLowestValuesPercent_naive(p, prob_quantile)
 
-    # compute total flux  
-    flux_vector = zeros(T, length(p))
-    for i in eachindex(X_prev)
-        current_state = X_prev[i]
-        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
-        flux_vector[i] = p[i] * weight
-    end
     total_flux = sum(flux_vector)
     flux_threshold = total_flux * flux_tolerance
 
@@ -246,5 +233,5 @@ function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArr
 end
 
 # Export the public functions.
-export expand1!, expand!, purge!
+export expand1!, expand!, purge!, purge1!
 

@@ -14,15 +14,10 @@ begin
 	using Catalyst, JumpProcesses, StatsBase, DifferentialEquations
 	using Interpolations
 	# importing local fsp package
-	using Revise
+	using Revise, CairoMakie
 	local_mod = include("../../src/DiscStochSim.jl")
 	using .local_mod.DiscStochSim
 end
-
-# ╔═╡ 5607620f-f40b-475f-bf6b-593dcfee4f6e
-using CairoMakie
-
-# --- Define a Camera-Ready Theme for SIAM Publications ---
 
 # ╔═╡ cb9fa0aa-1588-4647-8b02-69fca1415974
 rn = @reaction_network begin
@@ -44,232 +39,35 @@ def_params = begin
 end
 
 # ╔═╡ 1fd172ed-0297-4883-8ac2-9a8033315013
-boundary_condition
 
-# ╔═╡ ebd5f20c-88c2-46d1-982f-de864ba33727
-md"""
-### Initialize Finite State Space 
-"""
+function purgea!(
+    X::Set{Element},
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number,
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
 
-# ╔═╡ f5c991d5-2126-49d3-942b-3d106ebc60e7
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	# 1. Build your initial support
-	U₀ = CartesianIndex(1,0,0)
-	𝒮₀ = Set([U₀])
+    X_vec = collect(X)
 
-	# 4. Initialize p₀
-	p₀ = zeros(length(𝒮₀))
-	p₀[FindElement(U₀,𝒮₀)] = 1.0
+	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    total_flux = sum(flux_vector[candidate_idxs])
+    flux_threshold = total_flux * flux_tolerance
 	
-	𝒮₀, p₀ = expand!(𝒮₀, p₀, model, boundary_condition, 5)	
+    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
 	
-	# 3. Now build the master‐equation matrix
-	A = MasterEquation(𝒮₀, model, rates, boundary_condition, 1e8)
 	
-	# 5. Do the time‐step
-	δt =  1e8    # huge timestep
-@show p₀
-	p₁ = expmv(δt, A, p₀)
-@show p₁
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
+    states_to_remove = Set(X_vec[collect(ℛ)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p
 end
-  ╠═╡ =#
 
-# ╔═╡ b40cf48a-bc50-43c3-8ac4-27dec9ea5280
-# ╠═╡ skip_as_script = true
-#=╠═╡
-begin
-    # Parameters and Initial Conditions for the reviewer's problem
-    tf = 1e8    # Very long final time
-    ϵ_dt = 1e2    # Standard tolerance
-    
-    # Initial state (A, B, C)
-    U₀ = CartesianIndex(1, 0, 0)
-
-    # --- Simulation Execution ---
-    𝒮ₜ = Set([U₀])
-    pₜ = [1.0]
-    t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-	flx=[]
-    
-    while t < tf
-
-        # Adaptive δt calculation
-        X_vec = collect(𝒮ₜ)
-        total_flux = 0.0
-        for i in eachindex(X_vec)
-            state = X_vec[i]
-            weight = sum(prop(state, rates, t) for prop in model.propensities)
-            total_flux += pₜ[i] * weight
-        end
-        δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t, 1e5) # Add a max dt to prevent huge initial jump
-        
-        # Expand, Evolve, Purge, Renormalize
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
-        A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-        pₜ = expv(δt, A, pₜ) # Using the more robust expv
-        
-        # Use gentle but effective pruning parameters
-        prob_quantile = 0.5
-        flux_tolerance = 1e-2
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, prob_quantile, flux_tolerance)
-        
-        pₜ ./= sum(pₜ)
-        global t += δt
-        
-        # Store results
-        push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        push!(sol_t, t)
-        push!(sol_S_size, length(𝒮ₜ))
-		push!(flx, total_flux)
-    end
-    
-    # Return the solution arrays for plotting
-    (sol, sol_t, sol_S_size)
-end
-  ╠═╡ =#
-
-# ╔═╡ 2b05437f-0508-4a92-b12a-3dec7bbd9f12
-#=╠═╡
-begin
-	sol_mean = map(1:length(sol)) do i
-		    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
-		end 
-	fsp_mean=hcat(sol_mean...)'
-end
-  ╠═╡ =#
-
-# ╔═╡ 1ca133f8-8368-4a3e-ac57-97f085bf3b3a
-siam_theme = Theme(
-    # Set a professional, clean font (Computer Modern is standard for TeX/LaTeX)
-    font = "Computer Modern",
-    fontsize = 18, # Base font size for the figure
-    
-    Axis = (
-        # Axis labels and title settings
-        titlefont = :bold,
-        titlesize = 22,
-        xlabelsize = 20,
-        ylabelsize = 20,
-        xticklabelsize = 16,
-        yticklabelsize = 16,
-        colormap=:grays,
-        # Grid settings for a clean look
-        xgridstyle = :dash,
-        ygridstyle = :dash,
-        xgridwidth = 0.7,
-        ygridwidth = 0.7,
-        xgridcolor = :gray80,
-        ygridcolor = :gray80,
-
-        # Spine (box around the plot) settings
-        leftspinevisible = true,
-        rightspinevisible = false,
-        topspinevisible = false,
-        bottomspinevisible = true,
-    ),
-
-    Legend = (
-        framevisible = false,
-        patchsize = (30, 10),
-        labelsize = 16,
-    ),
-
-    Lines = (
-        color = :black,
-        linewidth = 2.0,
-    )
-)
-
-# --- Generate the 4-Panel Figure ---
-
-# ╔═╡ 37b55f3e-a558-49c6-9c77-8245f3bc9b49
-#=╠═╡
-begin
-    # Apply the custom theme for all subsequent plots
-    set_theme!(siam_theme)
-
-
-    # Ensure all vectors are the same length for plotting
-    num_steps = length(sol_t)
-    time_points = sol_t[1:num_steps]
-    dt_values = diff(time_points)
-    state_space_sizes = sol_S_size[1:num_steps]
-    
-    # Assuming flx and tresh are recorded at each step after the first
-    flux_time_points = sol_t[2:end]
-    flux_thresholds = flx[1:end]
-    
-    # Extract species means
-    mean_A = fsp_mean[:, 1]
-    mean_B = fsp_mean[:, 2]
-    mean_C = fsp_mean[:, 3]
-
-    # --- Create the Figure ---
-    fig = Figure(size = (1200, 800))
-
-    # --- Top Row ---
-    
-    # Panel 1: Mean Trajectories (with B on a log scale)
-    ax11 = Axis(fig[1, 1], title = "Mean Trajectories", xlabel = "Simulation Time, t", ylabel = L"\sum_{x \in X} x \, p(x)")
-    
-    lines!(ax11, time_points, mean_A, label=L"A_{\text{mean}}",linestyle=:solid, color=:black)
-    lines!(ax11, time_points, mean_C ./ 100000, label=L"C_{\text{mean}} * 10^-5", linestyle=:dot, color=:black)
-    lines!(ax11, time_points, mean_B, label=L"B_{\text{mean}}", linestyle=:dash, color=:black)
-	
-    
-    # Combine legends
-    axislegend(ax11, position = :rc)
-    
-    # Panel 2: State Space Size
-    ax12 = Axis(fig[1, 2], title = "State Space Size", xlabel = "Simulation Time, t", ylabel = "|S|")
-    lines!(ax12, time_points, state_space_sizes, color=:black)
-    
-    # --- Bottom Row ---
-
-    # Panel 3: Adaptive Time Step (dt)
-    ax21 = Axis(fig[2, 1], title = "Adaptive Time Step", xlabel = "Simulation Time, t", ylabel = "δt", yscale = log10)
-    lines!(ax21, time_points[2:end], dt_values, color=:black)
-
-    # Panel 4: Flux Diagnostics
-    ax22 = Axis(fig[2, 2], title = "Flux Diagnostics", xlabel = "Simulation Time, t", ylabel = "Flux Value", yscale = log10)
-    lines!(ax22, flux_time_points, flux_thresholds, color=:black)
-    
-    # Link all x-axes for synchronized zooming/panning
-    linkxaxes!(ax11, ax12, ax21, ax22)
-
-    # Add spacing between rows for clarity
-    rowgap!(fig.layout, 1, 60)
-
-    # Display the final figure
-    fig
-end
-  ╠═╡ =#
-
-# ╔═╡ 256f8d0d-7c2b-4415-969e-356ee271e908
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	p=plot(fsp_mean[2:end-8000, 1]; label="A") 
-	p=plot!(fsp_mean[2:end-8000, 2]; label="B") 
-	p=plot!(log.(fsp_mean[2:end-8000, 3]),legend=:outertopright; label="C")
-	xlabel!(p, "time")
-	ylabel!(p, "mean traj sum(x*p(x))")
-	p
-end
-  ╠═╡ =#
-
-# ╔═╡ 085ad818-d554-4332-a0b3-06105b828095
-#=╠═╡
-size(fsp_mean)
-  ╠═╡ =#
-
-# ╔═╡ 6ad6db9b-f87c-4320-9a45-a18a170b5db7
+# ╔═╡ 8c374694-4992-46b0-b0a2-ffe217089e48
 # ╠═╡ disabled = true
 #=╠═╡
 
@@ -285,7 +83,7 @@ fsp_sim = begin
 	# time stepping loop
 	iter = 1
 	pₜ = p₀
-	δt = 1.0
+	δt = 1e4
 	T =0:δt:1e8
 	
 	# variables to store simulation observables
@@ -297,16 +95,22 @@ fsp_sim = begin
 		# expand state space
 	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
 		global size_𝒮ₜ[iter] = length(𝒮ₜ)
-		A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-		
+		global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
 		# solve system and normalize (using expokit)
-    	global pₜ = expmv(δt, A, pₜ)
+		pₜ = expv(δt, A, pₜ)
+		
 		
 		# add add states in sparse arrays 
     	push!(sol, (𝒮ₜ, pₜ))
 		
 		# purge state space
-			𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, model, rates, t, 0.8, 1e-9)
+		#𝒮ₜ, pₜ = purgea!(𝒮ₜ, pₜ, model, rates, t, 0.5, 1e-5)
+		𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.01; renormalize=true)
+
     	pₜ ./= sum(pₜ)
 		ϵₜ[iter] = 1.0 - sum(pₜ)
 		pₜ ./= sum(pₜ)		
@@ -315,8 +119,156 @@ end
 
   ╠═╡ =#
 
+# ╔═╡ ebd5f20c-88c2-46d1-982f-de864ba33727
+md"""
+### Initialize Finite State Space 
+"""
+
+# ╔═╡ 2b05437f-0508-4a92-b12a-3dec7bbd9f12
+
+
+# ╔═╡ 256f8d0d-7c2b-4415-969e-356ee271e908
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	p=plot(fsp_mean[2:end-8000, 1]; label="A") 
+	p=plot!(fsp_mean[2:end-8000, 2]; label="B") 
+	p=plot!(log.(fsp_mean[2:end-8000, 3]),legend=:outertopright; label="C")
+	xlabel!(p, "time")
+	ylabel!(p, "mean traj sum(x*p(x))")
+	p
+end
+  ╠═╡ =#
+
+# ╔═╡ 845ce313-709f-4ec6-a2dc-71ba08f8fc22
+function purgea!(
+    X::Set{Element},
+    p::Vector{T}, 
+	flux_vector,
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    total_flux = sum(flux_vector[candidate_idxs])
+    flux_threshold = total_flux * flux_tolerance
+	
+    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
+	
+	
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
+    states_to_remove = Set(X_vec[collect(ℛ)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p, total_flux, flux_threshold
+end
+
+# ╔═╡ 6ad6db9b-f87c-4320-9a45-a18a170b5db7
+
+fsp_sim = begin
+		# 4. Initialize p₀
+	U₀ = CartesianIndex(1,0,0)
+	𝒮₀ = Set([U₀])
+	p₀ = zeros(length(𝒮₀))
+	p₀[FindElement(U₀,𝒮₀)] = 1.0
+	# copy initial values 
+	pₜ = copy(p₀)
+	𝒮ₜ = copy(𝒮₀)
+	# time stepping loop
+	iter = 1
+	pₜ = p₀
+	δt = 7e3
+	ϵ_dt = 1.0
+	T =0:δt:1e8
+	
+	# variables to store simulation observables
+	size_𝒮ₜ = Int.(zeros(length(T))) # system sizes
+	flux = zeros(length(T))
+	flux_tol = zeros(length(T))
+	local_ϵ = zeros(length(T))
+	sol = []
+	
+	@progress for (iter, t) ∈ enumerate(T)
+		
+		# expand state space
+	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
+		global size_𝒮ₜ[iter] = length(𝒮ₜ)
+		global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
+		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
+		total_flux = sum(out_flux)
+
+
+		pₜ = expmv!(δt, A, pₜ)
+		
+		
+    	push!(sol, (𝒮ₜ, pₜ))
+		
+		# purge state space
+		out_flux = Vector(-out_flow * pₜ)
+		𝒮ₜ, pₜ, total_flux, flux_threshold = purgea!(𝒮ₜ, 
+													 pₜ, 
+													 out_flux, 
+													 model, 
+													 rates, 
+													 t, 
+													 0.9; 
+													 flux_tolerance=1.0)
+
+
+		local_ϵ[iter] = 1.0 - sum(pₜ)
+    	pₜ ./= sum(pₜ)
+		flux[iter] = total_flux
+		flux_tol[iter] = flux_threshold
+		pₜ ./= sum(pₜ)		
+
+		
+	end
+end
+
+
 # ╔═╡ 32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
-T[iter]
+begin
+	sol_mean = map(1:length(sol)) do i
+		    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
+	end 
+	fsp_mean=hcat(sol_mean...)'
+end
+
+# ╔═╡ 8e1e415f-9132-4340-aa0c-d4d82cee26d3
+begin
+	f=Figure()
+	
+	ax11 = Axis(f[1, 1], xscale=log10, ylabel=L"Mean Trajectory of $A$")
+	ax12 = Axis(f[1, 2], xscale=log10, ylabel=L"Mean Trajectory of $B$")
+	ax13 = Axis(f[1, 3],xscale=log10, ylabel=L"Mean Trajectory of $C$")
+
+	ax21 = Axis(f[2, 1], xscale=log10, xlabel=L"time $t$", ylabel=L"|\mathcal{S}_t|")
+	ax22 = Axis(f[2, 2], xscale=log10, xlabel=L"time $t$")
+	ax23 = Axis(f[2, 3], xscale=log10, xlabel=L"time $t$")
+
+	lines!(ax11, fsp_mean[1:end, 1]; label="A", color=:black) 
+	lines!(ax12, fsp_mean[1:end, 2]; label="B",color=:black) 
+	lines!(ax13, fsp_mean[1:end, 3]; label="C",color=:black)
+
+	lines!(ax21, size_𝒮ₜ; label="A", color=:black) 
+	lines!(ax22, flux; label="B",color=:black) 
+	lines!(ax23, local_ϵ; label="C",color=:black)
+
+	f
+end
+
+# ╔═╡ 48f9aac2-7ed5-4fdf-b708-bf890dd3cd66
+[ 99583.3  5.31773   281.606] |> sum
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -338,27 +290,27 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 Arpack = "~0.5.4"
-CairoMakie = "~0.12.18"
-Catalyst = "~14.4.1"
-DifferentialEquations = "~7.16.0"
+CairoMakie = "~0.13.10"
+Catalyst = "~15.0.8"
+DifferentialEquations = "~7.16.1"
 Expokit = "~0.2.0"
 ExponentialUtilities = "~1.27.0"
 Interpolations = "~0.15.1"
 JLD = "~0.13.5"
-JumpProcesses = "~9.14.2"
+JumpProcesses = "~9.16.1"
 PROPACK = "~0.5.0"
 ProgressLogging = "~0.1.5"
-Revise = "~3.7.2"
-StatsBase = "~0.34.4"
+Revise = "~3.8.0"
+StatsBase = "~0.34.5"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.5"
+julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "33057ef56d7a51993d00fab0c3e4110fc68274a6"
+project_hash = "8f772b1bdcb98603a66edc7cf9c1c94801a087ad"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -688,9 +640,9 @@ version = "1.1.1"
 
 [[deps.CairoMakie]]
 deps = ["CRC32c", "Cairo", "Cairo_jll", "Colors", "FileIO", "FreeType", "GeometryBasics", "LinearAlgebra", "Makie", "PrecompileTools"]
-git-tree-sha1 = "0afa2b4ac444b9412130d68493941e1af462e26a"
+git-tree-sha1 = "9bd45574379e50579a78774334f4a1f1238c0af5"
 uuid = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
-version = "0.12.18"
+version = "0.13.10"
 
 [[deps.Cairo_jll]]
 deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
@@ -699,15 +651,15 @@ uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
 version = "1.18.5+0"
 
 [[deps.Catalyst]]
-deps = ["Combinatorics", "DataStructures", "DiffEqBase", "DocStringExtensions", "DynamicPolynomials", "DynamicQuantities", "Graphs", "JumpProcesses", "LaTeXStrings", "Latexify", "LinearAlgebra", "MacroTools", "ModelingToolkit", "Parameters", "Reexport", "Requires", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SymbolicUtils", "Symbolics", "Unitful"]
-git-tree-sha1 = "dafd059c1d80ba02006978cd05ea7264ff1f362e"
+deps = ["Combinatorics", "DataStructures", "DiffEqBase", "DocStringExtensions", "DynamicPolynomials", "DynamicQuantities", "EnumX", "Graphs", "JumpProcesses", "LaTeXStrings", "Latexify", "LinearAlgebra", "MacroTools", "ModelingToolkit", "Parameters", "Reexport", "Requires", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SymbolicUtils", "Symbolics", "Unitful"]
+git-tree-sha1 = "83a85091233ac1d45ae7cbec0c01eb1968b5e5f7"
 uuid = "479239e8-5488-4da2-87a7-35f2df7eef83"
-version = "14.4.1"
+version = "15.0.8"
 
     [deps.Catalyst.extensions]
     CatalystBifurcationKitExtension = "BifurcationKit"
     CatalystCairoMakieExtension = "CairoMakie"
-    CatalystGraphMakieExtension = "GraphMakie"
+    CatalystGraphMakieExtension = ["GraphMakie", "NetworkLayout", "Makie"]
     CatalystHomotopyContinuationExtension = "HomotopyContinuation"
     CatalystStructuralIdentifiabilityExtension = "StructuralIdentifiability"
 
@@ -716,6 +668,8 @@ version = "14.4.1"
     CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
     GraphMakie = "1ecd5474-83a3-4783-bb4f-06765db800d2"
     HomotopyContinuation = "f213a82b-91d6-5c5d-acf7-10f1c761b327"
+    Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+    NetworkLayout = "46757867-2c16-5918-afeb-47bfcb05e46a"
     StructuralIdentifiability = "220ca800-aa68-49bb-acd8-6037fa93a544"
 
 [[deps.ChainRulesCore]]
@@ -754,15 +708,19 @@ version = "3.30.0"
 
 [[deps.ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
-git-tree-sha1 = "b10d0b65641d57b8b4d5e234446582de5047050d"
+git-tree-sha1 = "67e11ee83a43eb71ddc950302c53bf33f0690dfe"
 uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
-version = "0.11.5"
+version = "0.12.1"
+weakdeps = ["StyledStrings"]
+
+    [deps.ColorTypes.extensions]
+    StyledStringsExt = "StyledStrings"
 
 [[deps.ColorVectorSpace]]
 deps = ["ColorTypes", "FixedPointNumbers", "LinearAlgebra", "Requires", "Statistics", "TensorCore"]
-git-tree-sha1 = "a1f44953f2382ebb937d60dafbe2deea4bd23249"
+git-tree-sha1 = "8b3b6f87ce8f65a2b4f857528fd8d70086cd72b1"
 uuid = "c3611d14-8923-5661-9e6a-0046d554d3a4"
-version = "0.10.0"
+version = "0.11.0"
 weakdeps = ["SpecialFunctions"]
 
     [deps.ColorVectorSpace.extensions]
@@ -810,6 +768,11 @@ weakdeps = ["Dates", "LinearAlgebra"]
 
     [deps.Compat.extensions]
     CompatLinearAlgebraExt = "LinearAlgebra"
+
+[[deps.Compiler]]
+git-tree-sha1 = "382d79bfe72a406294faca39ef0c3cef6e6ce1f1"
+uuid = "807dbc54-b67e-4c79-8afb-eafe4df6f2e1"
+version = "0.1.1"
 
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -967,9 +930,9 @@ version = "1.15.1"
 
 [[deps.DifferentialEquations]]
 deps = ["BoundaryValueDiffEq", "DelayDiffEq", "DiffEqBase", "DiffEqCallbacks", "DiffEqNoiseProcess", "JumpProcesses", "LinearAlgebra", "LinearSolve", "NonlinearSolve", "OrdinaryDiffEq", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "SteadyStateDiffEq", "StochasticDiffEq", "Sundials"]
-git-tree-sha1 = "97e266802bd3542248e81df35241ac7d0da096a9"
+git-tree-sha1 = "afdc7dfee475828b4f0286d63ffe66b97d7a3fa7"
 uuid = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
-version = "7.16.0"
+version = "7.16.1"
 
 [[deps.DifferentiationInterface]]
 deps = ["ADTypes", "LinearAlgebra"]
@@ -1173,9 +1136,9 @@ version = "0.1.6"
 
 [[deps.FFMPEG_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
+git-tree-sha1 = "8cc47f299902e13f90405ddb5bf87e5d474c0d38"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.4.4+1"
+version = "6.1.2+0"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
@@ -1388,22 +1351,17 @@ git-tree-sha1 = "f88e0ba1f6b42121a7c1dfe93a9687d8e164c91b"
 uuid = "c145ed77-6b09-5dd9-b285-bf645a82121e"
 version = "0.5.5"
 
-[[deps.GeoFormatTypes]]
-git-tree-sha1 = "8e233d5167e63d708d41f87597433f59a0f213fe"
-uuid = "68eda718-8dee-11e9-39e7-89f7f65f511f"
-version = "0.4.4"
-
-[[deps.GeoInterface]]
-deps = ["DataAPI", "Extents", "GeoFormatTypes"]
-git-tree-sha1 = "294e99f19869d0b0cb71aef92f19d03649d028d5"
-uuid = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
-version = "1.4.1"
-
 [[deps.GeometryBasics]]
-deps = ["EarCut_jll", "Extents", "GeoInterface", "IterTools", "LinearAlgebra", "StaticArrays", "StructArrays", "Tables"]
-git-tree-sha1 = "b62f2b2d76cee0d61a2ef2b3118cd2a3215d3134"
+deps = ["EarCut_jll", "Extents", "IterTools", "LinearAlgebra", "PrecompileTools", "Random", "StaticArrays"]
+git-tree-sha1 = "1f5a80f4ed9f5a4aada88fc2db456e637676414b"
 uuid = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
-version = "0.4.11"
+version = "0.5.10"
+
+    [deps.GeometryBasics.extensions]
+    GeometryBasicsGeoInterfaceExt = "GeoInterface"
+
+    [deps.GeometryBasics.weakdeps]
+    GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 
 [[deps.GettextRuntime_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Libiconv_jll"]
@@ -1686,9 +1644,9 @@ version = "2.1.2"
 
 [[deps.JuliaInterpreter]]
 deps = ["CodeTracking", "InteractiveUtils", "Random", "UUIDs"]
-git-tree-sha1 = "c47892541d03e5dc63467f8964c9f2b415dfe718"
+git-tree-sha1 = "6ac9e4acc417a5b534ace12690bc6973c25b862f"
 uuid = "aa1ae85d-cabe-5617-a682-6adf51b2e16a"
-version = "0.9.46"
+version = "0.10.3"
 
 [[deps.JuliaSyntax]]
 git-tree-sha1 = "937da4713526b96ac9a178e2035019d3b78ead4a"
@@ -1696,10 +1654,10 @@ uuid = "70703baa-626e-46a2-a12c-08ffd08c73b4"
 version = "0.4.10"
 
 [[deps.JumpProcesses]]
-deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "DocStringExtensions", "FunctionWrappers", "Graphs", "LinearAlgebra", "Markdown", "PoissonRandom", "Random", "RandomNumbers", "RecursiveArrayTools", "Reexport", "SciMLBase", "Setfield", "StaticArrays", "SymbolicIndexingInterface", "UnPack"]
-git-tree-sha1 = "3ba034493e21efc9ba61268dc0faa0c383bb76a5"
+deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "DiffEqCallbacks", "DocStringExtensions", "FunctionWrappers", "Graphs", "LinearAlgebra", "Markdown", "PoissonRandom", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "Setfield", "StaticArrays", "SymbolicIndexingInterface", "UnPack"]
+git-tree-sha1 = "f8da88993c914357031daf0023f18748ff473924"
 uuid = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
-version = "9.14.2"
+version = "9.16.1"
 weakdeps = ["FastBroadcast"]
 
 [[deps.KernelDensity]]
@@ -1974,10 +1932,10 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
 
 [[deps.LoweredCodeUtils]]
-deps = ["JuliaInterpreter"]
-git-tree-sha1 = "39240b5f66956acfa462d7fe12efe08e26d6d70d"
+deps = ["Compiler", "JuliaInterpreter"]
+git-tree-sha1 = "b882a7dd7ef37643066ae8f9380beea8fdd89cae"
 uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
-version = "3.2.2"
+version = "3.4.2"
 
 [[deps.Lz4_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2020,16 +1978,16 @@ uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 version = "0.5.16"
 
 [[deps.Makie]]
-deps = ["Animations", "Base64", "CRC32c", "ColorBrewer", "ColorSchemes", "ColorTypes", "Colors", "Contour", "Dates", "DelaunayTriangulation", "Distributions", "DocStringExtensions", "Downloads", "FFMPEG_jll", "FileIO", "FilePaths", "FixedPointNumbers", "Format", "FreeType", "FreeTypeAbstraction", "GeometryBasics", "GridLayoutBase", "ImageBase", "ImageIO", "InteractiveUtils", "Interpolations", "IntervalSets", "InverseFunctions", "Isoband", "KernelDensity", "LaTeXStrings", "LinearAlgebra", "MacroTools", "MakieCore", "Markdown", "MathTeXEngine", "Observables", "OffsetArrays", "Packing", "PlotUtils", "PolygonOps", "PrecompileTools", "Printf", "REPL", "Random", "RelocatableFolders", "Scratch", "ShaderAbstractions", "Showoff", "SignedDistanceFields", "SparseArrays", "Statistics", "StatsBase", "StatsFuns", "StructArrays", "TriplotBase", "UnicodeFun", "Unitful"]
-git-tree-sha1 = "be3051d08b78206fb5e688e8d70c9e84d0264117"
+deps = ["Animations", "Base64", "CRC32c", "ColorBrewer", "ColorSchemes", "ColorTypes", "Colors", "Contour", "Dates", "DelaunayTriangulation", "Distributions", "DocStringExtensions", "Downloads", "FFMPEG_jll", "FileIO", "FilePaths", "FixedPointNumbers", "Format", "FreeType", "FreeTypeAbstraction", "GeometryBasics", "GridLayoutBase", "ImageBase", "ImageIO", "InteractiveUtils", "Interpolations", "IntervalSets", "InverseFunctions", "Isoband", "KernelDensity", "LaTeXStrings", "LinearAlgebra", "MacroTools", "MakieCore", "Markdown", "MathTeXEngine", "Observables", "OffsetArrays", "PNGFiles", "Packing", "PlotUtils", "PolygonOps", "PrecompileTools", "Printf", "REPL", "Random", "RelocatableFolders", "Scratch", "ShaderAbstractions", "Showoff", "SignedDistanceFields", "SparseArrays", "Statistics", "StatsBase", "StatsFuns", "StructArrays", "TriplotBase", "UnicodeFun", "Unitful"]
+git-tree-sha1 = "1d7d16f0e02ec063becd7a140f619b2ffe5f2b11"
 uuid = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
-version = "0.21.18"
+version = "0.22.10"
 
 [[deps.MakieCore]]
 deps = ["ColorTypes", "GeometryBasics", "IntervalSets", "Observables"]
-git-tree-sha1 = "9019b391d7d086e841cbeadc13511224bd029ab3"
+git-tree-sha1 = "c3159eb1e3aa3e409edbb71f4035ed8b1fc16e23"
 uuid = "20f20a25-4f0e-4fdf-b5d1-57303727442b"
-version = "0.8.12"
+version = "0.9.5"
 
 [[deps.ManualMemory]]
 git-tree-sha1 = "bcaef4fc7a0cfe2cba636d84cda54b5e4e4ca3cd"
@@ -2824,9 +2782,9 @@ version = "1.1.1"
 
 [[deps.Revise]]
 deps = ["CodeTracking", "FileWatching", "JuliaInterpreter", "LibGit2", "LoweredCodeUtils", "OrderedCollections", "REPL", "Requires", "UUIDs", "Unicode"]
-git-tree-sha1 = "9bb80533cb9769933954ea4ffbecb3025a783198"
+git-tree-sha1 = "f6f7d30fb0d61c64d0cfe56cf085a7c9e7d5bc80"
 uuid = "295af30f-e4ad-537b-8983-00126c2a3abe"
-version = "3.7.2"
+version = "3.8.0"
 weakdeps = ["Distributed"]
 
     [deps.Revise.extensions]
@@ -2943,10 +2901,10 @@ uuid = "efcf1570-3423-57d1-acb7-fd33fddbac46"
 version = "1.1.2"
 
 [[deps.ShaderAbstractions]]
-deps = ["ColorTypes", "FixedPointNumbers", "GeometryBasics", "LinearAlgebra", "Observables", "StaticArrays", "StructArrays", "Tables"]
-git-tree-sha1 = "79123bc60c5507f035e6d1d9e563bb2971954ec8"
+deps = ["ColorTypes", "FixedPointNumbers", "GeometryBasics", "LinearAlgebra", "Observables", "StaticArrays"]
+git-tree-sha1 = "818554664a2e01fc3784becb2eb3a82326a604b6"
 uuid = "65257c39-d410-5151-9873-9b3e5be5013e"
-version = "0.4.1"
+version = "0.5.0"
 
 [[deps.SharedArrays]]
 deps = ["Distributed", "Mmap", "Random", "Serialization"]
@@ -3124,9 +3082,9 @@ version = "1.7.1"
 
 [[deps.StatsBase]]
 deps = ["AliasTables", "DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "29321314c920c26684834965ec2ce0dacc9cf8e5"
+git-tree-sha1 = "b81c5035922cc89c2d9523afc6c54be512411466"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.34.4"
+version = "0.34.5"
 
 [[deps.StatsFuns]]
 deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
@@ -3165,9 +3123,9 @@ version = "0.4.1"
 
 [[deps.StructArrays]]
 deps = ["ConstructionBase", "DataAPI", "Tables"]
-git-tree-sha1 = "9537ef82c42cdd8c5d443cbc359110cbb36bae10"
+git-tree-sha1 = "8ad2e38cbb812e29348719cc63580ec1dfeb9de4"
 uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
-version = "0.6.21"
+version = "0.7.1"
 
     [deps.StructArrays.extensions]
     StructArraysAdaptExt = "Adapt"
@@ -3546,16 +3504,16 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
 
 [[deps.x264_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4fea590b89e6ec504593146bf8b988b2c00922b2"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "14cc7083fc6dff3cc44f2bc435ee96d06ed79aa7"
 uuid = "1270edf5-f2f9-52d2-97e9-ab00b5d0237a"
-version = "2021.5.5+0"
+version = "10164.0.1+0"
 
 [[deps.x265_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "ee567a171cce03570d77ad3a43e90218e38937a9"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "dcc541bb19ed5b0ede95581fb2e41ecf179527d2"
 uuid = "dfaa095f-4041-5dcd-9319-2fabd8486b76"
-version = "3.5.0+0"
+version = "3.6.0+0"
 """
 
 # ╔═╡ Cell order:
@@ -3564,16 +3522,14 @@ version = "3.5.0+0"
 # ╠═ae7ff050-c76d-4c0d-8c8a-23724f10485a
 # ╠═85c4ad39-d14a-4e73-bfa3-4a22fef4d537
 # ╠═1fd172ed-0297-4883-8ac2-9a8033315013
+# ╠═8c374694-4992-46b0-b0a2-ffe217089e48
 # ╟─ebd5f20c-88c2-46d1-982f-de864ba33727
-# ╠═f5c991d5-2126-49d3-942b-3d106ebc60e7
-# ╠═b40cf48a-bc50-43c3-8ac4-27dec9ea5280
 # ╠═2b05437f-0508-4a92-b12a-3dec7bbd9f12
-# ╠═5607620f-f40b-475f-bf6b-593dcfee4f6e
-# ╠═1ca133f8-8368-4a3e-ac57-97f085bf3b3a
-# ╠═37b55f3e-a558-49c6-9c77-8245f3bc9b49
 # ╠═256f8d0d-7c2b-4415-969e-356ee271e908
-# ╠═085ad818-d554-4332-a0b3-06105b828095
+# ╠═845ce313-709f-4ec6-a2dc-71ba08f8fc22
 # ╠═6ad6db9b-f87c-4320-9a45-a18a170b5db7
 # ╠═32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
+# ╠═8e1e415f-9132-4340-aa0c-d4d82cee26d3
+# ╠═48f9aac2-7ed5-4fdf-b708-bf890dd3cd66
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

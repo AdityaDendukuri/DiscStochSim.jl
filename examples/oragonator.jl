@@ -24,13 +24,11 @@ end
 oregonator_rn = @reaction_network begin
     @species X(t) Y(t) Z(t)
     @parameters k1 k2 k3 k4 k5 
-    
-    # Standard Oregonator reactions
-    k1, Y --> X          # A + Y → X  
-    k2, X + Y --> ∅        # X + Y → P (removed)
-    k3, X --> 2X + Z     # B + X → 2X + Z
-    k4, 2X --> ∅          # 2X → Q (removed) 
-    k5, Z --> Y            # Z → Y
+    k1, Y --> X          
+    k2, X + Y --> ∅        
+    k3, X --> 2X + Z     
+    k4, 2X --> ∅          
+    k5, Z --> Y            
 end
 
 # ╔═╡ 528dc2d1-739b-4b60-8bfc-0173c8a931a6
@@ -46,7 +44,7 @@ begin
 	jprob = JumpProblem(jinput)
 	jump_sol = solve(jprob)
 	
-	n_trajs = 1
+	n_trajs = 10
 	ssa_trajs1=[]
 	for i in 1:n_trajs 
 	    push!(ssa_trajs1, solve(jprob, SSAStepper()))
@@ -57,7 +55,7 @@ end
 ssa_trajs1[1]
 
 # ╔═╡ df29e9d3-207d-40ed-9726-0ef68fd3a773
-	fsp_mean1=ssa_trajs1[1]
+	fsp_mean1=ssa_trajs1[end]
 
 # ╔═╡ 836c5ee4-7ac2-47ed-bfee-874582ccba8a
 Plots.plot(fsp_mean1)
@@ -65,43 +63,23 @@ Plots.plot(fsp_mean1)
 # ╔═╡ 64061d79-cbfe-4219-a7a8-cdc57ffb9344
 oregonator_params = begin
     # Parameters from Gillespie's Figure 24 (equation 62)
-    # Y1s = 500, Y2s = 1000, Y3s = 2000, μ1s = 2000, μ2s = 50000
     Y1s, Y2s, Y3s = 500.0, 1000.0, 2000.0  # Steady state values
     μ1s, μ2s = 2000.0, 50000.0              # Reaction rates at steady state
+        
+    k1_val = μ1s / Y2s                   
+    k2_val = μ2s / (Y1s * Y2s)          
+    k3_val = (μ1s + μ2s) / Y1s          
+    k4_val = 2 * μ1s / (Y1s^2)          
+    k5_val = (μ1s + μ2s) / Y3s         
     
-    # Convert using Gillespie's equation (61):
-    # μ1s ≡ c₁X₁Y₂s and μ2s ≡ c₂Y₁sY₂s
-    # c₁X₁ = μ1s/Y₂s
-    # c₂ = μ2s/(Y₁s*Y₂s)  
-    # c₃X₂ = (μ1s + μ2s)/Y₁s
-    # c₄ = 2*μ1s/Y₁s²
-    # c₅X₃ = (μ1s + μ2s)/Y₃s
-    
-    # Map to your reaction network:
-    # k1*A corresponds to c₁X₁ 
-    # k2 corresponds to c₂
-    # k3*B corresponds to c₃X₂
-    # k4 corresponds to c₄  
-    # k5 corresponds to c₅X₃
-    
-    # Set A=1, B=1 for simplicity, so k values equal the c*X values
-    
-    k1_val = μ1s / Y2s                    # = 2000/1000 = 2.0
-    k2_val = μ2s / (Y1s * Y2s)           # = 50000/(500*1000) = 0.1  
-    k3_val = (μ1s + μ2s) / Y1s           # = (2000+50000)/500 = 104.0
-    k4_val = 2 * μ1s / (Y1s^2)           # = 2*2000/(500²) = 0.016
-    k5_val = (μ1s + μ2s) / Y3s           # = (2000+50000)/2000 = 26.0
-    
-    # Parameters as array [k1, k2, k3, k4, k5, A, B]
     rates = [k1_val, k2_val, k3_val, k4_val, k5_val]
     
-    # Initial conditions: X=Y1s=500, Y=Y2s=1000, Z=Y3s=2000
-    U₀ = CartesianIndex(500, 1000, 2000)  # (X, Y, Z)
+    # Initial condition
+    U₀ = CartesianIndex(500, 1000, 2000) 
 
-	bounds = (0, 15000)
+	bounds = (0, 50000)
     boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
     
-    println("Oregonator parameters:")
     println("k1 = $(k1_val)")
     println("k2 = $(k2_val)") 
     println("k3 = $(k3_val)")
@@ -112,25 +90,159 @@ oregonator_params = begin
     (rates=rates, U₀=U₀)
 end
 
+# ╔═╡ 0b0c852e-cc0f-4e2d-998f-9cfbaea78ecd
+function simple_flux_purge!(
+    X::Set{Element},
+    p::Vector{T},
+    model::Model,
+    rates,
+    t,
+    flux_tolerance::Number = 1e-9
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+    flux_vector = zeros(T, length(p))
+
+    # 1. Calculate outgoing flux for ALL states
+    for i in eachindex(X_vec)
+        current_state = X_vec[i]
+        # a₀(x) = sum of all outgoing propensities from state x
+        a₀ = sum(prop(current_state, rates, t) for prop in model.propensities)
+        # ϕ(x) = p(x) * a₀(x)
+        flux_vector[i] = p[i] * a₀
+    end
+
+    # 2. Set the threshold and find states to prune
+    total_flux = sum(flux_vector)
+    flux_threshold = total_flux * flux_tolerance
+
+    # Find all states with flux below the threshold
+    final_idxs_to_prune = findall(f -> f < flux_threshold, flux_vector)
+
+    # 3. Purge the final set of states
+    if isempty(final_idxs_to_prune)
+        return X, p # Return original if nothing to prune
+    end
+
+    keep_mask = trues(length(p))
+    keep_mask[final_idxs_to_prune] .= false
+
+    new_p = p[keep_mask]
+    new_X = Set(X_vec[keep_mask])
+
+    return new_X, new_p
+end
+
+# ╔═╡ 6c4d3717-0b43-4112-9c50-d840616b0926
+function purgeaa!(
+    X::Set{Element},
+    p::Vector{T},
+    flux_vector::AbstractVector,      # a0(x) per state (sum of propensities)
+    prob_quantile::Real;              # in [0,1], fraction of states (by count) to drop by φ
+    renormalize::Bool = false,        # if true, renormalize remaining mass
+    flux_tolerance::Union{Nothing,Real} = nothing  # optional global flux gate (τ)
+) where {Element,T<:Real}
+
+    @assert length(p) == length(flux_vector) "p and flux_vector size mismatch"
+    @assert 0 ≤ prob_quantile ≤ 1 "prob_quantile must be in [0,1]"
+
+    X_vec = collect(X)
+
+    # φ_i = p_i * a0(x_i)  (outgoing probability flux from state i)
+    ϕ = p .* flux_vector
+
+    # Rank states by ϕ ascending; choose bottom fraction to remove
+    idx = sortperm(ϕ; rev=false)
+    k = round(Int, prob_quantile * length(idx))              # number of states to consider dropping
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+
+    # --- Minimal addition: optional global flux gate for bottlenecks ---
+    if flux_tolerance !== nothing && !isempty(drop_idxs)
+        Φ = sum(ϕ)
+        thresh = (Φ > 0 ? Real(flux_tolerance) * Φ : typemax(Real))
+        # keep only those from the bottom-ϕ pool whose ϕ is below the global threshold
+        drop_idxs = [i for i in drop_idxs if ϕ[i] < thresh]
+    end
+
+    # Build new containers
+    keep_mask = trues(length(p))
+    if !isempty(drop_idxs)
+        keep_mask[drop_idxs] .= false
+    end
+    new_p = p[keep_mask]
+    new_X = Set(X_vec[findall(keep_mask)])
+
+    # Optional renormalization (typical FSP uses a sink instead; renorm biases)
+    if renormalize
+        s = sum(new_p)
+        if s > 0
+            new_p ./= s
+        end
+    end
+
+    # Diagnostics
+    total_out_flux = sum(ϕ)
+    removed_out_flux = isempty(drop_idxs) ? zero(T) : sum(ϕ[drop_idxs])
+    kept_out_flux = total_out_flux - removed_out_flux
+
+    return new_X, new_p, removed_out_flux, kept_out_flux
+end
+
+# ╔═╡ 92877177-a78d-4cfc-88f4-6dfd9dec635a
+
+function purgea!(
+    X::Set{Element},
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number,
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+    # 1. Candidate Selection: Find states with low probability mass
+    candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+    flux_vector = zeros(T, length(p))
+    for i in eachindex(X_vec)
+        current_state = X_vec[i]
+        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * weight
+    end
+
+    total_flux = sum(flux_vector)
+
+    # Set an adaptive threshold based on the total system flux
+    flux_threshold = total_flux * flux_tolerance
+    final_idxs_to_prune = Set{Int}()
+    for idx in candidate_idxs
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs_to_prune, idx)
+        end
+    end
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p
+end
+
 # ╔═╡ 80bda118-c70f-47f3-ad22-f6e07567fe9f
 fsp_sim_oragonator = begin
-    tf = 5
+    tf = 10.0
     ϵ_dt = 1.0
 
-    global 𝒮ₜ = Set([U₀])
+    𝒮ₜ = Set([U₀])
     pₜ = zeros(length(𝒮ₜ))
     pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
 
-    local t = 0.0
+    t = 0.0
     sol_t = [t]
     sol_S_size = [length(𝒮ₜ)]
     sol = [(copy(𝒮ₜ), copy(pₜ))]
     flx = Float64[]
     tresh = Float64[]
 
-	#global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
-	#global A, in_flow, out_flow = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-	#global in_flux = Vector(-diag(in_flow) .* pₜ)
 	δt = 1e-5
 
 	iter = 0
@@ -146,13 +258,13 @@ fsp_sim_oragonator = begin
 													 t)
 
 		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
-		total_flux = sum(in_flux)
+		total_flux = sum(out_flux)
 
 		# based on out-flux, compute δt
 		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
         δt = min(δt, tf - t) 
 
-		# sanity checks
+		# sanity checks 
 		@assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
 		@assert isapprox(in_flux .- out_flux, Vector(A * pₜ))  
 
@@ -160,19 +272,19 @@ fsp_sim_oragonator = begin
 		pₜ = expv(δt, A, pₜ)
 
 		out_flux = Vector(-out_flow * pₜ)
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.1; renormalize=true)
+        𝒮ₜ, pₜ = purgea!(𝒮ₜ, pₜ, model, rates, t, 0.2, 1e-12)
 
-		@assert sum(pₜ) ≈ 1.0
+		#𝒮ₜ, pₜ = simple_flux_purge!(𝒮ₜ, pₜ, model, rates, t, 1e-9)
+
 		
         if sum(pₜ) <= 0
             @warn "All probability mass lost in pruning – skipping"
         end
 
-        # 8. Advance time
-        t += δt
+		# update time 
+        global t += δt
 
-        # note .. im storing values in logarithemic intervals 
-		# (too many snapshots to save)
+        # note .. im storing values in intervals 
 		#if iter % 1e3 == 0
         	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
         	push!(sol_t, t)
@@ -183,6 +295,8 @@ fsp_sim_oragonator = begin
     end
 end
 
+# ╔═╡ c2d170b3-28e9-4bce-b27c-cd09979bc9c5
+sol_t
 
 # ╔═╡ c8b60db2-5474-4c4e-9fc7-baed1fa6960c
 begin
@@ -196,14 +310,11 @@ end
 begin
 	using CairoMakie
 	
-	# --- Define a Camera-Ready Theme for SIAM Publications ---
 	siam_theme = Theme(
-	    # Set a professional, clean font (Computer Modern is standard for TeX/LaTeX)
 	    font = "Computer Modern",
-	    fontsize = 18, # Base font size for the figure
+	    fontsize = 18, 
 	    
 	    Axis = (
-	        # Axis labels and title settings
 	        titlefont = :bold,
 	        titlesize = 22,
 	        xlabelsize = 20,
@@ -211,7 +322,6 @@ begin
 	        xticklabelsize = 16,
 	        yticklabelsize = 16,
 	        
-	        # Grid settings for a clean look
 	        xgridstyle = :dash,
 	        ygridstyle = :dash,
 	        xgridwidth = 0.7,
@@ -227,7 +337,7 @@ begin
 	    ),
 	    
 	    Axis3 = (
-	        protrusions = (40, 20, 20, 20), # Adjust space for labels
+	        protrusions = (40, 20, 20, 20), 
 	        xlabelsize = 18,
 	        ylabelsize = 18,
 	        zlabelsize = 18,
@@ -253,13 +363,11 @@ begin
 	    )
 	)
 	
-	# --- Generate the 6-Panel Figure ---
 	begin
 	    # Apply the custom theme for all subsequent plots
 	    set_theme!(siam_theme)
 	
 	    # Prepare the data from your simulation results
-	    # Ensure fsp_mean has dimensions (timesteps, species)
 	    time_points = sol_t
 	    dt_values = vcat([0.0], sol_t[2:end] .- sol_t[1:end-1])
 	    state_space_sizes = sol_S_size
@@ -273,18 +381,18 @@ begin
 	    # --- Top Row: Time Series Plots ---
 	    
 	    # Panel 1: Adaptive Time Step (dt)
-	    ax11 = Axis(fig[1, 1], title = "Adaptive Time Step", xlabel = "Simulation Time, t", ylabel = "δt")
-	    lines!(ax11, time_points, dt_values)
+	    ax11 = Axis(fig[1, 1], title = L"\text{Adaptive Time Step}", xlabel = L"Simulation Time, $t$", ylabel = L"\delta t")
+	    lines!(ax11, time_points, dt_values, color=:black)
 	
 	    # Panel 2: State Space Size
 	    ax12 = Axis(fig[1, 2], title = "State Space Size", xlabel = "Simulation Time, t", ylabel = "|S|")
-	    lines!(ax12, time_points, state_space_sizes)
+	    lines!(ax12, time_points, state_space_sizes, color=:black)
 	    
 	    # Panel 3: Mean Trajectories
 	    ax13 = Axis(fig[1, 3], title = "Mean Trajectories", xlabel = "Simulation Time, t", ylabel = "Mean Population")
-	    lines!(ax13, time_points, fsp_mean[:, 1], label = "X (y₁)")
-	    lines!(ax13, time_points, fsp_mean[:, 2], label = "Y (y₂)", linestyle = :dash)
-	    lines!(ax13, time_points, fsp_mean[:, 3], label = "Z (y₃)", linestyle = :dot)
+	    lines!(ax13, time_points, fsp_mean[:, 1], label = "X (y₁)", color=:black)
+	    lines!(ax13, time_points, fsp_mean[:, 2], label = "Y (y₂)", linestyle = :dash, color=:black)
+	    lines!(ax13, time_points, fsp_mean[:, 3], label = "Z (y₃)", linestyle = :dot, color=:black)
 	    axislegend(ax13, position = :rc) # Place legend in the right-center
 	
 	    # Link the x-axes of the top row for synchronized zooming/panning
@@ -295,17 +403,17 @@ begin
 	    # Panel 4: Perspective 1 (Isometric View)
 	    ax21 = Axis3(fig[2, 1], title = "Limit Cycle (Isometric View)", xlabel = "X", ylabel = "Y", zlabel = "Z", 
 	                   azimuth = 0.25pi, elevation = 0.15pi)
-	    lines!(ax21, mean_y1, mean_y2, mean_y3)
+	    lines!(ax21, mean_y1, mean_y2, mean_y3, color=:black)
 	
 	    # Panel 5: Perspective 2 (Top-Down View, X-Y Plane)
 	    ax22 = Axis3(fig[2, 2], title = "Limit Cycle (X-Y Plane)", xlabel = "X", ylabel = "Y", zlabel = "Z",
 	                   azimuth = 0.5pi, elevation = 0.5pi) # Looking straight down the Z-axis
-	    lines!(ax22, mean_y1, mean_y2, mean_y3)
+	    lines!(ax22, mean_y1, mean_y2, mean_y3, color=:black)
 	
 	    # Panel 6: Perspective 3 (Side View, Y-Z Plane)
 	    ax23 = Axis3(fig[2, 3], title = "Limit Cycle (Y-Z Plane)", xlabel = "X", ylabel = "Y", zlabel = "Z",
 	                   azimuth = 0.0pi, elevation = 0.0pi) # Looking straight along the X-axis
-	    lines!(ax23, mean_y1, mean_y2, mean_y3)
+	    lines!(ax23, mean_y1, mean_y2, mean_y3, color=:black)
 	
 	    # Add spacing between rows for clarity
 	    rowgap!(fig.layout, 1, 60)
@@ -313,15 +421,65 @@ begin
 	    # Display the final figure
 	    fig
 	end
-	
 end
 
-# ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
+# ╔═╡ 1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
+save("orag.png", fig)
 
+# ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
+"""
+	iter = 0
+    while t < tf
+		
+        # Expand state space 
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, in_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-5)
+        
+		global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
+											   model, 
+											   rates, 
+											   boundary_condition, 
+											   t) 
+	
+        A = MasterEquation(in_flow, out_flow)
+		global in_flux, out_flux = Vector(in_flow * pₜ) , Vector(-out_flow * pₜ)
+		total_flux = sum(in_flux)
+
+		# based on out-flux, compute δt
+		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t, 1e6) 
+
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+
+		
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.1; flux_tolerance=1e-9)
+		
+        if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – skipping"
+        end
+
+        # 7. Normalize
+        pₜ ./= sum(pₜ)
+
+        # 8. Advance time
+        t += δt
+
+        # note .. im storing values in logarithemic intervals 
+		# (too many snapshots to save)
+		if iter % 1e3 == 0
+        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        	push!(sol_t, t)
+        	push!(sol_S_size, length(𝒮ₜ))
+        	push!(tresh, total_flux)
+		end
+		global iter = iter + 1
+    end
+"""
 
 # ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
 # ╠═╡ disabled = true
 #=╠═╡
+
 fsp_sim_oregonator = begin
 
     tf = 3.0   # Simulate for enough time to see several oscillations
@@ -4050,9 +4208,14 @@ version = "1.9.2+0"
 # ╠═df29e9d3-207d-40ed-9726-0ef68fd3a773
 # ╠═836c5ee4-7ac2-47ed-bfee-874582ccba8a
 # ╠═64061d79-cbfe-4219-a7a8-cdc57ffb9344
+# ╠═0b0c852e-cc0f-4e2d-998f-9cfbaea78ecd
+# ╠═6c4d3717-0b43-4112-9c50-d840616b0926
+# ╠═92877177-a78d-4cfc-88f4-6dfd9dec635a
 # ╠═80bda118-c70f-47f3-ad22-f6e07567fe9f
+# ╠═c2d170b3-28e9-4bce-b27c-cd09979bc9c5
 # ╠═c8b60db2-5474-4c4e-9fc7-baed1fa6960c
 # ╠═9b71854c-b269-4ca2-b4bc-32b6401b1b9d
+# ╠═1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
 # ╠═006cb103-dc41-4742-a440-35923c802dc5
 # ╠═9f592c0e-313e-48dd-bcbe-22e4b41ad55a
 # ╠═2221d90b-8c6f-41d1-be00-35e18b5e2f60

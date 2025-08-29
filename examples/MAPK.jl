@@ -21,50 +21,188 @@ end
 
 # ╔═╡ 12d3e221-9915-4ea7-b17b-951bd672bb22
 rn_mapk = @reaction_network begin
-    # 1) Fus3 + Ste7 ⇌ Fus3·Ste7 → Fus3P + Ste7
-    k1,    K  + KK  --> K_KK
-    k_1,   K_KK    --> K  + KK
-    k2,    K_KK    --> Kp + KK
+    # Phosphorylation K -> Kp by KK
+    (k1, k_1), K + KK <--> K_KK
+    k2, K_KK --> Kp + KK
 
-    # 2) Fus3P + Ste7 ⇌ Fus3P·Ste7 → Fus3PP + Ste7
-    k3,    Kp + KK --> Kp_KK
-    k_3,   Kp_KK   --> Kp + KK
-    k4,    Kp_KK   --> Kpp + KK
+    # Phosphorylation Kp -> Kpp by KK
+    (k3, k_3), Kp + KK <--> Kp_KK
+    k4, Kp_KK --> Kpp + KK
 
-    # 3) Fus3PP + Msg5 ⇌ Fus3PP·Msg5 → Fus3P + Msg5
-    h1,    Kpp + P --> Kpp_P
-    h_1,   Kpp_P   --> Kpp + P
-    h2,    Kpp_P   --> Kp  + P
+    # Dephosphorylation Kpp -> Kp by P
+    (h1, h_1), Kpp + P <--> Kpp_P
+    h2, Kpp_P --> Kp + P
 
-    # 4) Fus3P + Msg5 ⇌ Fus3P·Msg5 → Fus3 + Msg5
-    h4,    Kp + P  --> Kp_P
-    h_4,   Kp_P    --> Kp + P
-    h5,    Kp_P    --> K   + P
+    # Dephosphorylation Kp -> K by P
+    (h3, h_3), Kp + P <--> Kp_P
+    h4, Kp_P --> K + P
 end
 
 
 # ╔═╡ b634f09a-4a38-43c7-8f07-0ffda5def408
 model = DiscreteStochasticSystem(rn_mapk)
 
-# ╔═╡ 7c044db1-3a6c-4c2e-94af-49c739d40578
-rn_mapk |> species
+# ╔═╡ 07408ff1-5939-4ebc-bfa3-0b165dda15e4
+function purgea!(
+    X::Set{Element},
+    p::Vector{T}, 
+	flux_vector,
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    total_flux = sum(flux_vector[candidate_idxs])
+    flux_threshold = total_flux * flux_tolerance
+	
+    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
+	
+	
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
+    states_to_remove = Set(X_vec[collect(ℛ)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p, total_flux, flux_threshold
+end
+
+# ╔═╡ 3b328eb0-1c0f-40ed-befa-a0aab9fc1a73
+
+
+# ╔═╡ 6e035664-ed60-4416-95df-596ad388bc71
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+    # --- Model Parameters for Bistability ---
+    # Values from Ferrell & Machleder (1998), Science.
+    
+    # Total molecule counts
+    MAPK_total = 300       # Total K
+    MAPKK_total = 120      # Total KK (Note: This is the active form, the stimulus)
+    Phosphatase_total = 120# Total P (MKP)
+
+    # Species order: [K, KK, K_KK, Kp, Kp_KK, Kpp, P, Kpp_P, Kp_P]
+    # Initial state: System is "OFF"
+    U₀ = CartesianIndex(MAPK_total, MAPKK_total, 0, 0, 0, 0, Phosphatase_total, 0, 0)
+
+    # Stochastic rate constants from the paper (assuming 1 nM = 1 molecule)
+    rates = [
+        # k1,  k_1, k2  (Phosphorylation K -> Kp)
+        0.001, 0.001, 100.0,
+        # k3,  k_3, k4  (Phosphorylation Kp -> Kpp)
+        0.001, 0.001, 100.0,
+        # h1,  h_1, h2  (Dephosphorylation Kpp -> Kp)
+        0.001, 0.001, 100.0,
+        # h3,  h_3, h4  (Dephosphorylation Kp -> K) -- Corrected rate names
+        0.001, 0.001, 100.0
+    ]
+
+    # --- Simulation Parameters ---
+    # NOTE: Bistable systems can take a long time to switch between states.
+    # A longer tf is often needed to observe the bimodal distribution.
+    tf = 5000.0      
+    ϵ_dt = 0.1       # Time-step tolerance
+    prob_tolerance = 1e-7  # CORRECTED: A small probability tolerance is crucial
+    flux_tolerance = 1e-9  # A reasonable flux tolerance
+
+    # --- Initialization ---
+    bounds = (0, MAPK_total + MAPKK_total + Phosphatase_total + 10)
+    boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+    
+    # Initialize variables in the global scope
+    global 𝒮ₜ = Set([U₀])
+    global pₜ = [1.0]
+    global t = 0.0
+    
+    # Solution storage
+    global sol = [(copy(𝒮ₜ), copy(pₜ))]
+    global sol_t = [t]
+    global sol_S_size = [length(𝒮ₜ)]
+    
+    global iter = 0
+    while t < tf
+        # Expand state space (2 steps is sufficient and more efficient than 100)
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, rn_mapk, rates, t, boundary_condition, 2)
+
+        # Build Master Equation
+        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, rn_mapk, rates, boundary_condition, t)
+
+        # Adaptive Time-Stepping
+        global out_flux_vec = Vector(-out_flow * pₜ)
+        global total_system_flux = sum(out_flux_vec)
+        
+        global δt = (total_system_flux > 0.0) ? (ϵ_dt / total_system_flux) : (tf - t)
+        δt = min(δt, tf - t)
+
+        # Evolve probability distribution
+        global pₜ = expv(δt, A, pₜ)
+
+        # State Space Pruning
+        out_flux_vec = Vector(-out_flow * pₜ)
+        global 𝒮ₜ, pₜ, _, _ = purgea!(𝒮ₜ, pₜ, out_flux_vec, rn_mapk, rates, t, 
+                                      prob_tolerance; flux_tolerance=flux_tolerance)
+
+        # Check for loss of probability mass
+        if sum(pₜ) <= 1e-9
+            @warn "All probability mass lost at t=$t. Simulation terminated."
+            break
+        end
+
+        # Advance time and store results
+        global t += δt
+        global iter += 1
+        
+        # Store results at intervals
+        if iter % 100 == 0
+            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
+            println("t = $t, |S| = $(length(𝒮ₜ))") # Progress update
+        end
+    end
+
+    # Store final state
+    push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+    push!(sol_t, t)
+    push!(sol_S_size, length(𝒮ₜ))
+    
+    println("Simulation finished at t = $t")
+end
+  ╠═╡ =#
 
 # ╔═╡ 644f0772-6d69-11f0-3aa7-c3868042e342
 begin
-    tf = 80*60        # CHANGE: 80 minutes -> seconds (paper uses seconds)
-    ϵ_dt = 0.1
+    # values from Huang & Ferrell (1996)
 
-    M_total = 9000
-    MAPKK_total = 900
-    MKP_total = 1800
-    U₀ = CartesianIndex(M_total, MAPKK_total, 0, 0, 0, 0, MKP_total, 0, 0)
+    MAPK_total = 300        # Total K
+    MAPKK_total = 120       # Total KK
+    Phosphatase_total = 120 # Total P (MKP)
 
-    rates = [ 0.00275, 2.5, 0.025,
-              0.00445, 2.5, 37.5,
-              0.00625, 2.5, 0.23,
-              0.0014,  2.5, 1.25 ]
+    # [K, KK, K_KK, Kp, Kp_KK, Kpp, P, Kpp_P, Kp_P]
+    U₀ = CartesianIndex(MAPK_total, MAPKK_total, 0, 0, 0, 0, Phosphatase_total, 0, 0)
 
-    bounds = (0, M_total + MAPKK_total + MKP_total + 10)
+    # Stochastic rate constants from the paper (assuming 1 nM = 1 molecule)
+    rates = [
+        # k1,  k_1, k2  (Phosphorylation K -> Kp)
+        0.001, 0.001, 100.0,
+        # k3,  k_3, k4  (Phosphorylation Kp -> Kpp)
+        0.001, 0.001, 100.0,
+        # h1,  h_1, h2  (Dephosphorylation Kpp -> Kp)
+        0.001, 0.001, 100.0,
+        # h3,  h_3, h4  (Dephosphorylation Kp -> K) -- Corrected rate names
+        0.001, 0.001, 100.0
+    ]
+
+    # Simulation time and FSP parameters
+    tf = 900.0      
+    ϵ_dt = 1.0
+
+    bounds = (0, MAPK_total + MAPKK_total + Phosphatase_total + 10)
     boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
     𝒮ₜ = Set([U₀])
     pₜ = [1.0]
@@ -73,40 +211,49 @@ begin
     sol_S_size = [length(𝒮ₜ)]
     sol = [(copy(𝒮ₜ), copy(pₜ))]
     flx = []
+	
+	δt = 1e-5
 
-    δt = 1e-5
-
-	iter = 0
+    iter = 0
     while t < tf
+
+        # Expand state space
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  boundary_condition, 1)
+
+        global A, in_flow, out_flow = MasterEquation(𝒮ₜ,
+                                                     model,
+                                                     rates,
+                                                    boundary_condition,
+                                                     t)
+
+        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
+        total_flux = sum(out_flux)
+
+        # based on out-flux, compute δt
+        global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t)
+
+        # sanity checks
+        @assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
+        @assert isapprox(in_flux .- out_flux, Vector(A * pₜ))
+
+        # evolve probability distribution
+        pₜ = expv(δt, A, pₜ)
+
+        out_flux = Vector(-out_flow * pₜ)
+        𝒮ₜ, pₜ, total_flux, flux_threshold = purgea!(𝒮ₜ, 
+													 pₜ, 
+													 out_flux, 
+													 model, 
+													 rates, 
+													 t, 
+													 0.7;
+													 flux_tolerance=1e-4)
+
 		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 1)
+		pₜ = pₜ ./ sum(pₜ)
+        @assert sum(pₜ) ≈ 1.0
 
-        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
-													 model,
-													 rates,
-													 boundary_condition, 
-													 t)
-
-		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
-		total_flux = sum(in_flux)
-
-		# based on out-flux, compute δt
-		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t) 
-
-		# sanity checks
-		@assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
-		@assert isapprox(in_flux .- out_flux, Vector(A * pₜ))  
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-		out_flux = Vector(-out_flow * pₜ)
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.05; renormalize=true)
-
-		@assert sum(pₜ) ≈ 1.0
-		
         if sum(pₜ) <= 0
             @warn "All probability mass lost in pruning – skipping"
         end
@@ -114,128 +261,125 @@ begin
         # 8. Advance time
         global t += δt
 
-        # note .. im storing values in logarithemic intervals 
-		# (too many snapshots to save)
-		#if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-		#end
-		global iter = iter + 1
+        # note .. im storing values in intervals
+        #if iter % 100 == 0
+            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
+        #end
+        global iter = iter + 1
     end
+    push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
     (sol, sol_t, sol_S_size)
 end
 
 
 # ╔═╡ 7b3561a8-d251-468b-b525-59c7628e860a
 begin
-	# Extract final states and probabilities
-	i=length(sol)
-	final_states = collect(sol[i][1])
-	final_probs = sol[i][2]
-	
-	# Calculate time steps (dt) from sol_t
-	dt_values = diff(sol_t)
-	time_for_dt = sol_t[1:end-1]
-	
-	# Calculate mean trajectories over time
-	n_species = 9
-species_names = ["K", "KK", "K_KK", "Kp", "Kp_KK", "Kpp", "P", "Kpp_P", "Kp_P"]
-	mean_trajectories = zeros(length(sol_t), n_species)
-	
-	for (t_idx, (states_set, probs)) in enumerate(sol)
-		states_vec = collect(states_set)
-		for species_idx in 1:n_species
-			mean_val = sum(probs[i] * states_vec[i][species_idx] for i in 1:length(states_vec))
-			mean_trajectories[t_idx, species_idx] = mean_val
-		end
-	end
-	
-	# Create combined layout: 1 row for dynamics, 3 rows for distributions (4 total rows)
-	f = Figure(size=(1400, 1600))
+	using Makie
+    i = length(sol)
+    final_states = collect(sol[i][1])
+    final_probs = sol[i][2]
+    dt_values = diff(sol_t)
+    time_for_dt = sol_t[1:end-1]
+    n_species = 9
+    species_names = ["K", "KK", "K_KK", "Kp", "Kp_KK", "Kpp", "P", "Kpp_P", "Kp_P"]
+    mean_trajectories = zeros(length(sol_t), n_species)
+    for (t_idx, (states_set, probs)) in enumerate(sol)
+        states_vec = collect(states_set)
+        for species_idx in 1:n_species
+            mean_val = sum(probs[i] * states_vec[i][species_idx] for i in 1:length(states_vec))
+            mean_trajectories[t_idx, species_idx] = mean_val
+        end
+    end
 
-	ax_size = Axis(f[1, 1], 
-	               xlabel="Time", 
-	               ylabel="State Space Size",
-	               title="State Space Size Evolution")
-	
-	CairoMakie.lines!(ax_size, sol_t, sol_S_size, color=:blue, linewidth=2)
-	CairoMakie.scatter!(ax_size, sol_t[1:5:end], sol_S_size[1:5:end], color=:blue, markersize=4)
-	
-	# Column 2: Time step evolution
-	ax_dt = Axis(f[1, 2], 
-	             xlabel="Time", 
-	             ylabel="Time Step Size (δt)",
-	             title="Adaptive Time Step Evolution")
-	             #yscale=log10)
-	
-	CairoMakie.lines!(ax_dt, time_for_dt, dt_values, color=:red, linewidth=2)
-	CairoMakie.scatter!(ax_dt, time_for_dt[1:5:end], dt_values[1:5:end], color=:red, markersize=4)
-	
-	# Column 3: Mean trajectory evolution
-	ax_mean = Axis(f[1, 3], 
-	               xlabel="Time", 
-				   
-	               ylabel="Mean Population",
-	               title="Mean Species Trajectories")
-	
-	colors = [:blue, :red, :green, :orange, :purple, :brown, :pink, :gray, :cyan]
-	key_species_indices = [1, 2, 4, 6, 7] # S, K, Sp, Spp, P (most important)
-	
-	for (i, species_idx) in enumerate(key_species_indices)
-		CairoMakie.lines!(ax_mean, sol_t, mean_trajectories[:, species_idx], 
-		       color=colors[species_idx], linewidth=2, 
-		       label=species_names[species_idx])
-	end
-	
-	axislegend(ax_mean, position=:rt)
-	
-	# ===== BOTTOM SECTION: DISTRIBUTIONS (3 rows x 3 columns) =====
-	 for i in 1:9
-        # Calculate grid position
+    # --- IMPROVED FIGURE GENERATION ---
+    f = Figure(size=(1400, 1600))
+
+    # --- TOP ROW: SYSTEM DYNAMICS ---
+
+    # Column 1: State Space Size Evolution
+    ax_size = Axis(f[1, 1],
+                   xlabel="Time",
+                   ylabel="State Space Size |S|", # Changed label for clarity
+                   title="State Space Size Evolution")
+    CairoMakie.lines!(ax_size, sol_t, sol_S_size, color=:black, linewidth=2)
+    # IMPROVEMENT: Automatically set y-limits to fit the data snugly
+    if !isempty(sol_S_size)
+        CairoMakie.ylims!(ax_size, minimum(sol_S_size) * 0.9, maximum(sol_S_size) * 1.1)
+    end
+
+    # Column 2: Time step evolution
+    ax_dt = Axis(f[1, 2],
+                 xlabel="Time",
+                 ylabel="Time Step Size (δt)",
+                 title="Adaptive Time Step Evolution")
+    CairoMakie.lines!(ax_dt, time_for_dt, dt_values, color=:black, linewidth=2)
+    if !isempty(dt_values)
+        CairoMakie.ylims!(ax_dt, minimum(dt_values) * 0.9, maximum(dt_values) * 1.1)
+    end
+
+    # Column 3: Mean trajectory evolution
+    ax_mean = Axis(f[1, 3],
+                   xlabel="Time",
+                   ylabel="Mean Population",
+                   title="Mean Species Trajectories")
+
+    # IMPROVEMENT: Use different linestyles to distinguish species
+    key_species_indices = [1, 2, 4, 6, 7] # K, KK, Kp, Kpp, P
+    linestyles = [:solid, :dash, :dot, :dashdot, :dashdotdot]
+
+    for (i, species_idx) in enumerate(key_species_indices)
+        CairoMakie.lines!(ax_mean, sol_t, mean_trajectories[:, species_idx],
+                          color=:black, # Keep all lines black
+                          linestyle=linestyles[i], # Use a unique style for each
+                          linewidth=2.5, # Slightly thicker for clarity
+                          label=species_names[species_idx])
+    end
+    axislegend(ax_mean, position=:rt)
+    # IMPROVEMENT: Automatically set y-limits for the mean trajectories
+    relevant_data = mean_trajectories[:, key_species_indices]
+    if !isempty(relevant_data)
+         CairoMakie.ylims!(ax_mean, minimum(relevant_data) * 0.9, maximum(relevant_data) * 1.1)
+    end
+
+
+    # --- BOTTOM ROWS: FINAL DISTRIBUTIONS (Your code, unchanged) ---
+    for i in 1:9
         row = 2 + ceil(Int, i/3) - 1
         col = ((i-1) % 3) + 1
-        
-        ax = Axis(f[row, col], 
-                  xlabel="$(species_names[i]) Count", 
+        ax = Axis(f[row, col],
+                  xlabel="$(species_names[i]) Count",
                   ylabel="Probability",
                   title="$(species_names[i]) Marginal Distribution")
-        #xlims!(ax, 0, 9500)
-        # --- CORRECTED MARGINAL CALCULATION ---
-        # Create a dictionary to hold the marginal probabilities
         marginal_dist = Dict{Int, Float64}()
-        
-        # Iterate through all final states and sum probabilities
         for (j, state) in enumerate(final_states)
             species_count = state[i]
             prob = final_probs[j]
-            # Add the probability to the entry for this count
             marginal_dist[species_count] = get(marginal_dist, species_count, 0.0) + prob
         end
-        
-        # Extract the counts and probabilities for plotting
         counts = sort(collect(keys(marginal_dist)))
         probs = [marginal_dist[c] for c in counts]
-        
-        # Plot as a bar chart (histogram)
-        barplot!(ax, counts, probs, color=:darkgreen)
-        
+        barplot!(ax, counts, probs, color=:black)
         if !isempty(probs)
             CairoMakie.ylims!(ax, 0, maximum(probs) * 1.1)
         end
     end
-	
-	# Add section labels
-	Label(f[0, :], "MAPK Cascade: System Dynamics and Final State Analysis", 
-	      fontsize=22, font="bold")
-	Label(f[1, 0], "System\nDynamics", fontsize=16, rotation=π/2)
-	Label(f[2:4, 0], "Final\nDistributions", fontsize=16, rotation=π/2)
-	
-	f
-end 
+
+    # --- LABELS (Your code, unchanged) ---
+    Label(f[0, :], "MAPK Cascade: System Dynamics and Final State Analysis",
+          fontsize=22, font=:bold) # Use :bold for font
+    Label(f[1, 0], "System\nDynamics", fontsize=16, rotation=π/2)
+    Label(f[2:4, 0], "Final\nDistributions", fontsize=16, rotation=π/2)
+
+    f
+end
+
 
 # ╔═╡ 161b7d9e-47cf-4680-81a9-4e4301653d4d
-sol[end-5][2] |> Plots.plot
+iter
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -250,6 +394,7 @@ Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
@@ -267,6 +412,7 @@ ExponentialUtilities = "~1.27.0"
 Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
+Makie = "~0.22.10"
 PROPACK = "~0.5.0"
 Plots = "~1.40.17"
 ProgressLogging = "~0.1.5"
@@ -280,7 +426,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "3d7ab311adfb7d847b2fdbb9a70e41d8a9c6bfb7"
+project_hash = "e733ff910a13f3c202e0282d7e63c383f5433a6b"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -3810,7 +3956,9 @@ version = "1.9.2+0"
 # ╠═be9447bb-ae33-4c70-b727-486b5802144e
 # ╠═12d3e221-9915-4ea7-b17b-951bd672bb22
 # ╠═b634f09a-4a38-43c7-8f07-0ffda5def408
-# ╠═7c044db1-3a6c-4c2e-94af-49c739d40578
+# ╠═07408ff1-5939-4ebc-bfa3-0b165dda15e4
+# ╠═3b328eb0-1c0f-40ed-befa-a0aab9fc1a73
+# ╠═6e035664-ed60-4416-95df-596ad388bc71
 # ╠═644f0772-6d69-11f0-3aa7-c3868042e342
 # ╠═7b3561a8-d251-468b-b525-59c7628e860a
 # ╠═161b7d9e-47cf-4680-81a9-4e4301653d4d
