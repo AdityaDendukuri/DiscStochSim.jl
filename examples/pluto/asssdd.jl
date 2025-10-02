@@ -4,22 +4,22 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ f61fe968-f0ad-4d2c-9af5-c27f9224a1cc
+# ╔═╡ 5cea6bca-9a52-11f0-31ae-4b91e5f8bbdf
 begin
 	# numerical libraries
-	using ExponentialUtilities, Expokit, PROPACK, Arpack, SparseArrays
+	using ExponentialUtilities, PROPACK, Arpack, SparseArrays, Expokit
 	# output and plotting
 	using ProgressLogging, JLD
 	# modelling and statistics 
 	using Catalyst, JumpProcesses, StatsBase, DifferentialEquations
-	using Interpolations, LinearAlgebra
+	using Interpolations
 	# importing local fsp package
-	using Revise, Plots
-	local_mod = include("../src/DiscStochSim.jl")
+	using Revise, CairoMakie
+	local_mod = include("../../src/DiscStochSim.jl")
 	using .local_mod.DiscStochSim
 end
 
-# ╔═╡ 9dd29549-5238-4314-a3dd-96f4a9e385d9
+# ╔═╡ db8f277e-ef91-4f63-bed4-54a162666a26
 # Define the Oregonator reaction network
 oregonator_rn = @reaction_network begin
     @species X(t) Y(t) Z(t)
@@ -31,36 +31,10 @@ oregonator_rn = @reaction_network begin
     k5, Z --> Y            
 end
 
-# ╔═╡ 528dc2d1-739b-4b60-8bfc-0173c8a931a6
+# ╔═╡ 66e5763b-f461-44ae-8401-8f220f4261cb
 model = DiscreteStochasticSystem(oregonator_rn)
 
-# ╔═╡ 3dc88d00-000b-43ba-b37e-c76a75384281
-begin
-	u0_integers = [:X => 500, :Y => 1000, :Z => 2000]
-	tspan = (0., 3)
-	ps = [:k1=>2.0, :k2=>0.1, :k3=>104, :k4=>0.016, :k5=>26.0]
-	
-	jinput = JumpInputs(oregonator_rn, u0_integers, tspan, ps)
-	jprob = JumpProblem(jinput)
-	jump_sol = solve(jprob)
-	
-	n_trajs = 10
-	ssa_trajs1=[]
-	for i in 1:n_trajs 
-	    push!(ssa_trajs1, solve(jprob, SSAStepper()))
-	end;
-end
-
-# ╔═╡ 1461cc48-6409-4a73-95e0-7192fdb48ab9
-ssa_trajs1[1]
-
-# ╔═╡ df29e9d3-207d-40ed-9726-0ef68fd3a773
-	fsp_mean1=ssa_trajs1[end]
-
-# ╔═╡ 836c5ee4-7ac2-47ed-bfee-874582ccba8a
-Plots.plot(fsp_mean1)
-
-# ╔═╡ 64061d79-cbfe-4219-a7a8-cdc57ffb9344
+# ╔═╡ af99c064-d99c-45c4-b350-51610da2d041
 oregonator_params = begin
     # Parameters from Gillespie's Figure 24 (equation 62)
     Y1s, Y2s, Y3s = 500.0, 1000.0, 2000.0  # Steady state values
@@ -90,773 +64,602 @@ oregonator_params = begin
     (rates=rates, U₀=U₀)
 end
 
-# ╔═╡ baff6019-71fb-4028-9ac1-6d98302a1e77
-function robust_purge!(
-    X::Set{Element}, 
-    p::Vector{T}, 
-    model::Model,
-    rates,
-    t,
-    prob_quantile::Number;
-    flux_tolerance::Number = 1e-9 
-) where {Element, T, Model}
+# ╔═╡ c28ba0c9-e924-414c-8aa9-3a9cd2bf23c3
+begin
 
-    X_vec = collect(X)
-
-	# 1. Candidate Selection: Find states with low probability mass
-     idx = sortperm(p; rev=false)
-    k = round(Int, prob_quantile * length(idx))            
-    drop_idxs = k > 0 ? idx[1:k] : Int[]
-	candidate_idxs = drop_idxs
-
-    # Build new containers
-    keep_mask = trues(length(p))
-    keep_mask[drop_idxs] .= false
-
-    flux_vector = zeros(T, length(p))
-    local total_flux = 0
-	if flux_tolerance > 0
-    	for i in eachindex(X_vec)
-        	current_state = X_vec[i]
-        	weight = sum(prop(current_state, rates, t) 
-						 for prop in model.propensities)
-        	flux_vector[i] = p[i] * weight
-    	end
-    	total_flux = sum(flux_vector)
-    	# Set an adaptive threshold based on the total system flux
-   		flux_threshold = total_flux * flux_tolerance
-		# Filter the candidates based on this adaptive threshold
-
-    	final_idxs_to_prune = Set{Int}()
-    	for idx in candidate_idxs
-        	if flux_vector[idx] < flux_threshold
-            	push!(final_idxs_to_prune, idx)
-        	end
-    	end
-	else
-		final_idxs_to_prune = candidate_idxs
-	end
-    # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
-    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
-    new_X = setdiff(X, states_to_remove)
-    return new_X, new_p, total_flux
-end
-
-
-
-# ╔═╡ 44234db1-1a79-4283-9bac-e17b6b3251a1
-function reconstruct_master_equation(
-    active_states_new::Set{ElementType},
-    active_states_old::Set{ElementType},
-    A_old::SparseMatrixCSC{T, Int},
-    model::ModelType,
-    rates::Vector{T},
-    boundary_condition::Function,
-    t::T
-) where {T, ElementType, ModelType}
-
-    retained = active_states_new ∩ active_states_old
-    new_states = setdiff(active_states_new, active_states_old)
+    # ==================== Hybrid State Space ====================
     
-    if length(retained) < 0.3 * length(active_states_new)
-        return MasterEquation(active_states_new, model, rates, boundary_condition, t)
+    mutable struct HybridStateSpace{E, T<:Real}
+        # Set-based (fast iteration & membership)
+        active_states::Set{E}
+        state_vec::Vector{E}
+        
+        # Stable global indexing (for reconstruction)
+        state_to_global::Dict{E, Int}
+        global_to_state::Vector{E}
+        next_global_idx::Int
+        
+        # Probabilities (indexed by position in state_vec)
+        probabilities::Vector{T}
+        
+        # Track which global indices are currently active
+        global_active::BitVector
     end
     
-    states_new_vec = collect(active_states_new)
-    states_old_vec = collect(active_states_old)
+    function HybridStateSpace{E, T}() where {E, T}
+        HybridStateSpace{E, T}(
+            Set{E}(),
+            E[],
+            Dict{E, Int}(),
+            E[],
+            1,
+            T[],
+            BitVector()
+        )
+    end
     
-    new_id = Dict(s => i for (i, s) in enumerate(states_new_vec))
-    old_id = Dict(s => i for (i, s) in enumerate(states_old_vec))
+    # ==================== Core Operations ====================
     
-    n_new = length(states_new_vec)
+    function add_state!(space::HybridStateSpace{E, T}, state::E, prob::T) where {E, T}
+        if state ∉ space.active_states
+            # New state - assign permanent global index
+            push!(space.active_states, state)
+            push!(space.state_vec, state)
+            push!(space.probabilities, prob)
+            
+            if !haskey(space.state_to_global, state)
+                global_idx = space.next_global_idx
+                space.state_to_global[state] = global_idx
+                push!(space.global_to_state, state)
+                push!(space.global_active, true)
+                space.next_global_idx += 1
+            else
+                # Reactivating old state
+                global_idx = space.state_to_global[state]
+                space.global_active[global_idx] = true
+            end
+        else
+            # Update existing
+            idx = findfirst(==(state), space.state_vec)
+            space.probabilities[idx] = prob
+        end
+    end
+    
+    function remove_states!(space::HybridStateSpace, states_to_remove)
+    # Build mask of states to keep
+    keep_mask = [s ∉ states_to_remove for s in space.state_vec]
+    
+    # Update global active flags
+    for state in states_to_remove
+        if haskey(space.state_to_global, state)
+            global_idx = space.state_to_global[state]
+            space.global_active[global_idx] = false
+        end
+    end
+    
+    # Remove from active set
+    setdiff!(space.active_states, states_to_remove)
+    
+    # Filter vectors in one pass
+    space.state_vec = space.state_vec[keep_mask]
+    space.probabilities = space.probabilities[keep_mask]
+end
+    
+    function get_global_indices(space::HybridStateSpace)
+        [space.state_to_global[s] for s in space.state_vec]
+    end
+    
+    # ==================== Fast Expand (Set-based) ====================
+    
+    function expand!(space::HybridStateSpace{E, T}, model, depth::Int=1) where {E, T}
+        current_frontier = copy(space.state_vec)
+        
+        for d in 1:depth
+            next_frontier = E[]
+            
+            @inbounds for state in current_frontier
+                for ν in model.stoichvecs
+                    neighbor = state + ν
+                    if neighbor ∉ space.active_states
+                        add_state!(space, neighbor, zero(T))
+                        push!(next_frontier, neighbor)
+                    end
+                end
+            end
+            
+            isempty(next_frontier) && break
+            current_frontier = next_frontier
+        end
+    end
+
+	
+
+
+
+    # ==================== Fast Compress (Set-based) ====================
+    
+    function compress!(space::HybridStateSpace{E, T}, model, rates, t,
+                      prob_quantile; flux_tolerance=1e-6) where {E, T}
+        n = length(space.state_vec)
+        n_remove = round(Int, prob_quantile * n)
+        n_remove == 0 && return (n_removed=0, total_flux=zero(T))
+        
+        # Compute flux
+        flux = zeros(T, n)
+        @inbounds for i in 1:n
+            state = space.state_vec[i]
+            exit_rate = sum(prop(state, rates, t) for prop in model.propensities; init=zero(T))
+            flux[i] = space.probabilities[i] * exit_rate
+        end
+        
+        total_flux = sum(flux)
+        flux_threshold = total_flux * flux_tolerance
+        
+        # Find candidates and apply flux filter
+        candidates_idx = sortperm(space.probabilities)[1:n_remove]
+        to_remove = E[]
+        
+        @inbounds for idx in candidates_idx
+            if flux[idx] < flux_threshold
+                push!(to_remove, space.state_vec[idx])
+            end
+        end
+        
+        remove_states!(space, to_remove)
+        return (n_removed=length(to_remove), total_flux=total_flux)
+    end
+
+
+
+    
+    function renormalize!(space::HybridStateSpace)
+        total = sum(space.probabilities)
+        if total > 0
+            space.probabilities ./= total
+        end
+        return total
+    end
+
+	
+	
+    
+    # ==================== Matrix Builder (with reconstruction) ====================
+    
+    struct HybridMasterEquationBuilder{T}
+        space::HybridStateSpace{CartesianIndex{3}, T}
+        model::Any
+        rates::Vector{T}
+    end
+    
+    function build_sparse_matrix(builder::HybridMasterEquationBuilder{T}, t::Real) where T
+    space = builder.space
+    model = builder.model
+    rates = builder.rates
+    
+    n = length(space.state_vec)
+    state_idx = Dict(s => i for (i, s) in enumerate(space.state_vec))
+    
     I, J, V = Int[], Int[], T[]
     
-    rows, vals = rowvals(A_old), nonzeros(A_old)
-    
-    # Build off-diagonals
-    for (j_new, state_j) in enumerate(states_new_vec)
-        if state_j in retained
-            j_old = old_id[state_j]
-            for nz in nzrange(A_old, j_old)
-                i_old = rows[nz]
-                state_i = states_old_vec[i_old]
-                
-                if state_i != state_j && state_i in retained
-                    i_new = new_id[state_i]
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, vals[nz])
-                end
-            end
-            
-            sources = DiscStochSim.expand_backward(state_j, model, boundary_condition)
-            for source in sources
-                if source in new_states && source in active_states_new
-                    i_new = new_id[source]
-                    S = state_j - source
-                    k = FindElement(S, model.stoichvecs)
-                    α = model.propensities[k](source, rates, t)
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, α)
-                end
-            end
-        else
-            sources = DiscStochSim.expand_backward(state_j, model, boundary_condition)
-            for source in sources
-                if source in active_states_new
-                    i_new = new_id[source]
-                    S = state_j - source
-                    k = FindElement(S, model.stoichvecs)
-                    α = model.propensities[k](source, rates, t)
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, α)
-                end
-            end
-        end
-    end
-    
-    # Compute diagonals
-    for (i_new, state_i) in enumerate(states_new_vec)
-        total = sum(
-            model.propensities[k](state_i, rates, t)
-            for (k, S) in enumerate(model.stoichvecs)
-            if (state_i + S) in active_states_new;
-            init=zero(T)
-        )
-        push!(I, i_new)
-        push!(J, i_new)
-        push!(V, -total)
-    end
-    
-    A = sparse(I, J, V, n_new, n_new)
-    
-    # Compute in_flow and out_flow (not used in reconstruction, return zeros)
-    in_flow = spzeros(T, n_new, n_new)
-    out_flow = spzeros(T, n_new, n_new)
-    
-    return A, in_flow, out_flow
-end
-
-# ╔═╡ fefdccd5-6870-4c17-84cb-ad0896caffc0
-
-
-# ╔═╡ 316dce0f-1a25-4bd1-8279-0d6768dfa61f
-function reconstruct_MasterEquation(
-    S_new::Set{E},
-    S_old_vec::Vector{E},         
-    A_old::SparseMatrixCSC{T,Int}, 
-    model, rates, bc::Function, t::Real;
-    overlap_threshold::Real=0.3,
-) where {E,T}
-
-    # --- Setup ---
-    S_new_vec = collect(S_new)
-    n_new = length(S_new_vec)
-    new_id = Dict{E,Int}(s => i for (i,s) in enumerate(S_new_vec))
-    old_id  = Dict{E,Int}(s => i for (i,s) in enumerate(S_old_vec))
-
-    # --- Overlap check (can be kept as a performance heuristic) ---
-    n_retained = count(s -> haskey(old_id, s), S_new_vec)
-    if n_new == 0 || n_retained / n_new < overlap_threshold
-        return MasterEquation(S_new, model, rates, bc, t)
-    end
-    
-    I = Int[]; J = Int[]; V = T[]
-    @inbounds for (j_new, x) in enumerate(S_new_vec)
-        col_sum = zero(T)
+    @inbounds for (j, state_j) in enumerate(space.state_vec)
+        total_out = zero(T)
         
-        # Build the entire column from scratch based on propensities
+        # For each reaction, find SOURCE states that lead TO state_j
         for (k, ν) in enumerate(model.stoichvecs)
-            y = x + ν
-            # Check if the destination `y` is in our new state space
-            i_new = get(new_id, y, 0)
-            
-            if i_new != 0
-                α = model.propensities[k](x, rates, t)
-                if α > 0
-                    # Allow duplicates for sparse() to sum them up
-                    push!(I, i_new); push!(J, j_new); push!(V, α)
-                    col_sum += α
-                end
+            # SOURCE that leads to state_j via reaction k
+            source = state_j - ν
+            if haskey(state_idx, source)
+                i = state_idx[source]
+                α = model.propensities[k](source, rates, t)
+                push!(I, j)  # TO state_j
+                push!(J, i)  # FROM source
+                push!(V, α)
             end
         end
         
-        # Diagonal = minus the sum of all off-diagonals in this column
-        if col_sum > 0
-            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
+        # For each reaction, compute outflux FROM state_j
+        for (k, ν) in enumerate(model.stoichvecs)
+            target = state_j + ν
+            if haskey(state_idx, target)
+                α = model.propensities[k](state_j, rates, t)
+                total_out += α
+            end
         end
-    end
-
-    A = sparse(I, J, V, n_new, n_new)
-    out_flow = spdiagm(0 => diag(A))
-    in_flow  = A - out_flow
-    
-    return A, in_flow, out_flow
-end
-
-# ╔═╡ 7cce53ab-f500-44e9-85f3-0233b769fefd
-fsp_sim_oragonator = begin
-    tf = 5
-    ϵ_dt = 1.0
-
-    global 𝒮ₜ = Set([U₀])
-    global pₜ = zeros(length(𝒮ₜ))
-    global pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    global t = 0.0
-    global sol_t = [t]
-    global sol_S_size = [length(𝒮ₜ)]
-    global sol = [(copy(𝒮ₜ), copy(pₜ))]
-    global flx = Float64[]
-    global tresh = Float64[]
-
-    global δt = 1e-5
-    global iter = 0
-
-    # cache for reconstruction
-    global old_vec = collect(𝒮ₜ)
-
-	# reconstruction cache
-    S_old = Set{eltype(𝒮ₜ)}()
-    A_old = spzeros(Float64, 0, 0)
-
-    while t < tf
-        # 1) SSA expand (your existing API)
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
-
-		if true#isempty(S_old) || nnz(A_old) == 0
-            # full build 
-            global A, in_flow, out_flow = MasterEquation(
-				𝒮ₜ, model, rates, boundary_condition, t)
-        else
-            # reconstruction 
-            global A, in_flow, out_flow = reconstruct_MasterEquation(
-                𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t;
-                overlap_threshold  = 0.7
-            )
-        end
-		
-        # update cache for next step (use the CURRENT compact order)
-        global A_old = A
-        global old_vec = collect(𝒮ₜ)
-
-        # 3) Flux-based Δt (unchanged)
-        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
-        global total_flux = sum(out_flux)
-        global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t)
-
-        @assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
-        @assert isapprox(in_flux .- out_flux, Vector(A * pₜ))
-
-        # 4) Evolve
-        pₜ = expv(δt, A, pₜ)
-
-        # 5) Prune (your robust purge)
-        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=1.0)
-        global pₜ ./= sum(pₜ)
-        @assert sum(pₜ) ≈ 1.0
-
-        # 6) Advance time + logging
-        global t += δt
         
-        if iter % 1e3 == 0
-            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-            push!(sol_t, t)
-            push!(sol_S_size, length(𝒮ₜ))
-            push!(tresh, total_flux)
-        end
-        global iter += 1
-		global S_old = copy(𝒮ₜ)
-        global A_old = A
+        push!(I, j)
+        push!(J, j)
+        push!(V, -total_out)
     end
+    
+    return sparse(I, J, V, n, n)
+end
+    
+function reconstruct_sparse_matrix(
+    builder::HybridMasterEquationBuilder{T},
+    A_old::SparseMatrixCSC{T, Int},
+    global_old::Vector{Int},
+    t::Real;                      # time for propensities
+    recompute_retained::Bool=false  # set true if A_old was at a different time
+) where {T}
+
+    space = builder.space
+    model = builder.model
+    rates = builder.rates
+
+    # New compact ordering
+    global_new = get_global_indices(space)
+    n_new = length(global_new)
+    new_compact = Dict(g => i for (i, g) in enumerate(global_new))
+    old_compact = Dict(g => i for (i, g) in enumerate(global_old))
+
+    retained = Set(global_new) ∩ Set(global_old)
+    new_cols = setdiff(Set(global_new), Set(global_old))
+
+    # If little overlap, rebuilding is cheaper/safer
+    if length(retained) < 0.3 * n_new
+        return build_sparse_matrix(builder, t)
+    end
+
+    I = Int[]; J = Int[]; V = T[]
+    rows = rowvals(A_old); vals = nonzeros(A_old)
+
+    # ----- Helper to compute one NEW column from scratch -----
+    function build_new_column!(src_global::Int, new_j::Int)
+        state = space.global_to_state[src_global]
+        col_sum = zero(T)
+        @inbounds for (k, ν) in enumerate(model.stoichvecs)
+            target = state + ν
+            if haskey(space.state_to_global, target)
+                tgt_global = space.state_to_global[target]
+                if space.global_active[tgt_global] && haskey(new_compact, tgt_global)
+                    new_i = new_compact[tgt_global]
+                    α = model.propensities[k](state, rates, t)
+                    if new_i != new_j
+                        push!(I, new_i); push!(J, new_j); push!(V, α)
+                        col_sum += α
+                    end
+                end
+            end
+        end
+        push!(I, new_j); push!(J, new_j); push!(V, -col_sum)
+    end
+
+    # ----- 1) Retained source columns -----
+    @inbounds for src_global in retained
+        new_j = new_compact[src_global]
+
+        if recompute_retained
+            build_new_column!(src_global, new_j)
+            continue
+        end
+
+        old_j = old_compact[src_global]
+        col_sum = zero(T)
+
+        # Copy off-diagonals that stay inside NEW set; skip old diagonal
+        for nz in nzrange(A_old, old_j)
+            r_old = rows[nz]             # destination row in old compact
+            if r_old == old_j; continue; end  # skip diag, we’ll recompute it
+
+            dest_global = global_old[r_old]
+            if haskey(new_compact, dest_global)
+                new_i = new_compact[dest_global]
+                v = vals[nz]
+                if new_i != new_j
+                    push!(I, new_i); push!(J, new_j); push!(V, v)
+                    col_sum += v
+                end
+            end
+        end
+
+        # New diagonal: minus sum of kept off-diagonals (column-sum zero)
+        push!(I, new_j); push!(J, new_j); push!(V, -col_sum)
+    end
+
+    # ----- 2) Newly added source columns -----
+    @inbounds for src_global in new_cols
+        new_j = new_compact[src_global]
+        build_new_column!(src_global, new_j)
+    end
+
+    return sparse(I, J, V, n_new, n_new)
+end
+
+    
+    (HybridStateSpace, HybridMasterEquationBuilder,
+     add_state!, expand!, compress!, renormalize!,
+     build_sparse_matrix, reconstruct_sparse_matrix, get_global_indices)
+end
+
+# ╔═╡ 20c36b32-e50e-4f31-9492-5db0fe019ae3
+begin
+	using Random
+
+# --- SSA step (same as you had) ---
+function _ssa_step(x, model, rates, t)
+    α = map(model.propensities) do a
+        a(x, rates, t)
+    end
+    isempty(α) && return x
+    tot = zero(eltype(α))
+    @inbounds @simd for k in eachindex(α)
+        tot += α[k]
+    end
+    tot <= 0 && return x
+    r = rand() * tot
+    acc = 0.0; idx = 0
+    @inbounds for k in eachindex(α)
+        acc += α[k]
+        if r < acc
+            idx = k; break
+        end
+    end
+    idx == 0 && (idx = lastindex(α)) # rare FP fallback
+    return x + model.stoichvecs[idx]
+end
+
+# --- EXACT SSA expand over a Set snapshot (one child per parent), add with p=0 ---
+function expand_ssa_once!(space::HybridStateSpace{E,T}, model, rates, t;
+                          boundary_condition::Function = x -> true) where {E,T}
+    parents    = collect(space.active_states)      # snapshot of Set X (matches original)
+    was_active = Set{E}(space.active_states)       # membership at PASS START (original behavior)
+
+    new_added = 0
+    @inbounds for x in parents
+        y = _ssa_step(x, model, rates, t)
+        boundary_condition(y) || continue
+        if !(y in was_active) && !(y in space.active_states)
+            add_state!(space, y, zero(T))          # add with prob 0 (exactly like new X had zeros)
+            new_added += 1
+        end
+    end
+    return new_added
+end
+
+# --- robust_purge! semantics verbatim (prob-quantile then flux gate) ---
+function compress_robust!(space::HybridStateSpace{E,T}, model, rates, t,
+                          prob_quantile; flux_tolerance=1e-9) where {E,T}
+    n = length(space.state_vec)
+    k = round(Int, prob_quantile * n)
+    k == 0 && return (n_removed=0, total_flux=zero(T))
+
+    # candidates = lowest-k by probability
+    idx = sortperm(space.probabilities; rev=false)
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+    candidates = Set(drop_idxs)
+
+    # flux vector and total flux
+    flux = zeros(T, n)
+    @inbounds for i in 1:n
+        x = space.state_vec[i]
+        w = zero(T)
+        for prop in model.propensities
+            w += prop(x, rates, t)
+        end
+        flux[i] = space.probabilities[i]*w
+    end
+    Φ = sum(flux)
+
+    # decide whom to prune
+    final_idxs = (flux_tolerance > 0) ? Set{Int}() : candidates
+    if flux_tolerance > 0
+        thresh = Φ * flux_tolerance
+        for i in candidates
+            if flux[i] < thresh
+                push!(final_idxs, i)
+            end
+        end
+    end
+
+    isempty(final_idxs) && return (n_removed=0, total_flux=Φ)
+
+    # build removal list by state, then mask vectors (preserves order like your new_p)
+    to_remove = E[ space.state_vec[i] for i in sort!(collect(final_idxs)) ]
+    remove_states!(space, to_remove)
+    return (n_removed=length(to_remove), total_flux=Φ)
+end
+
+	
+	###################################################
+	# robust purge translated to hybrid (in-place)
+	###################################################
+	
+	"""
+	    compress_robust!(space, model, rates, t, prob_quantile;
+	                     flux_tolerance=1e-9) -> (n_removed, total_flux)
+	
+	Faithful translation of `robust_purge!`:
+	
+	1) Candidates = lowest-probability `prob_quantile` fraction (by index).
+	2) Compute `flux[i] = p[i] * sum_k α_k(x_i, t)`.
+	3) total_flux = sum(flux); flux_threshold = total_flux * flux_tolerance.
+	4) Remove ONLY those candidates with `flux[i] < flux_threshold`.
+	
+	Mutates `space` (`state_vec`, `probabilities`, `active_states`, `global_active`).
+	"""
+	function compress_robust!(space::HybridStateSpace{E,T},
+	                          model, rates, t,
+	                          prob_quantile;
+	                          flux_tolerance::Real = 1e-9) where {E,T}
+	
+	    n = length(space.state_vec)
+	    n == 0 && return (n_removed=0, total_flux=zero(T))
+	
+	    # 1) candidate selection by probability
+	    idx = sortperm(space.probabilities; rev=false)
+	    k = round(Int, prob_quantile * length(idx))
+	    drop_idxs = k > 0 ? idx[1:k] : Int[]
+	
+	    # 2) flux vector
+	    flux = zeros(T, n)
+	    Xv = space.state_vec
+	    pv = space.probabilities
+	    @inbounds for i in 1:n
+	        x = Xv[i]
+	        weight = sum(prop(x, rates, t) for prop in model.propensities; init=zero(T))
+	        flux[i] = pv[i] * weight
+	    end
+	    total_flux = sum(flux)
+	    flux_threshold = total_flux * T(flux_tolerance)
+	
+	    # 3) filter candidates by flux threshold
+	    final_idxs_to_prune = Int[]
+	    if flux_tolerance > 0
+	        @inbounds for i in drop_idxs
+	            if flux[i] < flux_threshold
+	                push!(final_idxs_to_prune, i)
+	            end
+	        end
+	    else
+	        final_idxs_to_prune = drop_idxs
+	    end
+	
+	    # 4) remove those states
+	    to_remove = E[]
+	    @inbounds for i in final_idxs_to_prune
+	        push!(to_remove, Xv[i])
+	    end
+	    remove_states!(space, to_remove)
+	
+	    return (n_removed=length(to_remove), total_flux=total_flux)
+	end
+	
+end
+
+# ╔═╡ d8136b29-2396-4381-b2ff-7a23decfb4e0
+# Put this right after you call expand1!(...) each step
+function diag_after_expand(space, model, rates, t; prob_quantile)
+    n = length(space.state_vec)
+    m = max(round(Int, prob_quantile * n), 0)  # candidates count (like robust_purge!)
+    pv = space.probabilities
+    Xv = space.state_vec
+
+    # how many new zeros were just created?
+    n_zero = count(==(zero(eltype(pv))), pv)
+
+    # which indices would be candidates (lowest probs)?
+    idx = sortperm(pv; rev=false)
+    cand = m > 0 ? idx[1:m] : Int[]
+
+    # among candidates, how many are zeros?
+    zeros_in_cand = count(i -> pv[i] == 0, cand)
+
+    # compute flux for *all* (exactly as robust_purge! does)
+    flux = similar(pv)
+    @inbounds for i in 1:n
+        x = Xv[i]
+        exit = sum(prop(x, rates, t) for prop in model.propensities; init=zero(eltype(pv)))
+        flux[i] = pv[i] * exit
+    end
+    total_flux = sum(flux)
+    thresh = total_flux * 1.0                   # use your flux_tolerance here (1.0)
+
+    # how many candidates will actually be removed by flux test?
+    will_remove = count(i -> flux[i] < thresh, cand)
+
+    return (; n, m, n_zero, zeros_in_cand, will_remove, total_flux)
 end
 
 
-# ╔═╡ c8b60db2-5474-4c4e-9fc7-baed1fa6960c
+# ╔═╡ a0fa6c5d-6af5-495b-bf0f-fe23c2f3c079
+"""
+Main simulation using HybridStateSpace with matrix reconstruction
+and adaptive Δt chosen from total exit flux (Oregonator-ready).
+Assumes: U₀, model, rates, expv are already defined in the notebook.
+"""
+fsp_sim_oragonator = begin
+    # ---- controls (match your original style) ----
+    tf       = 5.0
+    ϵ_dt     = 1.0            # target mass "budget" per step based on total exit flux
+    δt_min   = 1e-10
+    δt_max   = 1e2
+
+    # ---- state space (hybrid) ----
+    space = HybridStateSpace{CartesianIndex{3}, Float64}()
+    add_state!(space, U₀, 1.0)
+
+    # ---- storage ----
+    global t           = 0.0
+    global sol_t       = Float64[t]
+    global sol_S_size  = Int[length(space.state_vec)]
+    global sol         = [(copy(space.state_vec), copy(space.probabilities))]
+    flx_total   = Float64[]    # ∑ p_i * (∑_k α_k(x_i,t)) each step
+
+    # ---- reconstruction carry-over ----
+    global global_old  = Int[]
+    A_old       = spzeros(Float64, 0, 0)
+
+    global iter = 0
+    while t < tf
+        global iter += 1
+
+        # 1) Expand one ring (positional arg, as in your hybrid API)
+        #expand_flux!(space, model, rates, t)
+		new_added = expand_ssa_once!(space, model, rates, t; boundary_condition = x->true)
+
+        # 2) Build or reconstruct generator at current time t
+        builder = HybridMasterEquationBuilder(space, model, rates)
+        global A = isempty(global_old) ? build_sparse_matrix(builder, t) :
+            reconstruct_sparse_matrix(builder, A_old, global_old, t)
+
+        # 3) Compute TOTAL exit flux  Φ_total = ∑_i p_i * ∑_k α_k(x_i, t)
+        total_exit = 0.0
+        @inbounds for (i, x) in enumerate(space.state_vec)
+            p = space.probabilities[i]
+            p == 0.0 && continue
+            for prop in model.propensities
+                total_exit += p * prop(x, rates, t)
+            end
+        end
+        push!(flx_total, total_exit)
+        # 4) Choose δt from flux control (like your out_flow-based rule)
+        δt = (total_exit > 0.0) ? (ϵ_dt / total_exit) : (tf - t)
+        δt = clamp(δt, δt_min, min(δt_max, tf - t))
+
+        # 5) Advance with expv on the restricted generator
+        global p_new = expv(δt, A, space.probabilities)
+        space.probabilities .= p_new
+
+        # 6) Robust prune ≈ compress! (same semantics as your original robust_purge!)
+        compress_robust!(space, model, rates, t, 0.1; flux_tolerance=1.0)
+
+        # 7) Renormalize
+        _total_before = renormalize!(space)  # (optional to log)
+        # @assert isapprox(sum(space.probabilities), 1.0; atol=1e-12)
+
+        # 8) Advance time and sample in logarithmic-ish cadence like before
+        global t += δt
+		@show  length(space.state_vec)
+		@show δt
+		#@show sol[end]
+        if iter % 1e3 == 0 || t ≥ tf
+            push!(sol, (copy(space.state_vec), copy(space.probabilities)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(space.state_vec))
+        end
+
+        # 9) Prep reconstruction
+        global global_old = get_global_indices(space)
+        global A_old = A
+    end
+
+    (times=sol_t, sizes=sol_S_size, solution=sol, total_exit_flux=flx_total)
+end
+
+
+# ╔═╡ 096b9bfe-757a-4e6e-8ad5-043f933460f9
+sol
+
+# ╔═╡ d4139a10-8585-45c3-9de5-60ad7c6629bd
+t
+
+# ╔═╡ 2eb331e6-760d-4ca0-a563-c54dc87a4bd1
 begin
 	sol_mean = map(1:size(sol)[1]) do i
 	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
 	end 
 	fsp_mean=hcat(sol_mean...)'
 end
-
-# ╔═╡ 9b71854c-b269-4ca2-b4bc-32b6401b1b9d
-begin
-	using CairoMakie
-	
-	# SIAM-compliant theme
-	siam_theme = Theme(
-	    fontsize = 10,
-	    font = "CMU Serif",
-	    
-	    Axis = (
-	        titlesize = 10,
-	        xlabelsize = 10,
-	        ylabelsize = 10,
-	        xticklabelsize = 9,
-	        yticklabelsize = 9,
-	        
-	        xgridvisible = false,
-	        ygridvisible = false,
-	        
-	        leftspinevisible = true,
-	        rightspinevisible = true,
-	        topspinevisible = true,
-	        bottomspinevisible = true,
-	        
-	        spinewidth = 0.75,
-	        xtickwidth = 0.75,
-	        ytickwidth = 0.75,
-	        xtickalign = 1,
-	        ytickalign = 1,
-	        xticksize = 3,
-	        yticksize = 3,
-	    ),
-	    
-	    Legend = (
-	        framevisible = false,
-	        patchsize = (20, 3),
-	        labelsize = 9,
-	        rowgap = 2,
-	        padding = (2, 2, 2, 2),
-	    ),
-	    
-	    Lines = (
-	        linewidth = 1.5,
-	    ),
-	    
-	    backgroundcolor = :white,
-	)
-	
-	# Apply the SIAM theme
-	set_theme!(siam_theme)
-	
-	# Prepare the data
-	time_points = sol_t
-	dt_values = vcat([0.0], sol_t[2:end] .- sol_t[1:end-1])
-	state_space_sizes = sol_S_size
-	mean_y1 = fsp_mean[:, 1]
-	mean_y2 = fsp_mean[:, 2]
-	mean_y3 = fsp_mean[:, 3]
-	
-	# Create figure with standard 2x3 layout
-	fig = Figure(size = (7*72, 5*72), figure_padding = 5)
-	
-	# --- Top Row: Time Series ---
-	
-	# Panel (a): Adaptive Time Step
-	ax_a = Axis(
-	    fig[1, 1],
-	    xlabel = L"Time, $t$",
-	    ylabel = L"$\delta t$",
-	    title = "(a)",
-	    titlealign = :left,
-	    yscale = log10
-	)
-	lines!(ax_a, time_points[2:end], dt_values[2:end], color = :black, linewidth = 1.5)
-	
-	# Panel (b): State Space Size
-	ax_b = Axis(
-	    fig[1, 2],
-	    xlabel = L"Time, $t$",
-	    ylabel = L"$|S|$",
-	    title = "(b)",
-	    titlealign = :left
-	)
-	lines!(ax_b, time_points, state_space_sizes, color = :black, linewidth = 1.5)
-	
-	# Panel (c): Mean Trajectories
-	ax_c = Axis(
-	    fig[1, 3],
-	    xlabel = L"Time, $t$",
-	    ylabel = "Mean population",
-	    title = "(c)",
-	    titlealign = :left
-	)
-	lines!(ax_c, time_points, mean_y1, 
-	    label = L"$X$ ($y_1$)", 
-	    color = :black, 
-	    linestyle = :solid,
-	    linewidth = 1.5)
-	lines!(ax_c, time_points, mean_y2, 
-	    label = L"$Y$ ($y_2$)", 
-	    color = :black, 
-	    linestyle = :dash,
-	    linewidth = 1.5)
-	lines!(ax_c, time_points, mean_y3, 
-	    label = L"$Z$ ($y_3$)", 
-	    color = :black, 
-	    linestyle = :dot,
-	    linewidth = 1.5)
-	axislegend(ax_c, position = :rt, framevisible = false)
-	
-	linkxaxes!(ax_a, ax_b, ax_c)
-	
-	# --- Bottom Row: Phase Space Projections (2D) ---
-	
-	# Panel (d): X-Y projection
-	ax_d = Axis(
-	    fig[2, 1],
-	    xlabel = L"$X$",
-	    ylabel = L"$Y$",
-	    title = "(d)",
-	    titlealign = :left,
-	    aspect = DataAspect()
-	)
-	lines!(ax_d, mean_y1, mean_y2, color = :black, linewidth = 1.5)
-	
-	# Panel (e): X-Z projection
-	ax_e = Axis(
-	    fig[2, 2],
-	    xlabel = L"$X$",
-	    ylabel = L"$Z$",
-	    title = "(e)",
-	    titlealign = :left,
-	    aspect = DataAspect()
-	)
-	lines!(ax_e, mean_y1, mean_y3, color = :black, linewidth = 1.5)
-	
-	# Panel (f): Y-Z projection
-	ax_f = Axis(
-	    fig[2, 3],
-	    xlabel = L"$Y$",
-	    ylabel = L"$Z$",
-	    title = "(f)",
-	    titlealign = :left,
-	    aspect = DataAspect()
-	)
-	lines!(ax_f, mean_y2, mean_y3, color = :black, linewidth = 1.5)
-	
-	# Adjust spacing
-	rowgap!(fig.layout, 1, 10)
-	colgap!(fig.layout, 1, 10)
-	
-	# Display the figure
-	display(fig)
-	
-	# Save in publication formats
-	save("oregonator_results.pdf", fig, pt_per_unit = 1)
-	save("oregonator_results.eps", fig, pt_per_unit = 1)
-	save("oregonator_results.png", fig, px_per_unit = 3)
-	
-	println("\nSaved files:")
-	println("  - oregonator_results.pdf (vector, preferred)")
-	println("  - oregonator_results.eps (vector, alternative)")
-	println("  - oregonator_results.png (raster, preview)")
-	
-	println("\nSuggested caption:")
-	println("Figure X. Oregonator system simulation results. (a) Adaptive time step")
-	println("evolution. (b) State space size evolution. (c) Mean population trajectories")
-	println("for species X (solid), Y (dashed), and Z (dotted). (d-f) Phase space")
-	println("projections showing limit cycle behavior: (d) X-Y plane, (e) X-Z plane,")
-	println("(f) Y-Z plane.")
-end
-
-# ╔═╡ 7be857e9-5409-4eda-9cdd-a32ecc02a81c
-t
-
-# ╔═╡ 1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
-save("orag.png", fig)
-
-# ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
-
-	iter = 0
-    while t < tf
-		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, in_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-5)
-        
-		global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
-											   model, 
-											   rates, 
-											   boundary_condition, 
-											   t) 
-	
-        A = MasterEquation(in_flow, out_flow)
-		global in_flux, out_flux = Vector(in_flow * pₜ) , Vector(-out_flow * pₜ)
-		total_flux = sum(in_flux)
-
-		# based on out-flux, compute δt
-		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t, 1e6) 
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-		if iter > 5 
-			break
-		end
-
-		
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.1; flux_tolerance=1e-9)
-		
-        if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – skipping"
-        end
-
-        # 7. Normalize
-        pₜ ./= sum(pₜ)
-
-        # 8. Advance time
-        t += δt
-
-        # note .. im storing values in logarithemic intervals 
-		# (too many snapshots to save)
-		if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-        	push!(tresh, total_flux)
-		end
-		global iter = iter + 1
-    end
-
-
-# ╔═╡ 90b624e8-6531-43c0-b994-f959faf4accf
-t
-
-# ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
-# ╠═╡ disabled = true
-#=╠═╡
-
-fsp_sim_oregonator = begin
-
-    tf = 3.0   # Simulate for enough time to see several oscillations
-    ϵ_dt = 0.1 # Tolerance for adaptive dt calculation
-
-    # Initial state (X, Y) near the unstable steady state
-    𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-	flux_vector = [sum(prop(U₀, rates, 0) for prop in model.propensities)]
-	
-    # Initialize current time and dynamic solution arrays
-    local t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-	flx=[]
-
-    # --- Main Adaptive Loop ---
-     while t < tf
-
-		 # 2. Expand state space
-    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, flux_vector,model, rates, t, boundary_condition, 1; flux_tol=1e-9)
-		 
-		X_vec = collect(𝒮ₜ)   
-        # 1. Calculate adaptive δt based on total expected system activity
-        global flux_vector = similar(pₜ)
-		for i in eachindex(X_vec)
-    		weight = sum(prop(X_vec[i], rates, t) for prop in model.propensities)
-    		flux_vector[i] = pₜ[i] * weight
-		end
-		total_flux = sum(flux_vector)
-
-        δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t)
-
-        
-
-        # 3. Build Master Equation and Evolve over the calculated δt
-        A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-        pₜ = expmv(δt, A, pₜ)
-        
-        # 4. Purge state space using the robust flux-based method
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, flux_vector, model, rates, t, 0.1; flux_tolerance= 1e-3)
-        
-        # 5. Renormalize probability
-        pₜ ./= sum(pₜ)
-        
-        # 6. Update time and store results
-        t += δt
-        
-        push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        push!(sol_t, t)
-        push!(sol_S_size, length(𝒮ₜ))
-    end
-    
-end
-  ╠═╡ =#
-
-# ╔═╡ 2221d90b-8c6f-41d1-be00-35e18b5e2f60
-# ╠═╡ disabled = true
-#=╠═╡
-fsp_sim_oragonator = begin
-    tf = 10
-    ϵ_dt = 0.1# Tolerance for flux-based adaptive dt
-
-    # Initial condition for Robertson problem
-    global 𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    # Time and diagnostics
-    local t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = Float64[]
-    tresh = Float64[]
-	δt_max = 1e-2
-
-	
-	global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 2)
-	global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-	global exit_flux_vec = Vector(-diag(A) .* pₜ)
-	δt = ϵ_dt / sum(exit_flux_vec)
-
-	iter = 0
-    while t < tf
-		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, exit_flux_vec, model, rates, t, boundary_condition, 1; flux_tol=1e-4)
-        
-		
-        global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-
-		# compute out-flux
-		d = [A[i,i] for i in 1:size(A,1)]     # diagonal of A
-		global exit_flux_vec = @. -d * pₜ
-		global total_flux = sum(exit_flux_vec)
-
-		# based on out-flux, compute δt
-		#δt = total_flux > 0 ? min(ϵ_dt/total_flux, tf - t, δt_max) : (tf - t)
-        δt = 0.01#min(δt, tf - t, 1e5) 
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-		# based on probability mass and out-flux, prune
-		in_flux = Vector(A * pₜ .- diag(A) .* pₜ)
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.3; flux_tolerance=1e-3)
-		
-        if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – skipping"
-        end
-
-        # 7. Normalize
-        pₜ ./= sum(pₜ)
-
-        # 8. Advance time
-        t += δt
-
-        # 9. Store diagnostics
-		if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-        	push!(tresh, total_flux)
-		end
-		global iter = iter + 1
-    end
-end
-
-  ╠═╡ =#
-
-# ╔═╡ a4822e24-f8d9-40ac-974c-364dc93c4eac
-
-
-# ╔═╡ dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
-
-
-# ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
-plot(sol_S_size, title="state space size")
-
-# ╔═╡ f0de5260-35fb-4b19-ada4-13d7764151f8
-# ╠═╡ disabled = true
-# ╠═╡ skip_as_script = true
-#=╠═╡
-fsp_sim_oragonator = begin
-    tf = 5
-    ϵ_dt = 1.0
-
-    global 𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    local t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = Float64[]
-    tresh = Float64[]
-S_old = Set()
-	#global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
-	#global A, in_flow, out_flow = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)"
-	#global in_flux = Vector(-diag(in_flow) .* pₜ)
-	δt = 1e-5
-
-	iter = 0
-    while t < tf
-		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 1)
-		#if length(𝒮ₜ) != length(S_old) && iter > 5000
-		#	break
-		#end
-
-        	global A, in_flow, out_flow = DiscStochSim.MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-				global A_old = A
-
-		#	global A_old = A
-		#else 
-		#	global A = MasterEquation(𝒮ₜ, S_old, A_old, model, rates, boundary_condition, 1.0)
-		#	global A_old = A
-		#	out_flow = A[diagind(A)]
-		#end
-			
-		#global A_old = A 
-		#global S_old = copy(𝒮ₜ)
-
-		
-		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
-
-		total_flux = sum(out_flux)
-
-		# based on out-flux, compute δt
-		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t) 
-
-		# sanity checks
-		@assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
-		@assert isapprox(in_flux .- out_flux, Vector(A * pₜ))  
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-        #𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.1; renormalize=true)
-				global S_old = 𝒮ₜ
-
-		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=1.0)
-		pₜ = pₜ ./ sum(pₜ)
-		@assert sum(pₜ) ≈ 1.0
-		
-        if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – skipping"
-        end
-
-        # 8. Advance time
-        t += δt
-        # note .. im storing values in logarithemic intervals 
-
-		@show  δt
-		@show total_flux
-		@show sol[end]
-		if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-        	push!(tresh, total_flux)
-		end
-		global iter = iter + 1
-    end
-end
-  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -870,10 +673,9 @@ ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
-Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
@@ -889,7 +691,6 @@ Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
 PROPACK = "~0.5.0"
-Plots = "~1.40.17"
 ProgressLogging = "~0.1.5"
 Revise = "~3.8.0"
 StatsBase = "~0.34.5"
@@ -901,7 +702,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "3d7ab311adfb7d847b2fdbb9a70e41d8a9c6bfb7"
+project_hash = "b14ce34108ed81fd4ba67e198c02f56419a9186e"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -1102,11 +903,6 @@ git-tree-sha1 = "a2d308fcd4c2fb90e943cf9cd2fbfa9c32b69733"
 uuid = "e2ed5e7c-b2de-5872-ae92-c73ca462fb04"
 version = "0.2.2"
 
-[[deps.BitFlags]]
-git-tree-sha1 = "0691e34b3bb8be9307330f88d1a3c3f25466c24d"
-uuid = "d1d4a3ce-64b1-5f1a-9ba4-7e7e69966f35"
-version = "0.1.9"
-
 [[deps.BitTwiddlingConvenienceFunctions]]
 deps = ["Static"]
 git-tree-sha1 = "f21cfd4950cb9f0587d5067e69405ad2acd27b87"
@@ -1290,12 +1086,6 @@ git-tree-sha1 = "062c5e1a5bf6ada13db96a4ae4749a4c2234f521"
 uuid = "da1fd8a2-8d9e-5ec2-8556-3022fb5608a2"
 version = "1.3.9"
 
-[[deps.CodecZlib]]
-deps = ["TranscodingStreams", "Zlib_jll"]
-git-tree-sha1 = "962834c22b66e32aa10f7611c08c8ca4e20749a9"
-uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
-version = "0.7.8"
-
 [[deps.ColorBrewer]]
 deps = ["Colors", "JSON"]
 git-tree-sha1 = "e771a63cc8b539eca78c85b0cabd9233d6c8f06f"
@@ -1400,12 +1190,6 @@ git-tree-sha1 = "f749037478283d372048690eb3b5f92a79432b34"
 uuid = "2569d6c7-a4a2-43d3-a901-331e8e4be471"
 version = "0.2.3"
 
-[[deps.ConcurrentUtilities]]
-deps = ["Serialization", "Sockets"]
-git-tree-sha1 = "d9d26935a0bcffc87d2613ce14c527c99fc543fd"
-uuid = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
-version = "2.5.0"
-
 [[deps.ConstructionBase]]
 git-tree-sha1 = "b4b092499347b18a015186eae3042f72267106cb"
 uuid = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
@@ -1454,12 +1238,6 @@ deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
 
-[[deps.Dbus_jll]]
-deps = ["Artifacts", "Expat_jll", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "473e9afc9cf30814eb67ffa5f2db7df82c3ad9fd"
-uuid = "ee1fde0b-3d02-5ea6-8484-8dfef6360eab"
-version = "1.16.2+0"
-
 [[deps.DelaunayTriangulation]]
 deps = ["AdaptivePredicates", "EnumX", "ExactPredicates", "Random"]
 git-tree-sha1 = "5620ff4ee0084a6ab7097a27ba0c19290200b037"
@@ -1471,12 +1249,6 @@ deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "LinearAlgebra", "Logg
 git-tree-sha1 = "8b416f6b1f9ef8df4c13dd0fe6c191752722b36f"
 uuid = "bcd4f6db-9728-5f36-b5f7-82caef46ccdb"
 version = "5.53.1"
-
-[[deps.DelimitedFiles]]
-deps = ["Mmap"]
-git-tree-sha1 = "9e2f36d3c96a820c678f2f1f1782582fcf685bae"
-uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
-version = "1.9.1"
 
 [[deps.DiffEqBase]]
 deps = ["ArrayInterface", "ConcreteStructs", "DataStructures", "DocStringExtensions", "EnumX", "EnzymeCore", "FastBroadcast", "FastClosures", "FastPower", "FunctionWrappers", "FunctionWrappersWrappers", "LinearAlgebra", "Logging", "Markdown", "MuladdMacro", "Parameters", "PrecompileTools", "Printf", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLOperators", "SciMLStructures", "Setfield", "Static", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface", "TruncatedStacktraces"]
@@ -1711,23 +1483,11 @@ weakdeps = ["Adapt"]
     [deps.EnzymeCore.extensions]
     AdaptExt = "Adapt"
 
-[[deps.EpollShim_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "8a4be429317c42cfae6a7fc03c31bad1970c310d"
-uuid = "2702e6a9-849d-5ed8-8c21-79e8b8f9ee43"
-version = "0.0.20230411+1"
-
 [[deps.ExactPredicates]]
 deps = ["IntervalArithmetic", "Random", "StaticArrays"]
 git-tree-sha1 = "b3f2ff58735b5f024c392fde763f29b057e4b025"
 uuid = "429591f6-91af-11e9-00e2-59fbe8cec110"
 version = "2.2.8"
-
-[[deps.ExceptionUnwrapping]]
-deps = ["Test"]
-git-tree-sha1 = "d36f682e590a83d63d1c7dbd287573764682d12a"
-uuid = "460bff9d-24e4-43bc-9d9f-a8973cb893f4"
-version = "0.1.11"
 
 [[deps.Expat_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -1766,17 +1526,11 @@ git-tree-sha1 = "b309b36a9e02fe7be71270dd8c0fd873625332b4"
 uuid = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
 version = "0.1.6"
 
-[[deps.FFMPEG]]
-deps = ["FFMPEG_jll"]
-git-tree-sha1 = "53ebe7511fa11d33bec688a9178fac4e49eeee00"
-uuid = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
-version = "0.4.2"
-
 [[deps.FFMPEG_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
+git-tree-sha1 = "8cc47f299902e13f90405ddb5bf87e5d474c0d38"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.4.4+1"
+version = "6.1.2+0"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
@@ -1841,10 +1595,12 @@ deps = ["Pkg", "Requires", "UUIDs"]
 git-tree-sha1 = "b66970a70db13f45b7e57fbda1736e1cf72174ea"
 uuid = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 version = "1.17.0"
-weakdeps = ["HTTP"]
 
     [deps.FileIO.extensions]
     HTTPExt = "HTTP"
+
+    [deps.FileIO.weakdeps]
+    HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 
 [[deps.FilePaths]]
 deps = ["FilePathsBase", "MacroTools", "Reexport", "Requires"]
@@ -1975,29 +1731,11 @@ deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 version = "1.11.0"
 
-[[deps.GLFW_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll", "libdecor_jll", "xkbcommon_jll"]
-git-tree-sha1 = "fcb0584ff34e25155876418979d4c8971243bb89"
-uuid = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
-version = "3.4.0+2"
-
 [[deps.GPUArraysCore]]
 deps = ["Adapt"]
 git-tree-sha1 = "83cf05ab16a73219e5f6bd1bdfa9848fa24ac627"
 uuid = "46192b85-c4d5-4398-a991-12ede77f4527"
 version = "0.2.0"
-
-[[deps.GR]]
-deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Preferences", "Printf", "Qt6Wayland_jll", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "p7zip_jll"]
-git-tree-sha1 = "1828eb7275491981fa5f1752a5e126e8f26f8741"
-uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.73.17"
-
-[[deps.GR_jll]]
-deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "FreeType2_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Qt6Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "27299071cc29e409488ada41ec7643e0ab19091f"
-uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.73.17+0"
 
 [[deps.GenericSchur]]
 deps = ["LinearAlgebra", "Printf"]
@@ -2092,12 +1830,6 @@ deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "LazyArtifac
 git-tree-sha1 = "e94f84da9af7ce9c6be049e9067e511e17ff89ec"
 uuid = "0234f1f7-429e-5d53-9886-15a909be8d59"
 version = "1.14.6+0"
-
-[[deps.HTTP]]
-deps = ["Base64", "CodecZlib", "ConcurrentUtilities", "Dates", "ExceptionUnwrapping", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "PrecompileTools", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
-git-tree-sha1 = "ed5e9c58612c4e081aecdb6e1a479e18462e041e"
-uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "1.10.17"
 
 [[deps.HarfBuzz_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll"]
@@ -2265,12 +1997,6 @@ deps = ["Compat", "FileIO", "H5Zblosc", "HDF5", "Printf"]
 git-tree-sha1 = "e42f32690d41f758e126a48ee43459ef91179d1f"
 uuid = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 version = "0.13.5"
-
-[[deps.JLFzf]]
-deps = ["REPL", "Random", "fzf_jll"]
-git-tree-sha1 = "82f7acdc599b65e0f8ccd270ffa1467c21cb647b"
-uuid = "1019f520-868f-41f5-a6de-eb00f4b6a39c"
-version = "0.1.11"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]
@@ -2597,12 +2323,6 @@ version = "0.3.29"
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
 
-[[deps.LoggingExtras]]
-deps = ["Dates", "Logging"]
-git-tree-sha1 = "f02b56007b064fbfddb4c9cd60161b6dd0f40df3"
-uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
-version = "1.1.0"
-
 [[deps.LoweredCodeUtils]]
 deps = ["Compiler", "JuliaInterpreter"]
 git-tree-sha1 = "b882a7dd7ef37643066ae8f9380beea8fdd89cae"
@@ -2702,21 +2422,10 @@ weakdeps = ["SparseArrays"]
     [deps.MaybeInplace.extensions]
     MaybeInplaceSparseArraysExt = "SparseArrays"
 
-[[deps.MbedTLS]]
-deps = ["Dates", "MbedTLS_jll", "MozillaCACerts_jll", "NetworkOptions", "Random", "Sockets"]
-git-tree-sha1 = "c067a280ddc25f196b5e7df3877c6b226d390aaf"
-uuid = "739be429-bea8-5141-9913-cc70e7f3736d"
-version = "1.1.9"
-
 [[deps.MbedTLS_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
 version = "2.28.6+0"
-
-[[deps.Measures]]
-git-tree-sha1 = "c13304c81eec1ed3af7fc20e75fb6b26092a1102"
-uuid = "442fdcdd-2543-5da2-b0f3-8c86c306513e"
-version = "0.3.2"
 
 [[deps.MicrosoftMPI_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2944,12 +2653,6 @@ deps = ["Artifacts", "CompilerSupportLibraries_jll", "Hwloc_jll", "JLLWrappers",
 git-tree-sha1 = "ec764453819f802fc1e144bfe750c454181bd66d"
 uuid = "fe0851c0-eecd-5654-98d4-656369965a5c"
 version = "5.0.8+0"
-
-[[deps.OpenSSL]]
-deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
-git-tree-sha1 = "f1a7e086c677df53e064e0fdd2c9d0b0833e3f6e"
-uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
-version = "1.5.0"
 
 [[deps.OpenSSL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3260,37 +2963,11 @@ git-tree-sha1 = "f9501cc0430a26bc3d156ae1b5b0c1b47af4d6da"
 uuid = "eebad327-c553-4316-9ea0-9fa01ccd7688"
 version = "0.3.3"
 
-[[deps.PlotThemes]]
-deps = ["PlotUtils", "Statistics"]
-git-tree-sha1 = "41031ef3a1be6f5bbbf3e8073f210556daeae5ca"
-uuid = "ccf2f8ad-2431-5c83-bf29-c5338b663b6a"
-version = "3.3.0"
-
 [[deps.PlotUtils]]
 deps = ["ColorSchemes", "Colors", "Dates", "PrecompileTools", "Printf", "Random", "Reexport", "StableRNGs", "Statistics"]
 git-tree-sha1 = "3ca9a356cd2e113c420f2c13bea19f8d3fb1cb18"
 uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
 version = "1.4.3"
-
-[[deps.Plots]]
-deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "3db9167c618b290a05d4345ca70de6d95304a32a"
-uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.40.17"
-
-    [deps.Plots.extensions]
-    FileIOExt = "FileIO"
-    GeometryBasicsExt = "GeometryBasics"
-    IJuliaExt = "IJulia"
-    ImageInTerminalExt = "ImageInTerminal"
-    UnitfulExt = "Unitful"
-
-    [deps.Plots.weakdeps]
-    FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
-    GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
-    IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
-    ImageInTerminal = "d8c32880-2388-543b-8c61-d9f865259254"
-    Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [[deps.PoissonRandom]]
 deps = ["LogExpFunctions", "Random"]
@@ -3387,30 +3064,6 @@ git-tree-sha1 = "8b3fc30bc0390abdce15f8822c889f669baed73d"
 uuid = "4b34888f-f399-49d4-9bb3-47ed5cae4e65"
 version = "1.0.1"
 
-[[deps.Qt6Base_jll]]
-deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Vulkan_Loader_jll", "Xorg_libSM_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_cursor_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "libinput_jll", "xkbcommon_jll"]
-git-tree-sha1 = "eb38d376097f47316fe089fc62cb7c6d85383a52"
-uuid = "c0090381-4147-56d7-9ebc-da0b1113ec56"
-version = "6.8.2+1"
-
-[[deps.Qt6Declarative_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll", "Qt6ShaderTools_jll"]
-git-tree-sha1 = "da7adf145cce0d44e892626e647f9dcbe9cb3e10"
-uuid = "629bc702-f1f5-5709-abd5-49b8460ea067"
-version = "6.8.2+1"
-
-[[deps.Qt6ShaderTools_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll"]
-git-tree-sha1 = "9eca9fc3fe515d619ce004c83c31ffd3f85c7ccf"
-uuid = "ce943373-25bb-56aa-8eca-768745ed7b5a"
-version = "6.8.2+1"
-
-[[deps.Qt6Wayland_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll", "Qt6Declarative_jll"]
-git-tree-sha1 = "e1d5e16d0f65762396f9ca4644a5f4ddab8d452b"
-uuid = "e99dba38-086e-5de3-a5b1-6e4c66e897c3"
-version = "6.8.2+1"
-
 [[deps.QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
 git-tree-sha1 = "9da16da70037ba9d701192e27befedefb91ec284"
@@ -3465,12 +3118,6 @@ deps = ["PrecompileTools"]
 git-tree-sha1 = "5c3d09cc4f31f5fc6af001c250bf1278733100ff"
 uuid = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
 version = "1.3.4"
-
-[[deps.RecipesPipeline]]
-deps = ["Dates", "NaNMath", "PlotUtils", "PrecompileTools", "RecipesBase"]
-git-tree-sha1 = "45cf9fd0ca5839d06ef333c8201714e888486342"
-uuid = "01d81517-befc-4cb6-b9ec-a95719d0359c"
-version = "0.6.12"
 
 [[deps.RecursiveArrayTools]]
 deps = ["Adapt", "ArrayInterface", "DocStringExtensions", "GPUArraysCore", "IteratorInterfaceExtensions", "LinearAlgebra", "RecipesBase", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface", "Tables"]
@@ -3667,11 +3314,6 @@ deps = ["Random", "Statistics", "Test"]
 git-tree-sha1 = "d263a08ec505853a5ff1c1ebde2070419e3f28e9"
 uuid = "73760f76-fbc4-59ce-8f25-708e95d2df96"
 version = "0.4.0"
-
-[[deps.SimpleBufferStream]]
-git-tree-sha1 = "f305871d2f381d21527c770d4788c06c097c9bc1"
-uuid = "777ac1f9-54b0-4bf8-805c-2214025038e7"
-version = "1.2.0"
 
 [[deps.SimpleNonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "MaybeInplace", "NonlinearSolveBase", "PrecompileTools", "Reexport", "SciMLBase", "Setfield", "StaticArraysCore"]
@@ -4096,34 +3738,11 @@ weakdeps = ["ConstructionBase", "ForwardDiff", "InverseFunctions", "Printf"]
     InverseFunctionsUnitfulExt = "InverseFunctions"
     PrintfExt = "Printf"
 
-[[deps.UnitfulLatexify]]
-deps = ["LaTeXStrings", "Latexify", "Unitful"]
-git-tree-sha1 = "af305cc62419f9bd61b6644d19170a4d258c7967"
-uuid = "45397f5d-5981-4c77-b2b3-fc36d6e9b728"
-version = "1.7.0"
-
 [[deps.Unityper]]
 deps = ["ConstructionBase"]
 git-tree-sha1 = "25008b734a03736c41e2a7dc314ecb95bd6bbdb0"
 uuid = "a7c27f48-0311-42f6-a7f8-2c11e75eb415"
 version = "0.1.6"
-
-[[deps.Unzip]]
-git-tree-sha1 = "ca0969166a028236229f63514992fc073799bb78"
-uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
-version = "0.2.0"
-
-[[deps.Vulkan_Loader_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Wayland_jll", "Xorg_libX11_jll", "Xorg_libXrandr_jll", "xkbcommon_jll"]
-git-tree-sha1 = "2f0486047a07670caad3a81a075d2e518acc5c59"
-uuid = "a44049a8-05dd-5a78-86c9-5fde0876e88c"
-version = "1.3.243+0"
-
-[[deps.Wayland_jll]]
-deps = ["Artifacts", "EpollShim_jll", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll"]
-git-tree-sha1 = "96478df35bbc2f3e1e791bc7a3d0eeee559e60e9"
-uuid = "a2964d1f-97da-50d4-b82a-358c7fce9d89"
-version = "1.24.0+0"
 
 [[deps.WeakValueDicts]]
 git-tree-sha1 = "98528c2610a5479f091d470967a25becfd83edd0"
@@ -4148,18 +3767,6 @@ git-tree-sha1 = "fee71455b0aaa3440dfdd54a9a36ccef829be7d4"
 uuid = "ffd25f8a-64ca-5728-b0f7-c24cf3aae800"
 version = "5.8.1+0"
 
-[[deps.Xorg_libICE_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "a3ea76ee3f4facd7a64684f9af25310825ee3668"
-uuid = "f67eecfb-183a-506d-b269-f58e52b52d7c"
-version = "1.1.2+0"
-
-[[deps.Xorg_libSM_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libICE_jll"]
-git-tree-sha1 = "9c7ad99c629a44f81e7799eb05ec2746abb5d588"
-uuid = "c834827a-8449-5923-a945-d239c165b7dd"
-version = "1.2.6+0"
-
 [[deps.Xorg_libX11_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xtrans_jll"]
 git-tree-sha1 = "b5899b25d17bf1889d25906fb9deed5da0c15b3b"
@@ -4171,12 +3778,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "aa1261ebbac3ccc8d16558ae6799524c450ed16b"
 uuid = "0c0b7dd1-d40b-584c-a123-a41640f87eec"
 version = "1.0.13+0"
-
-[[deps.Xorg_libXcursor_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXfixes_jll", "Xorg_libXrender_jll"]
-git-tree-sha1 = "6c74ca84bbabc18c4547014765d194ff0b4dc9da"
-uuid = "935fb764-8cf2-53bf-bb30-45bb1f8bf724"
-version = "1.2.4+0"
 
 [[deps.Xorg_libXdmcp_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -4190,30 +3791,6 @@ git-tree-sha1 = "a4c0ee07ad36bf8bbce1c3bb52d21fb1e0b987fb"
 uuid = "1082639a-0dae-5f34-9b06-72781eeb8cb3"
 version = "1.3.7+0"
 
-[[deps.Xorg_libXfixes_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
-git-tree-sha1 = "9caba99d38404b285db8801d5c45ef4f4f425a6d"
-uuid = "d091e8ba-531a-589c-9de9-94069b037ed8"
-version = "6.0.1+0"
-
-[[deps.Xorg_libXi_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXext_jll", "Xorg_libXfixes_jll"]
-git-tree-sha1 = "a376af5c7ae60d29825164db40787f15c80c7c54"
-uuid = "a51aa0fd-4e3c-5386-b890-e753decda492"
-version = "1.8.3+0"
-
-[[deps.Xorg_libXinerama_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXext_jll"]
-git-tree-sha1 = "a5bc75478d323358a90dc36766f3c99ba7feb024"
-uuid = "d1454406-59df-5ea1-beac-c340f2130bc3"
-version = "1.1.6+0"
-
-[[deps.Xorg_libXrandr_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXext_jll", "Xorg_libXrender_jll"]
-git-tree-sha1 = "aff463c82a773cb86061bce8d53a0d976854923e"
-uuid = "ec84b674-ba8e-5d96-8ba1-2a689ba10484"
-version = "1.5.5+0"
-
 [[deps.Xorg_libXrender_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
 git-tree-sha1 = "7ed9347888fac59a618302ee38216dd0379c480d"
@@ -4225,60 +3802,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libXau_jll", "Xorg_libXdmcp_j
 git-tree-sha1 = "bfcaf7ec088eaba362093393fe11aa141fa15422"
 uuid = "c7cfdc94-dc32-55de-ac96-5a1b8d977c5b"
 version = "1.17.1+0"
-
-[[deps.Xorg_libxkbfile_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
-git-tree-sha1 = "e3150c7400c41e207012b41659591f083f3ef795"
-uuid = "cc61e674-0454-545c-8b26-ed2c68acab7a"
-version = "1.1.3+0"
-
-[[deps.Xorg_xcb_util_cursor_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_jll", "Xorg_xcb_util_renderutil_jll"]
-git-tree-sha1 = "c5bf2dad6a03dfef57ea0a170a1fe493601603f2"
-uuid = "e920d4aa-a673-5f3a-b3d7-f755a4d47c43"
-version = "0.1.5+0"
-
-[[deps.Xorg_xcb_util_image_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_jll"]
-git-tree-sha1 = "f4fc02e384b74418679983a97385644b67e1263b"
-uuid = "12413925-8142-5f55-bb0e-6d7ca50bb09b"
-version = "0.4.1+0"
-
-[[deps.Xorg_xcb_util_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll"]
-git-tree-sha1 = "68da27247e7d8d8dafd1fcf0c3654ad6506f5f97"
-uuid = "2def613f-5ad1-5310-b15b-b15d46f528f5"
-version = "0.4.1+0"
-
-[[deps.Xorg_xcb_util_keysyms_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_jll"]
-git-tree-sha1 = "44ec54b0e2acd408b0fb361e1e9244c60c9c3dd4"
-uuid = "975044d2-76e6-5fbe-bf08-97ce7c6574c7"
-version = "0.4.1+0"
-
-[[deps.Xorg_xcb_util_renderutil_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_jll"]
-git-tree-sha1 = "5b0263b6d080716a02544c55fdff2c8d7f9a16a0"
-uuid = "0d47668e-0667-5a69-a72c-f761630bfb7e"
-version = "0.3.10+0"
-
-[[deps.Xorg_xcb_util_wm_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_jll"]
-git-tree-sha1 = "f233c83cad1fa0e70b7771e0e21b061a116f2763"
-uuid = "c22f9ab0-d5fe-5066-847c-f4bb1cd4e361"
-version = "0.4.2+0"
-
-[[deps.Xorg_xkbcomp_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxkbfile_jll"]
-git-tree-sha1 = "801a858fc9fb90c11ffddee1801bb06a738bda9b"
-uuid = "35661453-b289-5fab-8a00-3d9160c6a3a4"
-version = "1.4.7+0"
-
-[[deps.Xorg_xkeyboard_config_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xkbcomp_jll"]
-git-tree-sha1 = "00af7ebdc563c9217ecc67776d1bbf037dbcebf4"
-uuid = "33bec58e-1273-512f-9401-5d533626f822"
-version = "2.44.0+0"
 
 [[deps.Xorg_xtrans_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -4296,18 +3819,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "446b23e73536f84e8037f5dce465e92275f6a308"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
 version = "1.5.7+1"
-
-[[deps.eudev_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "c3b0e6196d50eab0c5ed34021aaa0bb463489510"
-uuid = "35ca27e7-8b34-5b7f-bca9-bdc33f59eb06"
-version = "3.2.14+0"
-
-[[deps.fzf_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "b6a34e0e0960190ac2a4363a1bd003504772d631"
-uuid = "214eeab7-80f7-51ab-84ad-2988db7cef09"
-version = "0.61.1+0"
 
 [[deps.isoband_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -4338,29 +3849,11 @@ deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
 version = "5.11.0+0"
 
-[[deps.libdecor_jll]]
-deps = ["Artifacts", "Dbus_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pango_jll", "Wayland_jll", "xkbcommon_jll"]
-git-tree-sha1 = "9bf7903af251d2050b467f76bdbe57ce541f7f4f"
-uuid = "1183f4f0-6f2a-5f1a-908b-139f9cdfea6f"
-version = "0.2.2+0"
-
-[[deps.libevdev_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "56d643b57b188d30cccc25e331d416d3d358e557"
-uuid = "2db6ffa8-e38f-5e21-84af-90c45d0032cc"
-version = "1.13.4+0"
-
 [[deps.libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "646634dd19587a56ee2f1199563ec056c5f228df"
 uuid = "f638f0a6-7fb0-5443-88ba-1cc74229b280"
 version = "2.0.4+0"
-
-[[deps.libinput_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "eudev_jll", "libevdev_jll", "mtdev_jll"]
-git-tree-sha1 = "91d05d7f4a9f67205bd6cf395e488009fe85b499"
-uuid = "36db933b-70db-51c0-b978-0f229ee0e533"
-version = "1.28.1+0"
 
 [[deps.libpng_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
@@ -4386,12 +3879,6 @@ git-tree-sha1 = "4e4282c4d846e11dce56d74fa8040130b7a95cb3"
 uuid = "c5f90fcd-3b7e-5836-afba-fc50a0988cb2"
 version = "1.6.0+0"
 
-[[deps.mtdev_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "b4d631fd51f2e9cdd93724ae25b2efc198b059b1"
-uuid = "009596ad-96f7-51b1-9f1b-5ce2d5e8a71e"
-version = "1.1.7+0"
-
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
@@ -4409,49 +3896,29 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
 
 [[deps.x264_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4fea590b89e6ec504593146bf8b988b2c00922b2"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "14cc7083fc6dff3cc44f2bc435ee96d06ed79aa7"
 uuid = "1270edf5-f2f9-52d2-97e9-ab00b5d0237a"
-version = "2021.5.5+0"
+version = "10164.0.1+0"
 
 [[deps.x265_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "ee567a171cce03570d77ad3a43e90218e38937a9"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "dcc541bb19ed5b0ede95581fb2e41ecf179527d2"
 uuid = "dfaa095f-4041-5dcd-9319-2fabd8486b76"
-version = "3.5.0+0"
-
-[[deps.xkbcommon_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
-git-tree-sha1 = "fbf139bce07a534df0e699dbb5f5cc9346f95cc1"
-uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
-version = "1.9.2+0"
+version = "3.6.0+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═f61fe968-f0ad-4d2c-9af5-c27f9224a1cc
-# ╠═9dd29549-5238-4314-a3dd-96f4a9e385d9
-# ╠═528dc2d1-739b-4b60-8bfc-0173c8a931a6
-# ╠═1461cc48-6409-4a73-95e0-7192fdb48ab9
-# ╠═3dc88d00-000b-43ba-b37e-c76a75384281
-# ╠═df29e9d3-207d-40ed-9726-0ef68fd3a773
-# ╠═836c5ee4-7ac2-47ed-bfee-874582ccba8a
-# ╠═64061d79-cbfe-4219-a7a8-cdc57ffb9344
-# ╠═baff6019-71fb-4028-9ac1-6d98302a1e77
-# ╠═44234db1-1a79-4283-9bac-e17b6b3251a1
-# ╠═fefdccd5-6870-4c17-84cb-ad0896caffc0
-# ╠═316dce0f-1a25-4bd1-8279-0d6768dfa61f
-# ╠═7cce53ab-f500-44e9-85f3-0233b769fefd
-# ╠═c8b60db2-5474-4c4e-9fc7-baed1fa6960c
-# ╠═9b71854c-b269-4ca2-b4bc-32b6401b1b9d
-# ╠═7be857e9-5409-4eda-9cdd-a32ecc02a81c
-# ╠═1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
-# ╠═006cb103-dc41-4742-a440-35923c802dc5
-# ╠═90b624e8-6531-43c0-b994-f959faf4accf
-# ╠═9f592c0e-313e-48dd-bcbe-22e4b41ad55a
-# ╠═2221d90b-8c6f-41d1-be00-35e18b5e2f60
-# ╠═a4822e24-f8d9-40ac-974c-364dc93c4eac
-# ╠═dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
-# ╠═5c736465-5bfc-45e6-8445-266e3eaffd47
-# ╠═f0de5260-35fb-4b19-ada4-13d7764151f8
+# ╠═5cea6bca-9a52-11f0-31ae-4b91e5f8bbdf
+# ╠═db8f277e-ef91-4f63-bed4-54a162666a26
+# ╠═66e5763b-f461-44ae-8401-8f220f4261cb
+# ╠═af99c064-d99c-45c4-b350-51610da2d041
+# ╠═c28ba0c9-e924-414c-8aa9-3a9cd2bf23c3
+# ╠═20c36b32-e50e-4f31-9492-5db0fe019ae3
+# ╠═d8136b29-2396-4381-b2ff-7a23decfb4e0
+# ╠═a0fa6c5d-6af5-495b-bf0f-fe23c2f3c079
+# ╠═096b9bfe-757a-4e6e-8ad5-043f933460f9
+# ╠═d4139a10-8585-45c3-9de5-60ad7c6629bd
+# ╠═2eb331e6-760d-4ca0-a563-c54dc87a4bd1
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

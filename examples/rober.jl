@@ -72,8 +72,7 @@ function purgea!(
     flux_threshold = total_flux * flux_tolerance
 	
     ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
-	
-	
+		
     # 3. Purge the final set of states
     new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
     states_to_remove = Set(X_vec[collect(ℛ)])
@@ -81,7 +80,429 @@ function purgea!(
     return new_X, new_p, total_flux, flux_threshold
 end
 
+# ╔═╡ 328472f8-f139-40ae-a9f0-4fd10a6159d9
+function robust_purge!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+	# 1. Candidate Selection: Find states with low probability mass
+     idx = sortperm(p; rev=false)
+    k = round(Int, prob_quantile * length(idx))            
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+	candidate_idxs = drop_idxs
+
+    # Build new containers
+    keep_mask = trues(length(p))
+    keep_mask[drop_idxs] .= false
+
+    flux_vector = zeros(T, length(p))
+    local total_flux = 0
+	if flux_tolerance > 0
+    	for i in eachindex(X_vec)
+        	current_state = X_vec[i]
+        	weight = sum(prop(current_state, rates, t) 
+						 for prop in model.propensities)
+        	flux_vector[i] = p[i] * weight
+    	end
+    	total_flux = sum(flux_vector)
+    	# Set an adaptive threshold based on the total system flux
+   		flux_threshold = total_flux * flux_tolerance
+		# Filter the candidates based on this adaptive threshold
+
+    	final_idxs_to_prune = Set{Int}()
+    	for idx in candidate_idxs
+        	if flux_vector[idx] < flux_threshold
+            	push!(final_idxs_to_prune, idx)
+        	end
+    	end
+	else
+		final_idxs_to_prune = candidate_idxs
+	end
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p, total_flux
+end
+
+
+
+# ╔═╡ 991b1783-d70e-4bd7-856b-59cdc237b38e
+function reconstruct_MasterEquation(
+    S_new::Set{E},
+    S_old_vec::Vector{E},         
+    A_old::SparseMatrixCSC{T,Int}, 
+    model, rates, bc::Function, t::Real;
+    overlap_threshold::Real=0.3,
+) where {E,T}
+
+    # --- Setup ---
+    S_new_vec = collect(S_new)
+    n_new = length(S_new_vec)
+    new_id = Dict{E,Int}(s => i for (i,s) in enumerate(S_new_vec))
+    old_id  = Dict{E,Int}(s => i for (i,s) in enumerate(S_old_vec))
+
+    # --- Overlap check (can be kept as a performance heuristic) ---
+    n_retained = count(s -> haskey(old_id, s), S_new_vec)
+    if n_new == 0 || n_retained / n_new < overlap_threshold
+        return MasterEquation(S_new, model, rates, bc, t)
+    end
+    
+    I = Int[]; J = Int[]; V = T[]
+    @inbounds for (j_new, x) in enumerate(S_new_vec)
+        col_sum = zero(T)
+        
+        # Build the entire column from scratch based on propensities
+        for (k, ν) in enumerate(model.stoichvecs)
+            y = x + ν
+            # Check if the destination `y` is in our new state space
+            i_new = get(new_id, y, 0)
+            
+            if i_new != 0
+                α = model.propensities[k](x, rates, t)
+                if α > 0
+                    # Allow duplicates for sparse() to sum them up
+                    push!(I, i_new); push!(J, j_new); push!(V, α)
+                    col_sum += α
+                end
+            end
+        end
+        
+        # Diagonal = minus the sum of all off-diagonals in this column
+        if col_sum > 0
+            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
+        end
+    end
+
+    A = sparse(I, J, V, n_new, n_new)
+    out_flow = spdiagm(0 => diag(A))
+    in_flow  = A - out_flow
+    
+    return A, in_flow, out_flow
+end
+
+# ╔═╡ 1f4bfd5c-1c44-4b07-ae58-1f704d133c5e
+fsp_sim_rober = begin
+    tf = 1e4
+    ϵ_dt = 0.01                     # flux-based dt budget
+    global next_log_iter = 1
+
+    # IC + setup
+    U₀ = CartesianIndex(Integer(1e4), 0, 0)
+    rates = [0.04, 3e6, 1e0]
+    bounds = (0, Integer(1e5 + 1))
+    boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+
+    global 𝒮ₜ = Set([U₀])
+    pₜ = zeros(length(𝒮ₜ))
+    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+
+    # time + logs
+    t = 0.0
+    sol_t = [t]
+    sol_S_size = [length(𝒮ₜ)]
+    sol = [(copy(𝒮ₜ), copy(pₜ))]
+    flx = Float64[]
+    tresh = Float64[]
+    dob = []
+
+    savefreq = 10
+    δt = 1e-5
+    iter = 0
+    log_target = 1e-6
+    log_factor = 1.025
+
+    # reconstruction cache
+    S_old = Set{eltype(𝒮ₜ)}()
+    A_old = spzeros(Float64, 0, 0)
+
+    while t < tf
+        global iter += 1
+		
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
+
+		if isempty(S_old) || nnz(A_old) == 0
+            # full build 
+            global A, in_flow, out_flow = MasterEquation(
+				𝒮ₜ, model, rates, boundary_condition, t)
+        else
+            # reconstruction 
+            global A, in_flow, out_flow = reconstruct_MasterEquation(
+                𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t;
+                overlap_threshold  = 0.3
+            )
+        end
+        
+
+        # 3) Adaptive step from max out-flux
+        in_flux  = Vector(in_flow * pₜ)
+        out_flux = Vector(-out_flow * pₜ)
+        max_flux = maximum(out_flux)
+        global δt = (max_flux > 0.0) ? (ϵ_dt / max_flux) : (tf - t)
+        global δt = min(δt, tf - t)
+
+        # 4) Advance probability
+        pₜ = expv(δt, A, pₜ)
+
+        # 5) Prune (robust) + renormalize
+        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.4; flux_tolerance=1e-9)
+        s = sum(pₜ)
+        if s <= 0
+            @warn "All probability mass lost in pruning – stopping"
+            break
+        end
+       global  pₜ ./= s
+
+        # 6) Advance time
+        global t += δt
+
+        # 7) Log on geometric schedule
+        if t >= log_target
+            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
+            push!(tresh, total_flux)
+            global log_target *= log_factor
+        end
+
+        # 8) Update reconstruction cache *after pruning*
+        global S_old = copy(𝒮ₜ)
+        global A_old = A
+    end
+end
+
+
+# ╔═╡ 87cebd5b-f264-4997-9520-38bf33ac7212
+begin
+	using BenchmarkTools, KernelDensity, Statistics
+	
+	# Create a benchmark suite
+	suite = BenchmarkGroup()
+	
+	# Define benchmarks
+	suite["MasterEquation"] = @benchmarkable MasterEquation(
+	    $𝒮ₜ, $model, $rates, $boundary_condition, $t
+	)
+	
+	suite["reconstruct_MasterEquation"] = @benchmarkable begin
+	    A1, in1_flow, out_flow = reconstruct_MasterEquation(
+	        $𝒮ₜ, collect($S_old), $A_old, $model, $rates, $boundary_condition, $t;
+	        overlap_threshold = 0.3
+	    )
+	end
+	
+	# Run the benchmark suite with sufficient samples
+	results = run(suite, verbose=true, samples=10000, seconds=5)
+	
+	# Extract timing data (convert to milliseconds for readability)
+	me_times = results["MasterEquation"].times ./ 1e6  # ns to ms
+	rec_times = results["reconstruct_MasterEquation"].times ./ 1e6  # ns to ms
+	
+	# Calculate statistics
+	stats_me = (
+	    median = median(me_times),
+	    mean = mean(me_times),
+	    std = std(me_times),
+	    min = minimum(me_times),
+	    max = maximum(me_times),
+	    q25 = quantile(me_times, 0.25),
+	    q75 = quantile(me_times, 0.75)
+	)
+	
+	stats_rec = (
+	    median = median(rec_times),
+	    mean = mean(rec_times),
+	    std = std(rec_times),
+	    min = minimum(rec_times),
+	    max = maximum(rec_times),
+	    q25 = quantile(rec_times, 0.25),
+	    q75 = quantile(rec_times, 0.75)
+	)
+	
+	speedup = stats_me.median / stats_rec.median
+	
+	# SIAM-compliant theme
+	local siam_theme = Theme(
+	    fontsize = 10,
+	    font = "CMU Serif",
+	    
+	    Axis = (
+	        titlesize = 10,
+	        xlabelsize = 10,
+	        ylabelsize = 10,
+	        xticklabelsize = 9,
+	        yticklabelsize = 9,
+	        
+	        xgridvisible = false,
+	        ygridvisible = false,
+	        
+	        leftspinevisible = true,
+	        rightspinevisible = true,
+	        topspinevisible = true,
+	        bottomspinevisible = true,
+	        
+	        spinewidth = 0.75,
+	        xtickwidth = 0.75,
+	        ytickwidth = 0.75,
+	        xtickalign = 1,
+	        ytickalign = 1,
+	        xticksize = 3,
+	        yticksize = 3,
+	    ),
+	    
+	    Legend = (
+	        framevisible = false,
+	        patchsize = (20, 3),
+	        labelsize = 9,
+	        rowgap = 2,
+	        padding = (2, 2, 2, 2),
+	    ),
+	    
+	    Lines = (
+	        linewidth = 1.5,
+	    ),
+	    
+	    backgroundcolor = :white,
+	)
+	
+	set_theme!(siam_theme)
+	
+	# Create figure with SIAM dimensions
+	local fig = Figure(size = (7*72, 3.5*72), figure_padding = 5)
+	
+	# --- Panel (a): Density plot ---
+	local ax_a = Axis(
+	    fig[1, 1],
+	    xlabel = "Time (ms)",
+	    ylabel = "Density",
+	    title = "(a)",
+	    titlealign = :left,
+		xscale = log10
+	)
+	
+	# Compute kernel density estimates
+	kde_me = kde(me_times)
+	kde_rec = kde(rec_times)
+	
+	lines!(ax_a, kde_me.x, kde_me.density,
+	    label = "MasterEquation",
+	    color = :black,
+	    linestyle = :solid,
+	    linewidth = 1.5)
+	
+	lines!(ax_a, kde_rec.x, kde_rec.density,
+	    label = "reconstruct_ME",
+	    color = :black,
+	    linestyle = :dash,
+	    linewidth = 1.5)
+	
+	# Add vertical lines for medians
+	vlines!(ax_a, [stats_me.median],
+	    color = (:gray, 0.5),
+	    linewidth = 1,
+	    linestyle = :dot)
+	
+	vlines!(ax_a, [stats_rec.median],
+	    color = (:gray, 0.5),
+	    linewidth = 1,
+	    linestyle = :dot)
+	
+	axislegend(ax_a, position = :rt, framevisible = false)
+	
+	# --- Panel (b): Cumulative distribution ---
+	local ax_b = Axis(
+	    fig[1, 2],
+	    xlabel = "Time (ms)",
+	    ylabel = "Cumulative probability",
+	    title = "(b)",
+	    titlealign = :left
+	)
+	
+	times_sorted_me = sort(me_times)
+	times_sorted_rec = sort(rec_times)
+	cdf_me = (1:length(times_sorted_me)) ./ length(times_sorted_me)
+	cdf_rec = (1:length(times_sorted_rec)) ./ length(times_sorted_rec)
+	
+	lines!(ax_b, times_sorted_me, cdf_me,
+	    label = "MasterEquation",
+	    color = :black,
+	    linestyle = :solid,
+	    linewidth = 1.5)
+	
+	lines!(ax_b, times_sorted_rec, cdf_rec,
+	    label = "reconstruct_ME",
+	    color = :black,
+	    linestyle = :dash,
+	    linewidth = 1.5)
+	
+	# Add horizontal line at median (0.5)
+	hlines!(ax_b, [0.5],
+	    color = (:gray, 0.5),
+	    linewidth = 1,
+	    linestyle = :dot)
+	
+	axislegend(ax_b, position = :rb, framevisible = false)
+	
+	# Adjust spacing
+	colgap!(fig.layout, 1, 10)
+	
+	# Display the figure
+	display(fig)
+	
+	# Save in publication formats
+	save("benchmark_comparison.pdf", fig, pt_per_unit = 1)
+	save("benchmark_comparison.eps", fig, pt_per_unit = 1)
+	save("benchmark_comparison.png", fig, px_per_unit = 3)
+	
+	# Print detailed summary
+	println("\n" * "="^70)
+	println("Benchmark Results Summary")
+	println("="^70)
+	println("\nTable data:")
+	println("Method                     | Median (ms) | Mean (ms) | Std (ms)")
+	println("-"^70)
+	println("MasterEquation             | $(round(stats_me.median, digits=2)) | $(round(stats_me.mean, digits=2)) | $(round(stats_me.std, digits=2))")
+	println("reconstruct_MasterEquation | $(round(stats_rec.median, digits=2)) | $(round(stats_rec.mean, digits=2)) | $(round(stats_rec.std, digits=2))")
+	println("-"^70)
+	println("Speedup: $(round(speedup, digits=2))×")
+	
+	println("\nSaved files:")
+	println("  - benchmark_comparison.pdf (vector, preferred)")
+	println("  - benchmark_comparison.eps (vector, alternative)")
+	println("  - benchmark_comparison.png (raster, preview)")
+	
+	println("\nSuggested caption:")
+	println("Figure X. Performance comparison of MasterEquation (solid line) and")
+	println("reconstruct_MasterEquation (dashed line). (a) Probability density")
+	println("functions showing the distribution of execution times. Vertical dotted")
+	println("lines indicate median values. (b) Cumulative distribution functions.")
+	println("The horizontal dotted line marks the median (50th percentile).")
+	println("reconstruct_MasterEquation achieves a $(round(speedup, digits=2))× speedup")
+	println("with a median execution time of $(round(stats_rec.median, digits=2)) ms")
+	println("compared to $(round(stats_me.median, digits=2)) ms for MasterEquation.")
+	println("="^70)
+end
+
+# ╔═╡ a6ceeed5-fd5e-46df-9fa0-fcbcbba10bc2
+intersect(𝒮ₜ, S_old) |> length
+
+# ╔═╡ 99bfe846-d6a5-4412-890f-4115ba7ef470
+𝒮ₜ |> length
+
+# ╔═╡ 0b0b322c-8b67-4ecd-9488-8d05692dfe01
+stats_me
+
 # ╔═╡ 655b46ff-bec5-4dfe-9cfc-45e3418d8be5
+# ╠═╡ disabled = true
+#=╠═╡
 fsp_sim_rober = begin
     tf = 1e4
     ϵ_dt = 0.01# Tolerance for flux-based adaptive dt
@@ -120,13 +541,16 @@ fsp_sim_rober = begin
 								model, 
 								boundary_condition, 
 								1)
+		
 
         global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
 													 model,
 													 rates,
 													 boundary_condition, 
 													 t)
-
+		
+		
+		
 		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
 		max_flux = maximum(out_flux)
 
@@ -141,9 +565,8 @@ fsp_sim_rober = begin
 
 		out_flux = Vector(-out_flow * pₜ)
 
-		𝒮ₜ, pₜ, total_flux, flux_threshold = purgea!(𝒮ₜ, 
+		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
 													 pₜ, 
-													 out_flux, 
 													 model, 
 													 rates, 
 													 t, 
@@ -173,6 +596,7 @@ end
     end
 end
 
+  ╠═╡ =#
 
 # ╔═╡ ac8c249b-0284-4355-b410-8d47efcc829b
 begin
@@ -183,7 +607,12 @@ begin
 end
 
 # ╔═╡ 158bc641-f77f-46b8-816d-9685562c4930
-sum(fsp_mean, dims=2)
+begin
+	pop!(sol)
+		    pop!(sol_t)
+		    pop!(sol_S_size)
+		    pop!(tresh)
+end
 
 # ╔═╡ 7836cb30-4206-4b27-9457-ae9f35244bf4
 begin
@@ -201,107 +630,183 @@ end
 # ╔═╡ 1a3f749e-6dce-42e8-9b2e-bd096e24e665
 begin
 	
+	# SIAM-compliant theme
 	siam_theme = Theme(
-	    font = "Computer Modern",
-	    fontsize = 18, 
+	    fontsize = 10,
+	    font = "CMU Serif",  # Computer Modern Unicode
 	    
 	    Axis = (
-	        titlefont = :bold,
-	        titlesize = 22,
-	        xlabelsize = 20,
-	        ylabelsize = 20,
-	        xticklabelsize = 16,
-	        yticklabelsize = 16,
+	        titlesize = 10,
+	        xlabelsize = 10,
+	        ylabelsize = 10,
+	        xticklabelsize = 9,
+	        yticklabelsize = 9,
 	        
-	        xgridstyle = :dash,
-	        ygridstyle = :dash,
-	        xgridwidth = 0.7,
-	        ygridwidth = 0.7,
-	        xgridcolor = :gray80,
-	        ygridcolor = :gray80,
-			xscale=log10,
-	
+	        # Remove background grid (SIAM style)
+	        xgridvisible = false,
+	        ygridvisible = false,
+	        
+	        # Box frame style (all four spines visible)
 	        leftspinevisible = true,
-	        rightspinevisible = false,
-	        topspinevisible = false,
+	        rightspinevisible = true,
+	        topspinevisible = true,
 	        bottomspinevisible = true,
+	        
+	        # Spine styling
+	        spinewidth = 0.75,
+	        
+	        # Tick styling
+	        xticklabelrotation = 0.0,
+	        xtickwidth = 0.75,
+	        ytickwidth = 0.75,
+	        xtickalign = 1,
+	        ytickalign = 1,
+	        xticksize = 3,
+	        yticksize = 3,
 	    ),
-	
+	    
 	    Legend = (
 	        framevisible = false,
-	        patchsize = (30, 10),
-	        labelsize = 16,
+	        patchsize = (20, 3),
+	        labelsize = 9,
+	        rowgap = 2,
+	        colgap = 5,
+	        padding = (2, 2, 2, 2),
 	    ),
-	
+	    
 	    Lines = (
-	        color = :black,
-	        linewidth = 2.0,
-	    )
+	        linewidth = 1.5,
+	    ),
+	    
+	    # Remove figure background
+	    backgroundcolor = :white,
 	)
 	
-	begin
-	    # Apply the custom theme for all subsequent plots
-	    set_theme!(siam_theme)
+	# Apply the SIAM theme
+	set_theme!(siam_theme)
 	
-	    local num_steps = length(sol_t)
+	# Extract data
+	num_steps = length(sol_t)
+	time_points = sol_t[1:num_steps]
+	dt_values = vcat([0.0], sol_t[2:num_steps] .- sol_t[1:num_steps-1])
+	state_space_sizes = sol_S_size[1:num_steps]
+	flux_thresholds = tresh[1:num_steps-2]
 	
-	    local time_points = sol_t[1:num_steps]
-	    global dt_values = vcat([0.0], sol_t[2:num_steps] .- sol_t[1:num_steps-1])
-	    local state_space_sizes = sol_S_size[1:num_steps]
-	    local total_fluxes = tresh[1:num_steps-2] # Assuming flx has one less element
-	    local flux_thresholds = tresh[1:num_steps-2] # Assuming tresh has one less element
-	    
-	    # Ensure fsp_mean has dimensions (timesteps, species)
-	    mean_A = fsp_mean[1:num_steps, 1]
-	    mean_B = fsp_mean[1:num_steps, 2]
-	    mean_C = fsp_mean[1:num_steps, 3]
+	mean_A = fsp_mean[1:num_steps, 1]
+	mean_B = fsp_mean[1:num_steps, 2]
+	mean_C = fsp_mean[1:num_steps, 3]
 	
-	    # Create the figure with a 2x2 grid layout
-	    local fig = Figure(size = (1200, 800))
+	# Create figure with SIAM standard dimensions
+	# Two-column width ≈ 7 inches, scale appropriately
+	fig = Figure(
+	    size = (7*72, 5*72),  # 7×5 inches at 72 pt/inch
+	    figure_padding = 5
+	)
 	
-	    # --- Top Row ---
-	    
-	    # Panel 1: Mean Trajectories
-	    ax11 = Axis(fig[1, 1], title = "Mean Trajectories", xlabel = "Simulation Time, t", ylabel = "Mean Population")
-	    lines!(ax11, time_points, mean_A, label = "A (y₁)", color=:black)
-	    lines!(ax11, time_points, mean_B .* 1.0e4, label = "B (y₂) * 2.5e5", linestyle = :dash, color=:black)
-	    lines!(ax11, time_points, mean_C, label = "C (y₃)", linestyle = :dot, color=:black)
-	    axislegend(ax11, position = :rc)
+	# --- Panel (a): Mean Trajectories ---
+	ax_a = Axis(
+	    fig[1, 1],
+	    xlabel = "Time, t",
+	    ylabel = "Mean population",
+	    title = "(a)",
+	    titlealign = :left,
+	    xscale = log10
+	)
 	
-	    # Panel 2: State Space Size
-	    ax12 = Axis(fig[1, 2], title = "State Space Size", xlabel = "Simulation Time, t", ylabel = "|S|")
-	    lines!(ax12, time_points, state_space_sizes, color=:black)
-	    
-	    # --- Bottom Row ---
+	lines!(ax_a, time_points, mean_A, 
+	    label = L"A ($y_1$)", 
+	    color = :black, 
+	    linestyle = :solid)
+	lines!(ax_a, time_points, mean_B .* 1.0e4, 
+	    label = L"B ($y_2$) $\times 10^4$", 
+	    color = :black, 
+	    linestyle = :dash)
+	lines!(ax_a, time_points, mean_C, 
+	    label = L"C ($y_3$)", 
+	    color = :black, 
+	    linestyle = :dot)
 	
-	    # Panel 3: Adaptive Time Step (dt)
-	    ax21 = Axis(fig[2, 1], title = "Adaptive Time Step", xlabel = "Simulation Time, t", ylabel = "δt", yscale=log2)
-	    lines!(ax21, sol_t[2:end], diff(sol_t), color=:black)
+	axislegend(ax_a, position = :rb, framevisible = false)
 	
-	    # Panel 4: Flux Diagnostics
-	    ax22 = Axis(fig[2, 2], title = "Flux Diagnostics", xlabel = "Simulation Time, t", ylabel = "Flux Value")
-	    #lines!(ax22, time_points[2:end], total_fluxes, label = "Total Flux")
-	    lines!(ax22, time_points[3:end], flux_thresholds, label = "Flux Threshold", linestyle = :dash, color=:black)
-	    axislegend(ax22, position = :rc)
-	    
-	    # Link all x-axes for synchronized zooming/panning
-	    linkxaxes!(ax11, ax12, ax21, ax22)
+	# --- Panel (b): State Space Size ---
+	ax_b = Axis(
+	    fig[1, 2],
+	    xlabel = "Time, t",
+	    ylabel = L"State space size, $|S|$",
+	    title = "(b)",
+	    titlealign = :left,
+	    xscale = log10
+	)
 	
-	    # Add spacing between rows for clarity
-	    rowgap!(fig.layout, 1, 60)
+	lines!(ax_b, time_points, state_space_sizes, 
+	    color = :black, 
+	    linewidth = 1.5)
 	
-	    # Display the final figure
-	    fig
-	end
+	# --- Panel (c): Adaptive Time Step ---
+	ax_c = Axis(
+	    fig[2, 1],
+	    xlabel = "Time, t",
+	    ylabel = L"Time step, $\delta t$",
+	    title = "(c)",
+	    titlealign = :left,
+	    xscale = log10,
+	    yscale = log10
+	)
+	
+	lines!(ax_c, sol_t[2:end], diff(sol_t), 
+	    color = :black, 
+	    linewidth = 1.5)
+	
+	# --- Panel (d): Flux Diagnostics ---
+	ax_d = Axis(
+	    fig[2, 2],
+	    xlabel = "Time, t",
+	    ylabel = "Flux threshold",
+	    title = "(d)",
+	    titlealign = :left,
+	    xscale = log10
+	)
+	
+	lines!(ax_d, time_points[3:end], flux_thresholds, 
+	    color = :black, 
+	    linewidth = 1.5,
+	    linestyle = :dash)
+	
+	# Link all x-axes for synchronized zooming/panning
+	linkxaxes!(ax_a, ax_b, ax_c, ax_d)
+	
+	# Adjust spacing between panels
+	rowgap!(fig.layout, 1, 10)
+	colgap!(fig.layout, 1, 10)
+	
+	# Display the figure
+	display(fig)
+	
+	# Save in publication formats
+	save("simulation_results.pdf", fig, pt_per_unit = 1)
+	save("simulation_results.eps", fig, pt_per_unit = 1)
+	save("simulation_results.png", fig, px_per_unit = 3)
+	
+	println("\nSaved files:")
+	println("  - simulation_results.pdf (vector, preferred)")
+	println("  - simulation_results.eps (vector, alternative)")
+	println("  - simulation_results.png (raster, preview)")
+	
+	println("\nSuggested caption:")
+	println("Figure X. Adaptive FSP simulation results. (a) Mean population trajectories")
+	println("for species A, B (scaled by 10⁴), and C. (b) Evolution of state space size.")
+	println("(c) Adaptive time step selection showing logarithmic scaling. (d) Flux")
+	println("threshold evolution used for state space truncation control.")
 end
 
 # ╔═╡ cfc8e508-0dd0-4e29-9309-ef1d22a8cb5f
-sol_t
+fig
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
@@ -310,16 +815,19 @@ ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+KernelDensity = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NaNMath = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 Arpack = "~0.5.4"
+BenchmarkTools = "~1.6.0"
 CairoMakie = "~0.13.10"
 Catalyst = "~15.0.8"
 DifferentialEquations = "~7.16.1"
@@ -328,6 +836,7 @@ ExponentialUtilities = "~1.27.0"
 Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
+KernelDensity = "~0.6.10"
 NaNMath = "~1.1.3"
 PROPACK = "~0.5.0"
 ProgressLogging = "~0.1.5"
@@ -341,7 +850,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "86e82fdbde1a7cee831f6b25706ec98ea3d80676"
+project_hash = "3876981f24767b7c58abca9cfaff79d1ec54aeae"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -536,6 +1045,12 @@ version = "1.11.0"
 git-tree-sha1 = "0b3c211ec48050496075523ea7ee045db9341a42"
 uuid = "18cc8868-cbac-4acf-b575-c8ff214dc66f"
 version = "1.3.1"
+
+[[deps.BenchmarkTools]]
+deps = ["Compat", "JSON", "Logging", "Printf", "Profile", "Statistics", "UUIDs"]
+git-tree-sha1 = "e38fbc49a620f5d0b660d7f543db1009fe0f8336"
+uuid = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+version = "1.6.0"
 
 [[deps.Bijections]]
 git-tree-sha1 = "a2d308fcd4c2fb90e943cf9cd2fbfa9c32b69733"
@@ -1167,9 +1682,9 @@ version = "0.1.6"
 
 [[deps.FFMPEG_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "8cc47f299902e13f90405ddb5bf87e5d474c0d38"
+git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "6.1.2+0"
+version = "4.4.4+1"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
@@ -2680,6 +3195,10 @@ deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 version = "1.11.0"
 
+[[deps.Profile]]
+uuid = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
+version = "1.11.0"
+
 [[deps.ProgressLogging]]
 deps = ["Logging", "SHA", "UUIDs"]
 git-tree-sha1 = "d95ed0324b0799843ac6f7a6a85e65fe4e5173f0"
@@ -3535,16 +4054,16 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 version = "17.4.0+2"
 
 [[deps.x264_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "14cc7083fc6dff3cc44f2bc435ee96d06ed79aa7"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "4fea590b89e6ec504593146bf8b988b2c00922b2"
 uuid = "1270edf5-f2f9-52d2-97e9-ab00b5d0237a"
-version = "10164.0.1+0"
+version = "2021.5.5+0"
 
 [[deps.x265_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "dcc541bb19ed5b0ede95581fb2e41ecf179527d2"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "ee567a171cce03570d77ad3a43e90218e38937a9"
 uuid = "dfaa095f-4041-5dcd-9319-2fabd8486b76"
-version = "3.6.0+0"
+version = "3.5.0+0"
 """
 
 # ╔═╡ Cell order:
@@ -3553,6 +4072,13 @@ version = "3.6.0+0"
 # ╠═068fa5b2-629c-44a7-aaa1-f1e2ed68c840
 # ╠═08430a94-9c7f-4616-9141-7846bd7e2c7a
 # ╠═edbbe300-3044-4aef-855b-4587ef6a8c90
+# ╠═328472f8-f139-40ae-a9f0-4fd10a6159d9
+# ╠═991b1783-d70e-4bd7-856b-59cdc237b38e
+# ╠═1f4bfd5c-1c44-4b07-ae58-1f704d133c5e
+# ╠═a6ceeed5-fd5e-46df-9fa0-fcbcbba10bc2
+# ╠═99bfe846-d6a5-4412-890f-4115ba7ef470
+# ╠═87cebd5b-f264-4997-9520-38bf33ac7212
+# ╠═0b0b322c-8b67-4ecd-9488-8d05692dfe01
 # ╠═655b46ff-bec5-4dfe-9cfc-45e3418d8be5
 # ╠═ac8c249b-0284-4355-b410-8d47efcc829b
 # ╠═158bc641-f77f-46b8-816d-9685562c4930
