@@ -145,101 +145,6 @@ end
 
 
 
-# ╔═╡ 44234db1-1a79-4283-9bac-e17b6b3251a1
-function reconstruct_master_equation(
-    active_states_new::Set{ElementType},
-    active_states_old::Set{ElementType},
-    A_old::SparseMatrixCSC{T, Int},
-    model::ModelType,
-    rates::Vector{T},
-    boundary_condition::Function,
-    t::T
-) where {T, ElementType, ModelType}
-
-    retained = active_states_new ∩ active_states_old
-    new_states = setdiff(active_states_new, active_states_old)
-    
-    if length(retained) < 0.3 * length(active_states_new)
-        return MasterEquation(active_states_new, model, rates, boundary_condition, t)
-    end
-    
-    states_new_vec = collect(active_states_new)
-    states_old_vec = collect(active_states_old)
-    
-    new_id = Dict(s => i for (i, s) in enumerate(states_new_vec))
-    old_id = Dict(s => i for (i, s) in enumerate(states_old_vec))
-    
-    n_new = length(states_new_vec)
-    I, J, V = Int[], Int[], T[]
-    
-    rows, vals = rowvals(A_old), nonzeros(A_old)
-    
-    # Build off-diagonals
-    for (j_new, state_j) in enumerate(states_new_vec)
-        if state_j in retained
-            j_old = old_id[state_j]
-            for nz in nzrange(A_old, j_old)
-                i_old = rows[nz]
-                state_i = states_old_vec[i_old]
-                
-                if state_i != state_j && state_i in retained
-                    i_new = new_id[state_i]
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, vals[nz])
-                end
-            end
-            
-            sources = DiscStochSim.expand_backward(state_j, model, boundary_condition)
-            for source in sources
-                if source in new_states && source in active_states_new
-                    i_new = new_id[source]
-                    S = state_j - source
-                    k = FindElement(S, model.stoichvecs)
-                    α = model.propensities[k](source, rates, t)
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, α)
-                end
-            end
-        else
-            sources = DiscStochSim.expand_backward(state_j, model, boundary_condition)
-            for source in sources
-                if source in active_states_new
-                    i_new = new_id[source]
-                    S = state_j - source
-                    k = FindElement(S, model.stoichvecs)
-                    α = model.propensities[k](source, rates, t)
-                    push!(I, i_new)
-                    push!(J, j_new)
-                    push!(V, α)
-                end
-            end
-        end
-    end
-    
-    # Compute diagonals
-    for (i_new, state_i) in enumerate(states_new_vec)
-        total = sum(
-            model.propensities[k](state_i, rates, t)
-            for (k, S) in enumerate(model.stoichvecs)
-            if (state_i + S) in active_states_new;
-            init=zero(T)
-        )
-        push!(I, i_new)
-        push!(J, i_new)
-        push!(V, -total)
-    end
-    
-    A = sparse(I, J, V, n_new, n_new)
-    
-    # Compute in_flow and out_flow (not used in reconstruction, return zeros)
-    in_flow = spzeros(T, n_new, n_new)
-    out_flow = spzeros(T, n_new, n_new)
-    
-    return A, in_flow, out_flow
-end
-
 # ╔═╡ fefdccd5-6870-4c17-84cb-ad0896caffc0
 
 
@@ -249,7 +154,6 @@ function reconstruct_MasterEquation(
     S_old_vec::Vector{E},         
     A_old::SparseMatrixCSC{T,Int}, 
     model, rates, bc::Function, t::Real;
-    overlap_threshold::Real=0.3,
 ) where {E,T}
 
     # --- Setup ---
@@ -260,7 +164,7 @@ function reconstruct_MasterEquation(
 
     # --- Overlap check (can be kept as a performance heuristic) ---
     n_retained = count(s -> haskey(old_id, s), S_new_vec)
-    if n_new == 0 || n_retained / n_new < overlap_threshold
+    if n_new == 0 #|| n_retained / n_new < overlap_threshold
         return MasterEquation(S_new, model, rates, bc, t)
     end
     
@@ -297,15 +201,17 @@ function reconstruct_MasterEquation(
     return A, in_flow, out_flow
 end
 
+# ╔═╡ 0555410a-e4c5-4777-bb5e-dc819bfa316f
+exp(-100000)
+
 # ╔═╡ 7cce53ab-f500-44e9-85f3-0233b769fefd
 fsp_sim_oragonator = begin
-    tf = 5
+    tf = 3
     ϵ_dt = 1.0
 
     global 𝒮ₜ = Set([U₀])
     global pₜ = zeros(length(𝒮ₜ))
     global pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
     global t = 0.0
     global sol_t = [t]
     global sol_S_size = [length(𝒮ₜ)]
@@ -322,22 +228,23 @@ fsp_sim_oragonator = begin
 	# reconstruction cache
     S_old = Set{eltype(𝒮ₜ)}()
     A_old = spzeros(Float64, 0, 0)
-
+	tim3=[]
+	
     while t < tf
         # 1) SSA expand (your existing API)
         global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
 
-		if true#isempty(S_old) || nnz(A_old) == 0
-            # full build 
-            global A, in_flow, out_flow = MasterEquation(
-				𝒮ₜ, model, rates, boundary_condition, t)
-        else
-            # reconstruction 
-            global A, in_flow, out_flow = reconstruct_MasterEquation(
-                𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t;
-                overlap_threshold  = 0.7
-            )
-        end
+		el= @elapsed begin
+			if isempty(S_old) || nnz(A_old) == 0
+            	# full build 
+            	global A, in_flow, out_flow = MasterEquation(
+					𝒮ₜ, model, rates, boundary_condition, t)
+			else
+            	# reconstruction 
+            	global A, in_flow, out_flow = reconstruct_MasterEquation(
+                	𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t)
+        	end
+		end
 		
         # update cache for next step (use the CURRENT compact order)
         global A_old = A
@@ -355,8 +262,8 @@ fsp_sim_oragonator = begin
         # 4) Evolve
         pₜ = expv(δt, A, pₜ)
 
-        # 5) Prune (your robust purge)
-        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=1.0)
+        # 5) Prune 
+        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=0.0001)
         global pₜ ./= sum(pₜ)
         @assert sum(pₜ) ≈ 1.0
 
@@ -364,6 +271,7 @@ fsp_sim_oragonator = begin
         global t += δt
         
         if iter % 1e3 == 0
+			push!(tim3, el)
             push!(sol, (copy(𝒮ₜ), copy(pₜ)))
             push!(sol_t, t)
             push!(sol_S_size, length(𝒮ₜ))
@@ -375,6 +283,84 @@ fsp_sim_oragonator = begin
     end
 end
 
+# ╔═╡ 18ceadf7-c263-4d25-9633-6067621b82cc
+
+
+# ╔═╡ b2089789-66fa-4501-ac9e-d23ee7f5ad62
+t
+
+# ╔═╡ ee2c1eaa-c261-450a-95de-c16c848eabea
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+	f= Figure()
+	ax=Axis(f[1, 1]; yscale=log10)
+	lines!(ax, tim3, label="nopt", color=:black)
+	lines!(ax, tim2[1:length(tim3)], label="opt", color=:black, linestyle=:dashdot)
+
+	axislegend(ax)
+	f
+end
+  ╠═╡ =#
+
+# ╔═╡ 76ff0602-6857-49d9-bcc1-c07814b33756
+#@save "orag_times1.jld" tim3
+
+# ╔═╡ ced1d15c-56e8-47d7-8ae7-6021be478e39
+begin
+	sol_t_orag = copy(sol_t)
+	@save "orag_tim.jld" sol_t_orag 
+end
+
+# ╔═╡ 3ff7c188-d203-4466-83fd-d25d46105244
+Set([1, 2]) == Set([2, 1])
+
+# ╔═╡ ba1a6843-f89f-4ad0-94eb-8e12af091528
+begin
+	
+	"""
+	    spectral_gap(A::SparseMatrixCSC)
+	
+	Compute the spectral gap of a generator matrix A.
+	Returns λ_gap = min{-Re(λ) : λ ∈ σ(A), λ ≠ 0}
+	
+	The spectral gap measures the rate of exponential convergence to equilibrium.
+	"""
+	function spectral_gap(A::SparseMatrixCSC; tol=1e-8)
+	    n = size(A, 1)
+	    
+	    # For small matrices, use dense eigenvalue solver
+	    if n < 100
+	        eigs = eigvals(Matrix(A))
+	    else
+	        # For large matrices, use Arpack to find eigenvalues with largest real part
+	        # (which are closest to 0 for a generator matrix)
+	        try
+	            eigs, _ = eigs(A, nev=min(20, n-1), which=:LR)
+	        catch
+	            # Fallback to dense if sparse solver fails
+	            @warn "Sparse solver failed, using dense eigendecomposition"
+	            eigs = eigvals(Matrix(A))
+	        end
+	    end
+	    
+	    # Filter out the zero eigenvalue
+	    non_zero_eigs = eigs[abs.(eigs) .> tol]
+	    
+	    if isempty(non_zero_eigs)
+	        error("No non-zero eigenvalues found. Matrix may be rank-deficient.")
+	    end
+	    
+	    # Spectral gap is the smallest magnitude of real parts (most negative becomes most positive after negation)
+	    λ_gap = -maximum(real.(non_zero_eigs))
+	    
+	    if λ_gap <= 0
+	        @warn "Spectral gap is non-positive (λ_gap = $λ_gap). Matrix may not be irreducible or have incorrect structure."
+	    end
+	    
+	    return λ_gap
+	end
+end
 
 # ╔═╡ c8b60db2-5474-4c4e-9fc7-baed1fa6960c
 begin
@@ -426,13 +412,12 @@ begin
 	    ),
 	    
 	    Lines = (
-	        linewidth = 1.5,
+	        linewidth = 1.0,
 	    ),
 	    
 	    backgroundcolor = :white,
 	)
 	
-	# Apply the SIAM theme
 	set_theme!(siam_theme)
 	
 	# Prepare the data
@@ -455,9 +440,8 @@ begin
 	    ylabel = L"$\delta t$",
 	    title = "(a)",
 	    titlealign = :left,
-	    yscale = log10
 	)
-	lines!(ax_a, time_points[2:end], dt_values[2:end], color = :black, linewidth = 1.5)
+	lines!(ax_a, time_points[2:end], dt_values[2:end], color = :black, linewidth = 1.0)
 	
 	# Panel (b): State Space Size
 	ax_b = Axis(
@@ -505,9 +489,8 @@ begin
 	    ylabel = L"$Y$",
 	    title = "(d)",
 	    titlealign = :left,
-	    aspect = DataAspect()
 	)
-	lines!(ax_d, mean_y1, mean_y2, color = :black, linewidth = 1.5)
+	lines!(ax_d, mean_y1, mean_y2, color = :black, linewidth = 1.0)
 	
 	# Panel (e): X-Z projection
 	ax_e = Axis(
@@ -516,9 +499,8 @@ begin
 	    ylabel = L"$Z$",
 	    title = "(e)",
 	    titlealign = :left,
-	    aspect = DataAspect()
 	)
-	lines!(ax_e, mean_y1, mean_y3, color = :black, linewidth = 1.5)
+	lines!(ax_e, mean_y1, mean_y3, color = :black, linewidth = 1.0)
 	
 	# Panel (f): Y-Z projection
 	ax_f = Axis(
@@ -527,9 +509,8 @@ begin
 	    ylabel = L"$Z$",
 	    title = "(f)",
 	    titlealign = :left,
-	    aspect = DataAspect()
 	)
-	lines!(ax_f, mean_y2, mean_y3, color = :black, linewidth = 1.5)
+	lines!(ax_f, mean_y2, mean_y3, color = :black, linewidth = 1.0)
 	
 	# Adjust spacing
 	rowgap!(fig.layout, 1, 10)
@@ -554,13 +535,20 @@ begin
 	println("for species X (solid), Y (dashed), and Z (dotted). (d-f) Phase space")
 	println("projections showing limit cycle behavior: (d) X-Y plane, (e) X-Z plane,")
 	println("(f) Y-Z plane.")
+	fig
 end
+
+# ╔═╡ e0f5a3f3-2bd5-401a-a40d-f20f38c3d2ba
+lines(tim1)
 
 # ╔═╡ 7be857e9-5409-4eda-9cdd-a32ecc02a81c
 t
 
 # ╔═╡ 1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
 save("orag.png", fig)
+
+# ╔═╡ f8b9f831-61e5-4099-9c10-07178f7c2638
+
 
 # ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
 
@@ -617,7 +605,7 @@ save("orag.png", fig)
 
 
 # ╔═╡ 90b624e8-6531-43c0-b994-f959faf4accf
-t
+100000*60000*30000
 
 # ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
 # ╠═╡ disabled = true
@@ -899,9 +887,9 @@ StatsBase = "~0.34.5"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.6"
+julia_version = "1.12.0"
 manifest_format = "2.0"
-project_hash = "3d7ab311adfb7d847b2fdbb9a70e41d8a9c6bfb7"
+project_hash = "b0c4c6f6acbf30d8ac5cf358c83c29af6fc6ba19"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -1379,7 +1367,7 @@ version = "0.1.1"
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.1.1+0"
+version = "1.3.0+1"
 
 [[deps.CompositeTypes]]
 git-tree-sha1 = "bce26c3dab336582805503bed209faab1c279768"
@@ -2319,6 +2307,11 @@ git-tree-sha1 = "937da4713526b96ac9a178e2035019d3b78ead4a"
 uuid = "70703baa-626e-46a2-a12c-08ffd08c73b4"
 version = "0.4.10"
 
+[[deps.JuliaSyntaxHighlighting]]
+deps = ["StyledStrings"]
+uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
+version = "1.12.0"
+
 [[deps.JumpProcesses]]
 deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "DiffEqCallbacks", "DocStringExtensions", "FunctionWrappers", "Graphs", "LinearAlgebra", "Markdown", "PoissonRandom", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "Setfield", "StaticArrays", "SymbolicIndexingInterface", "UnPack"]
 git-tree-sha1 = "f8da88993c914357031daf0023f18748ff473924"
@@ -2431,24 +2424,24 @@ uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
 version = "0.6.4"
 
 [[deps.LibCURL_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "8.6.0+0"
+version = "8.11.1+1"
 
 [[deps.LibGit2]]
-deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
+deps = ["LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 version = "1.11.0"
 
 [[deps.LibGit2_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll"]
 uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
-version = "1.7.2+0"
+version = "1.9.0+0"
 
 [[deps.LibSSH2_jll]]
-deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.0+1"
+version = "1.11.3+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -2509,7 +2502,7 @@ version = "7.4.0"
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.LinearOperators]]
 deps = ["FastClosures", "LinearAlgebra", "Printf", "Requires", "SparseArrays", "TimerOutputs"]
@@ -2672,7 +2665,7 @@ uuid = "dbb5928d-eab1-5f90-85c2-b9b0edb7c900"
 version = "0.4.2"
 
 [[deps.Markdown]]
-deps = ["Base64"]
+deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
 
@@ -2709,7 +2702,8 @@ uuid = "739be429-bea8-5141-9913-cc70e7f3736d"
 version = "1.1.9"
 
 [[deps.MbedTLS_jll]]
-deps = ["Artifacts", "Libdl"]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "926c6af3a037c68d02596a44c22ec3595f5f760b"
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
 version = "2.28.6+0"
 
@@ -2770,7 +2764,7 @@ version = "0.3.7"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2023.12.12"
+version = "2025.5.20"
 
 [[deps.MuladdMacro]]
 git-tree-sha1 = "cac9cc5499c25554cba55cd3c30543cff5ca4fab"
@@ -2815,7 +2809,7 @@ version = "1.1.1"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
-version = "1.2.0"
+version = "1.3.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
@@ -2920,7 +2914,7 @@ version = "0.3.29+0"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.27+1"
+version = "0.3.29+0"
 
 [[deps.OpenEXR]]
 deps = ["Colors", "FileIO", "OpenEXR_jll"]
@@ -2937,7 +2931,7 @@ version = "3.2.4+0"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.5+0"
+version = "0.8.7+0"
 
 [[deps.OpenMPI_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Hwloc_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "MPIPreferences", "TOML", "Zlib_jll"]
@@ -2952,8 +2946,7 @@ uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
 version = "1.5.0"
 
 [[deps.OpenSSL_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "87510f7292a2b21aeff97912b0898f9553cc5c2c"
+deps = ["Artifacts", "Libdl"]
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "3.5.1+0"
 
@@ -3183,7 +3176,7 @@ version = "1.2.0"
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+1"
+version = "10.44.0+1"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
@@ -3248,7 +3241,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.11.0"
+version = "1.12.0"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -3337,9 +3330,9 @@ version = "0.4.29"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
-git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
+git-tree-sha1 = "516f18f048a195409d6e072acf879a9f017d3900"
 uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
-version = "1.2.1"
+version = "1.3.2"
 
 [[deps.Preferences]]
 deps = ["TOML"]
@@ -3424,7 +3417,7 @@ version = "2.11.2"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.REPL]]
-deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
+deps = ["InteractiveUtils", "JuliaSyntaxHighlighting", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
@@ -3721,7 +3714,7 @@ version = "1.2.1"
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.SparseConnectivityTracer]]
 deps = ["ADTypes", "DocStringExtensions", "FillArrays", "LinearAlgebra", "Random", "SparseArrays"]
@@ -3903,7 +3896,7 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "7.7.0+0"
+version = "7.8.3+2"
 
 [[deps.Sundials]]
 deps = ["CEnum", "DataStructures", "DiffEqBase", "Libdl", "LinearAlgebra", "Logging", "PrecompileTools", "Reexport", "SciMLBase", "SparseArrays", "Sundials_jll"]
@@ -4289,7 +4282,7 @@ version = "1.6.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+1"
+version = "1.3.1+2"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -4336,7 +4329,7 @@ version = "0.15.2+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.11.0+0"
+version = "5.13.1+1"
 
 [[deps.libdecor_jll]]
 deps = ["Artifacts", "Dbus_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pango_jll", "Wayland_jll", "xkbcommon_jll"]
@@ -4395,7 +4388,7 @@ version = "1.1.7+0"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.59.0+0"
+version = "1.64.0+1"
 
 [[deps.oneTBB_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -4406,7 +4399,7 @@ version = "2022.0.0+0"
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+2"
+version = "17.5.0+2"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -4437,14 +4430,23 @@ version = "1.9.2+0"
 # ╠═836c5ee4-7ac2-47ed-bfee-874582ccba8a
 # ╠═64061d79-cbfe-4219-a7a8-cdc57ffb9344
 # ╠═baff6019-71fb-4028-9ac1-6d98302a1e77
-# ╠═44234db1-1a79-4283-9bac-e17b6b3251a1
 # ╠═fefdccd5-6870-4c17-84cb-ad0896caffc0
 # ╠═316dce0f-1a25-4bd1-8279-0d6768dfa61f
+# ╠═0555410a-e4c5-4777-bb5e-dc819bfa316f
 # ╠═7cce53ab-f500-44e9-85f3-0233b769fefd
+# ╠═18ceadf7-c263-4d25-9633-6067621b82cc
+# ╠═b2089789-66fa-4501-ac9e-d23ee7f5ad62
+# ╠═ee2c1eaa-c261-450a-95de-c16c848eabea
+# ╠═76ff0602-6857-49d9-bcc1-c07814b33756
+# ╠═ced1d15c-56e8-47d7-8ae7-6021be478e39
+# ╠═3ff7c188-d203-4466-83fd-d25d46105244
+# ╠═ba1a6843-f89f-4ad0-94eb-8e12af091528
+# ╠═e0f5a3f3-2bd5-401a-a40d-f20f38c3d2ba
 # ╠═c8b60db2-5474-4c4e-9fc7-baed1fa6960c
 # ╠═9b71854c-b269-4ca2-b4bc-32b6401b1b9d
 # ╠═7be857e9-5409-4eda-9cdd-a32ecc02a81c
 # ╠═1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
+# ╠═f8b9f831-61e5-4099-9c10-07178f7c2638
 # ╠═006cb103-dc41-4742-a440-35923c802dc5
 # ╠═90b624e8-6531-43c0-b994-f959faf4accf
 # ╠═9f592c0e-313e-48dd-bcbe-22e4b41ad55a

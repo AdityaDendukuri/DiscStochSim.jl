@@ -86,6 +86,7 @@ function MasterEquationDiagonal(data::MasterEquationData{T,ElementType,ModelType
         begin
             αs = [((xᵢ + S) in active_states) ? model.propensities[k](xᵢ, rates, t) : 0.0
                   for (k, S) in enumerate(model.stoichvecs)]
+            #αs = [model.propensities[k](xᵢ, rates, t) for (k, S) in  enumerate(model.stoichvecs)]
             (i, -sum(αs))
         end for (i, xᵢ) in enumerate(active_states)
     ]

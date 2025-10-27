@@ -1,13 +1,23 @@
+# -------------------------------------------------------------------
+# EXPANSION (no rates/t)
+# -------------------------------------------------------------------
+
 """
     expand1!(X, model, boundary_condition)
 
-In-place expansion of the set `X` by applying `ExpandForward` to each element.
-Each element `x` is replaced by the union `x ∪ ExpandForward(x, model, boundary_condition)`.
+In-place expansion of the set `X` by applying `expand_forward` to each element.
+Each element `x` is replaced by the union `x ∪ expand_forward(x, model, boundary_condition)`.
+(Optimized to avoid temporary Sets/union! allocations.)
 """
 function expand1!(X::Set{Element}, model::Model, boundary_condition::Function) where {Element,Model}
-    # Iterate over a copy so we can safely modify X during iteration.
-    for x in copy(X)
-        union!(X, expand_forward(x, model, boundary_condition))
+    for x in copy(X) # safe snapshot for mutation
+        # Iterate neighbors and push directly to X if they satisfy bc
+        # (expand_forward may return any iterable)
+        for y in expand_forward(x, model, boundary_condition)
+            # If boundary_condition is inside expand_forward, keep as-is; if not, check here:
+            # push! is a no-op when y already in X (Set semantics)
+            push!(X, y)
+        end
     end
     return X
 end
@@ -18,7 +28,7 @@ end
 Repeatedly applies `expand1!` to `X` for `N` iterations.
 """
 function expand!(X::Set{Element}, model::Model, boundary_condition::Function, N::Int) where {Element,Model}
-    for _ in 1:N
+    @inbounds for _ in 1:N
         expand1!(X, model, boundary_condition)
     end
     return X
@@ -31,19 +41,86 @@ Expands `X` (using `expand1!`) for `N` iterations and updates the probability ve
 The vector `pₜ` corresponds to the probabilities of the elements of `X` *before* expansion.
 After expansion, the probabilities are stored in `qₜ` at the positions corresponding
 to the original elements.
-Returns the expanded set and the new probability vector.
+(Optimized: O(|X|) reindex using a Dict; preserves eltype of `pₜ`.)
 """
 function expand!(X::Set{Element}, pₜ::Vector, model::Model, boundary_condition::Function, N::Int) where {Element,Model}
     X_prev = collect(X)
-    for _ in 1:N
+    @inbounds for _ in 1:N
         expand1!(X, model, boundary_condition)
     end
     X_vec = collect(X)
-    idxs = [findfirst(==(x), X_vec) for x in X_prev]
-    qₜ = zeros(length(X_vec))
-    qₜ[idxs] = pₜ
+    # Build a single lookup for indices
+    pos = Dict{Element,Int}(x => i for (i,x) in enumerate(X_vec))
+    idxs = Vector{Int}(undef, length(X_prev))
+    @inbounds for i in eachindex(X_prev)
+        idxs[i] = pos[X_prev[i]]
+    end
+    qₜ = zeros(eltype(pₜ), length(X_vec))
+    @inbounds for (i, j) in enumerate(idxs)
+        qₜ[j] = pₜ[i]
+    end
     return X, qₜ
 end
+
+# -------------------------------------------------------------------
+# EXPANSION (with rates and time t)
+# -------------------------------------------------------------------
+
+"""
+    expand1!(X, model, rates, t, boundary_condition)
+
+Performs an in-place expansion of `X` using `ssa_step` with the provided `rates` and time `t`.
+For each element `x` in `X`, computes `new_x = ssa_step(x, model, rates, t)`.
+If `boundary_condition(new_x)` is `true`, `new_x` is added to `X` (no redundant re-adds).
+(Optimized to avoid Set allocations.)
+"""
+function expand1!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function) where {Element,Model}
+    for x in copy(X)
+        new_x = ssa_step(x, model, rates, t)
+        if boundary_condition(new_x)
+            push!(X, new_x)
+        end
+        # else: keep x (already present), so do nothing
+    end
+    return X
+end
+
+"""
+    expand!(X, model, rates, t, boundary_condition, N)
+
+Repeatedly applies the above `expand1!` (with `rates` and `t`) for `N` iterations.
+"""
+function expand!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+    @inbounds for _ in 1:N
+        expand1!(X, model, rates, t, boundary_condition)
+    end
+    return X
+end
+
+"""
+    expand!(X, pₜ, model, rates, t, boundary_condition, N)
+
+Expands `X` using `ssa_step` (with `rates` and `t`) for `N` iterations and updates the probability vector.
+(Optimized: O(|X|) reindex using a Dict; preserves eltype of `pₜ`.)
+"""
+function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+    X_prev = collect(X)
+    @inbounds for _ in 1:N
+        expand1!(X, model, rates, t, boundary_condition)
+    end
+    X_vec = collect(X)
+    pos = Dict{Element,Int}(x => i for (i,x) in enumerate(X_vec))
+    idxs = Vector{Int}(undef, length(X_prev))
+    @inbounds for i in eachindex(X_prev)
+        idxs[i] = pos[X_prev[i]]
+    end
+    qₜ = zeros(eltype(pₜ), length(X_vec))
+    @inbounds for (i, j) in enumerate(idxs)
+        qₜ[j] = pₜ[i]
+    end
+    return X, qₜ
+end
+
 
 """
     purge!(X, p, percentage)
@@ -207,7 +284,7 @@ end
 Repeatedly applies the above `expand1!` (with `rates` and `t`) for `N` iterations.
     println(X)
 """
-function expand!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+function expand1!(X::Set{Element}, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
     for _ in 1:N
         expand1!(X, model, rates, t, boundary_condition)
     end
@@ -220,7 +297,7 @@ end
 Expands `X` using `SSA_STEP` (with `rates` and `t`) for `N` iterations and updates the probability vector.
 Returns the expanded set and the new probability vector.
 """
-function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+function expand1!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
     X_prev = collect(X)
     for _ in 1:N
         expand1!(X, model, rates, t, boundary_condition)

@@ -7,12 +7,12 @@ using InteractiveUtils
 # ╔═╡ 453819dc-e207-46db-9c9b-9f10f7fd4daf
 begin
 	# numerical libraries
-	using ExponentialUtilities, PROPACK, Arpack, SparseArrays, Expokit
+	using ExponentialUtilities, PROPACK, Arpack, SparseArrays, ExponentialUtilities, Expokit
 	# output and plotting
 	using ProgressLogging, JLD
 	# modelling and statistics 
 	using Catalyst, JumpProcesses, StatsBase, DifferentialEquations
-	using Interpolations
+	using Interpolations, LinearAlgebra
 	# importing local fsp package
 	using Revise, CairoMakie
 	local_mod = include("../../src/DiscStochSim.jl")
@@ -33,118 +33,15 @@ def_params = begin
 	# reaction rates 
 	rates = [1e-6, 1e-1]
 	# boundary 
-	bounds = (0, 1e10) #(lower limit, upper limit)
+	bounds = (0, 1e11) #(lower limit, upper limit)
 	boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds);
 	# time interval and initial values
 end
 
-# ╔═╡ 1fd172ed-0297-4883-8ac2-9a8033315013
-
-function purgea!(
-    X::Set{Element},
+# ╔═╡ 91bec3fc-65cc-4344-98d2-09f4944fc0e5
+function robust_purge!(
+    X::Set{Element}, 
     p::Vector{T}, 
-    model::Model,
-    rates,
-    t,
-    prob_quantile::Number,
-    flux_tolerance::Number = 1e-9 
-) where {Element, T, Model}
-
-    X_vec = collect(X)
-
-	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
-
-    total_flux = sum(flux_vector[candidate_idxs])
-    flux_threshold = total_flux * flux_tolerance
-	
-    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
-	
-	
-    # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
-    states_to_remove = Set(X_vec[collect(ℛ)])
-    new_X = setdiff(X, states_to_remove)
-    return new_X, new_p
-end
-
-# ╔═╡ 8c374694-4992-46b0-b0a2-ffe217089e48
-# ╠═╡ disabled = true
-#=╠═╡
-
-fsp_sim = begin
-		# 4. Initialize p₀
-	U₀ = CartesianIndex(1,0,0)
-	𝒮₀ = Set([U₀])
-	p₀ = zeros(length(𝒮₀))
-	p₀[FindElement(U₀,𝒮₀)] = 1.0
-	# copy initial values 
-	pₜ = copy(p₀)
-	𝒮ₜ = copy(𝒮₀)
-	# time stepping loop
-	iter = 1
-	pₜ = p₀
-	δt = 1e4
-	T =0:δt:1e8
-	
-	# variables to store simulation observables
-	size_𝒮ₜ = Int.(zeros(length(T))) # system sizes
-	ϵₜ = zeros(length(T)) #local truncation err 
-	sol = []
-	@progress for (iter, t) ∈ enumerate(T)
-		
-		# expand state space
-	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
-		global size_𝒮ₜ[iter] = length(𝒮ₜ)
-		global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
-													 model,
-													 rates,
-													 boundary_condition, 
-													 t)
-		# solve system and normalize (using expokit)
-		pₜ = expv(δt, A, pₜ)
-		
-		
-		# add add states in sparse arrays 
-    	push!(sol, (𝒮ₜ, pₜ))
-		
-		# purge state space
-		#𝒮ₜ, pₜ = purgea!(𝒮ₜ, pₜ, model, rates, t, 0.5, 1e-5)
-		𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, out_flux, 0.01; renormalize=true)
-
-    	pₜ ./= sum(pₜ)
-		ϵₜ[iter] = 1.0 - sum(pₜ)
-		pₜ ./= sum(pₜ)		
-	end
-end
-
-  ╠═╡ =#
-
-# ╔═╡ ebd5f20c-88c2-46d1-982f-de864ba33727
-md"""
-### Initialize Finite State Space 
-"""
-
-# ╔═╡ 2b05437f-0508-4a92-b12a-3dec7bbd9f12
-
-
-# ╔═╡ 256f8d0d-7c2b-4415-969e-356ee271e908
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-	p=plot(fsp_mean[2:end-8000, 1]; label="A") 
-	p=plot!(fsp_mean[2:end-8000, 2]; label="B") 
-	p=plot!(log.(fsp_mean[2:end-8000, 3]),legend=:outertopright; label="C")
-	xlabel!(p, "time")
-	ylabel!(p, "mean traj sum(x*p(x))")
-	p
-end
-  ╠═╡ =#
-
-# ╔═╡ 845ce313-709f-4ec6-a2dc-71ba08f8fc22
-function purgea!(
-    X::Set{Element},
-    p::Vector{T}, 
-	flux_vector,
     model::Model,
     rates,
     t,
@@ -154,38 +51,175 @@ function purgea!(
 
     X_vec = collect(X)
 
-	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+	# 1. Candidate Selection: Find states with low probability mass
+    idx = sortperm(p; rev=false)
+    k = round(Int, prob_quantile * length(idx))            
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+	candidate_idxs = drop_idxs
 
-    total_flux = sum(flux_vector[candidate_idxs])
-    flux_threshold = total_flux * flux_tolerance
-	
-    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
-	
-	
+    # Build new containers
+    keep_mask = trues(length(p))
+    keep_mask[drop_idxs] .= false
+
+    flux_vector = zeros(T, length(p))
+    local total_flux = 0
+	if flux_tolerance > 0
+    	for i in eachindex(X_vec)
+        	current_state = X_vec[i]
+        	weight = sum(prop(current_state, rates, t) 
+						 for prop in model.propensities)
+        	flux_vector[i] = p[i] * weight
+    	end
+    	total_flux = sum(flux_vector)
+    	# Set an adaptive threshold based on the total system flux
+   		flux_threshold = total_flux * flux_tolerance
+		# Filter the candidates based on this adaptive threshold
+
+    	final_idxs_to_prune = Set{Int}()
+    	for idx in candidate_idxs
+        	if flux_vector[idx] < flux_threshold
+            	push!(final_idxs_to_prune, idx)
+        	end
+    	end
+	else
+		final_idxs_to_prune = candidate_idxs
+	end
     # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
-    states_to_remove = Set(X_vec[collect(ℛ)])
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
     new_X = setdiff(X, states_to_remove)
-    return new_X, new_p, total_flux, flux_threshold
+    return new_X, new_p, total_flux
 end
+
+# ╔═╡ ebd5f20c-88c2-46d1-982f-de864ba33727
+md"""
+### Initialize Finite State Space 
+"""
+
+# ╔═╡ 256f8d0d-7c2b-4415-969e-356ee271e908
+function reconstruct_MasterEquation(
+    S_new::Set{E},
+    S_old_vec::Vector{E},         
+    A_old::SparseMatrixCSC{T,Int}, 
+    model, rates, bc::Function, t::Real;
+    overlap_threshold::Real=0.3,
+) where {E,T}
+
+    # --- Setup ---
+    S_new_vec = collect(S_new)
+    n_new = length(S_new_vec)
+    new_id = Dict{E,Int}(s => i for (i,s) in enumerate(S_new_vec))
+    old_id  = Dict{E,Int}(s => i for (i,s) in enumerate(S_old_vec))
+
+    # --- Overlap check (can be kept as a performance heuristic) ---
+    n_retained = count(s -> haskey(old_id, s), S_new_vec)
+    if n_new == 0 || n_retained / n_new < overlap_threshold
+        return MasterEquation(S_new, model, rates, bc, t)
+    end
+    
+    I = Int[]; J = Int[]; V = T[]
+    @inbounds for (j_new, x) in enumerate(S_new_vec)
+        col_sum = zero(T)
+        
+        # Build the entire column from scratch based on propensities
+        for (k, ν) in enumerate(model.stoichvecs)
+            y = x + ν
+            # Check if the destination `y` is in our new state space
+            i_new = get(new_id, y, 0)
+            
+            if i_new != 0
+                α = model.propensities[k](x, rates, t)
+                if α > 0
+                    # Allow duplicates for sparse() to sum them up
+                    push!(I, i_new); push!(J, j_new); push!(V, α)
+                    col_sum += α
+                end
+            end
+        end
+        
+        # Diagonal = minus the sum of all off-diagonals in this column
+        if col_sum > 0
+            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
+        end
+    end
+
+    A = sparse(I, J, V, n_new, n_new)
+    out_flow = spdiagm(0 => diag(A))
+    in_flow  = A - out_flow
+    
+    return A, in_flow, out_flow
+end
+
+# ╔═╡ ca5f05c8-96ea-42a8-adb0-c095a223b4cf
+
+fsp_sim_no_flux = begin
+		# 4. Initialize p₀
+	local U₀ = CartesianIndex(1,0,0)
+	local 𝒮₀ = Set([U₀])
+	local p₀ = zeros(length(𝒮₀))
+	local p₀[FindElement(U₀,𝒮₀)] = 1.0
+	# copy initial values 
+	local pₜ = copy(p₀)
+	local 𝒮ₜ = copy(𝒮₀)
+	# time stepping loop
+	local iter = 1
+	local pₜ = p₀
+	local δt = 1e2
+	local T =0:δt:1e8
+	
+	# variables to store simulation observables
+	size_𝒮ₜ1 = Int.(zeros(length(T))) # system sizes
+	flux1 = zeros(length(T))
+	flux_tol1 = zeros(length(T))
+	local_ϵ1 = zeros(length(T))
+	sol1 = []
+	
+	@progress for (iter, t) ∈ enumerate(T)
+		
+		# expand state space
+	    𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
+		global size_𝒮ₜ1[iter] = length(𝒮ₜ)
+		local A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
+
+		pₜ = expv(δt, A, pₜ)
+    	push!(sol1, (𝒮ₜ, pₜ))
+		
+		# purge state space
+		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
+									pₜ, 
+									model,
+									rates,
+									δt,
+									0.7; flux_tolerance=0.0)
+	 	
+
+		local_ϵ1[iter] = 1.0 - sum(pₜ)
+    	pₜ ./= sum(pₜ)
+		flux1[iter] = max(0.0, 1.0 - δt * total_flux)
+	end
+end
+
 
 # ╔═╡ 6ad6db9b-f87c-4320-9a45-a18a170b5db7
 
-fsp_sim = begin
+fsp_sim_flux = begin
 		# 4. Initialize p₀
-	U₀ = CartesianIndex(1,0,0)
-	𝒮₀ = Set([U₀])
-	p₀ = zeros(length(𝒮₀))
-	p₀[FindElement(U₀,𝒮₀)] = 1.0
+	local U₀ = CartesianIndex(1,0,0)
+	local 𝒮₀ = Set([U₀])
+	local p₀ = zeros(length(𝒮₀))
+	local p₀[FindElement(U₀,𝒮₀)] = 1.0
 	# copy initial values 
-	pₜ = copy(p₀)
-	𝒮ₜ = copy(𝒮₀)
+	local pₜ = copy(p₀)
+	local 𝒮ₜ = copy(𝒮₀)
 	# time stepping loop
-	iter = 1
-	pₜ = p₀
-	δt = 7e3
-	ϵ_dt = 1.0
-	T =0:δt:1e8
+	local iter = 1
+	local pₜ = p₀
+	local δt = 1e2
+	global T =0:δt:1e8
 	
 	# variables to store simulation observables
 	size_𝒮ₜ = Int.(zeros(length(T))) # system sizes
@@ -197,78 +231,462 @@ fsp_sim = begin
 	@progress for (iter, t) ∈ enumerate(T)
 		
 		# expand state space
-	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
+	     𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
 		global size_𝒮ₜ[iter] = length(𝒮ₜ)
-		global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+		local A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
 													 model,
 													 rates,
 													 boundary_condition, 
 													 t)
-		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
-		total_flux = sum(out_flux)
 
-
-		pₜ = expmv!(δt, A, pₜ)
-		
-		
+		pₜ = expv(δt, A, pₜ)
     	push!(sol, (𝒮ₜ, pₜ))
 		
 		# purge state space
-		out_flux = Vector(-out_flow * pₜ)
-		𝒮ₜ, pₜ, total_flux, flux_threshold = purgea!(𝒮ₜ, 
-													 pₜ, 
-													 out_flux, 
-													 model, 
-													 rates, 
-													 t, 
-													 0.9; 
-													 flux_tolerance=1.0)
-
+		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
+									pₜ, 
+									model,
+									rates,
+									δt,
+									0.7; flux_tolerance=0.6)
+	 	
 
 		local_ϵ[iter] = 1.0 - sum(pₜ)
     	pₜ ./= sum(pₜ)
-		flux[iter] = total_flux
-		flux_tol[iter] = flux_threshold
+		flux[iter] = max(0.0, 1.0 - δt * total_flux)
 		pₜ ./= sum(pₜ)		
-
-		
 	end
 end
 
 
 # ╔═╡ 32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
-begin
+function mean_sol(sol)
 	sol_mean = map(1:length(sol)) do i
 		    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
 	end 
 	fsp_mean=hcat(sol_mean...)'
 end
 
-# ╔═╡ 8e1e415f-9132-4340-aa0c-d4d82cee26d3
-begin
-	f=Figure()
-	
-	ax11 = Axis(f[1, 1], xscale=log10, ylabel=L"Mean Trajectory of $A$")
-	ax12 = Axis(f[1, 2], xscale=log10, ylabel=L"Mean Trajectory of $B$")
-	ax13 = Axis(f[1, 3],xscale=log10, ylabel=L"Mean Trajectory of $C$")
 
-	ax21 = Axis(f[2, 1], xscale=log10, xlabel=L"time $t$", ylabel=L"|\mathcal{S}_t|")
-	ax22 = Axis(f[2, 2], xscale=log10, xlabel=L"time $t$")
-	ax23 = Axis(f[2, 3], xscale=log10, xlabel=L"time $t$")
+# ╔═╡ b9cf4dc2-9817-493b-940b-5e3677ceb92e
+"""
+Extracts the final marginal probability distribution for a single species.
+This function creates a histogram by aggregating the probabilities of all states
+that share the same population count for the specified species.
+"""
+function get_final_marginal_distribution(solution_data, species_index)
+    states, probs = solution_data[end]
+    dist_dict = Dict{Int, Float64}()
+    
+    for (state, prob) in zip(states, probs)
+        count = state.I[species_index]
+        dist_dict[count] = get(dist_dict, count, 0.0) + prob
+    end
+    
+    counts = sort(collect(keys(dist_dict)))
+    probabilities = [dist_dict[c] for c in counts]
 
-	lines!(ax11, fsp_mean[1:end, 1]; label="A", color=:black) 
-	lines!(ax12, fsp_mean[1:end, 2]; label="B",color=:black) 
-	lines!(ax13, fsp_mean[1:end, 3]; label="C",color=:black)
-
-	lines!(ax21, size_𝒮ₜ; label="A", color=:black) 
-	lines!(ax22, flux; label="B",color=:black) 
-	lines!(ax23, local_ϵ; label="C",color=:black)
-
-	f
+    return counts, abs.(probabilities)
 end
 
-# ╔═╡ 48f9aac2-7ed5-4fdf-b708-bf890dd3cd66
-[ 99583.3  5.31773   281.606] |> sum
+# ╔═╡ 690d5609-6bd0-4caa-b88e-a28e3b9da19c
+sol[10]
+
+# ╔═╡ e2e71c4e-4782-46bb-8560-9ffbae1145b3
+begin
+    # --- 1. Process Data ---
+    num_species = 3 # A, B, C
+    N_initial = 1   # initial population of A
+
+    iters = 1:length(T)
+
+    # Time vectors
+    sol_t_correct = collect(T[iters])
+    sol_t_failed  = collect(T[iters])  
+
+    # Mean trajectories (ensure shape: time × species)
+    μ_ok_raw   = mean_sol(sol[iters])
+    μ_fail_raw = mean_sol(sol1[iters])
+
+    μ_ok   = Matrix(μ_ok_raw)
+    μ_fail = Matrix(μ_fail_raw)
+
+    # If means are species × time, transpose to time × species
+    if size(μ_ok, 1) == num_species && size(μ_ok, 2) == length(sol_t_correct)
+        μ_ok = μ_ok'
+    end
+    if size(μ_fail, 1) == num_species && size(μ_fail, 2) == length(sol_t_failed)
+        μ_fail = μ_fail'
+    end
+    @assert size(μ_ok,   1) == length(sol_t_correct)  "mean_sol(sol) must align with time"
+    @assert size(μ_fail, 1) == length(sol_t_failed)   "mean_sol(sol1) must align with time"
+    @assert size(μ_ok,   2) == num_species && size(μ_fail, 2) == num_species
+
+    # State space sizes
+    size_correct = size_𝒮ₜ[iters]
+    size_failed  = [length(s[1]) for s in sol1[iters]]
+
+    # Optional: per-step leakage arrays (must align with T)
+    local_ϵ_ok   = local_ϵ[iters]
+    local_ϵ_fail = local_ϵ1[iters]
+
+    # Final marginals
+    counts_A_correct, probs_A_correct = get_final_marginal_distribution(sol[iters], 1)
+    counts_B_correct, probs_B_correct = get_final_marginal_distribution(sol[iters], 2)
+    counts_C_correct, probs_C_correct = get_final_marginal_distribution(sol[iters], 3)
+
+    counts_A_failed, probs_A_failed = get_final_marginal_distribution(sol1[iters], 1)
+    counts_B_failed, probs_B_failed = get_final_marginal_distribution(sol1[iters], 2)
+    counts_C_failed, probs_C_failed = get_final_marginal_distribution(sol1[iters], 3)
+
+    # --- 2. Create Figure and Layout (SIAM style: smaller, grayscale) ---
+    f = Figure(size = (1000, 650), fontsize = 11, fonts = (;regular = "Latin Modern Roman"))
+
+    # Row titles (smaller, no bold for SIAM style)
+    Label(f[1, 1:3], "Flux-Aware Pruning",
+          fontsize = 12, tellwidth = false, padding = (0,0,15,0))
+    Label(f[3, 1:3], "Probability-Only Pruning",
+          fontsize = 12, tellwidth = false, padding = (0,0,15,0))
+
+    # --- Row 1: Correct Simulation ---
+    dist_grid_correct = f[2, 1] = GridLayout()
+    ax_dist_A_correct = Axis(dist_grid_correct[1, 1], ylabel = "Probability", 
+                             xticks = [0, 1], title = L"N_A")
+    ax_dist_B_correct = Axis(dist_grid_correct[1, 2], xticks = [0, 1], title = L"N_B")
+    
+    # Fix for C: compute sensible xticks
+    c_min = minimum(counts_C_correct)
+    c_max = maximum(counts_C_correct)
+    c_range = c_max - c_min
+    # Choose 3-5 evenly spaced ticks
+    if c_range <= 10
+        c_ticks = [c_min, div(c_min + c_max, 2), c_max]
+    else
+        step = max(1, div(c_range, 4))
+        c_ticks = collect(c_min:step:c_max)
+    end
+    ax_dist_C_correct = Axis(dist_grid_correct[1, 3], xticks = [c_max], title = L"N_C")
+
+    ax_means_correct = Axis(f[2, 2], title = "Mean Trajectories", xscale = log10,
+                            xgridvisible = false, ygridvisible = false)
+    ax_size_correct  = Axis(f[2, 3], ylabel = "State Space Size", xscale = log10,
+                            xgridvisible = false, ygridvisible = false)
+
+
+    # --- Row 2: Failed Simulation ---
+    dist_grid_failed = f[4, 1] = GridLayout()
+    ax_dist_A_failed = Axis(dist_grid_failed[1, 1], ylabel = "Probability",
+                            xlabel = L"N_A", xticks = [0, 1])
+    ax_dist_B_failed = Axis(dist_grid_failed[1, 2], xlabel = L"N_B", xticks = [0, 1])
+    ax_dist_C_failed = Axis(dist_grid_failed[1, 3], xlabel = L"N_C", xticks = [0, 1])
+
+    ax_means_failed = Axis(f[4, 2], title = "Mean Trajectories",
+                           xscale = log10, xlabel = "Time (s)",
+                           xgridvisible = false, ygridvisible = false)
+    ax_size_failed  = Axis(f[4, 3], title = "State Space Size",
+                           xscale = log10, xlabel = "Time (s)",
+                           xgridvisible = false, ygridvisible = false)
+  
+
+    # Link axes
+    linkyaxes!(ax_means_correct, ax_means_failed)
+    linkyaxes!(ax_size_correct,  ax_size_failed)
+    linkyaxes!(ax_dist_A_correct, ax_dist_B_correct,
+               ax_dist_A_failed, ax_dist_B_failed, ax_dist_C_failed)
+
+    # --- 3. Plotting (SIAM style: grayscale, distinct line styles) ---
+    bar_color = (:black)
+    linestyles = [:solid, :dash, :dot]
+    linewidths = [1.5, 1.5, 2.0]  # Slightly thicker dot for visibility
+    species_labels = [L"A", L"B", L"C/\max(C)"]
+
+    # Final distributions (correct)
+    barplot!(ax_dist_A_correct, counts_A_correct, probs_A_correct, color = bar_color)
+    barplot!(ax_dist_B_correct, counts_B_correct, probs_B_correct, color = bar_color)
+    barplot!(ax_dist_C_correct, counts_C_correct, probs_C_correct, color = bar_color)
+
+    # Final distributions (failed)
+    barplot!(ax_dist_A_failed, counts_A_failed, probs_A_failed, color = bar_color)
+    barplot!(ax_dist_B_failed, counts_B_failed, probs_B_failed, color = bar_color)
+    barplot!(ax_dist_C_failed, counts_C_failed, probs_C_failed, color = bar_color)
+
+    # Refined x-limits
+    xlims!(ax_dist_A_correct, -0.5, 1.5)
+    xlims!(ax_dist_B_correct, -0.5, 1.5)
+    xlims!(ax_dist_A_failed,  -0.5, 1.5)
+    xlims!(ax_dist_B_failed,  -0.5, 1.5)
+    xlims!(ax_dist_C_failed,  -0.5, 1.5)
+    xlims!(ax_dist_C_correct, c_min - 0.5, c_max + 0.5)
+
+    # Mean trajectories (correct)
+    valid_indices_correct = findall(t -> t > 0, sol_t_correct)
+    # Plot species 1..(num_species-1) as-is
+    for i in 1:(num_species - 1)
+        lines!(ax_means_correct,
+               sol_t_correct[valid_indices_correct],
+               μ_ok[valid_indices_correct, i];
+               color = :black, linestyle = linestyles[i], linewidth = linewidths[i],
+               label = species_labels[i])
+    end
+    # Normalize last species for visibility
+    denom = maximum(μ_ok[valid_indices_correct, end])
+    last_series = denom > 0 ? μ_ok[valid_indices_correct, end] ./ denom :
+                              zero.(μ_ok[valid_indices_correct, end])
+    lines!(ax_means_correct,
+           sol_t_correct[valid_indices_correct], last_series;
+           color = :black, linestyle = linestyles[end], linewidth = linewidths[end],
+           label = species_labels[end])
+    axislegend(ax_means_correct, "Species", position = :lt, framevisible = false)
+
+    # Mean trajectories (failed)
+    valid_indices_failed = findall(t -> t > 0, sol_t_failed)
+    for i in 1:num_species
+        lines!(ax_means_failed,
+               sol_t_failed[valid_indices_failed],
+               μ_fail[valid_indices_failed, i];
+               color = :black, linestyle = linestyles[i], linewidth = linewidths[i],
+               label = species_labels[i])
+    end
+    axislegend(ax_means_failed, "Species", position = :rt, framevisible = false)
+
+    # State space sizes + leakage (use gray for secondary axis)
+    lines!(ax_size_correct,
+           sol_t_correct[valid_indices_correct],
+           size_correct[valid_indices_correct]; color = :black, linewidth = 1.5)
+    
+
+    lines!(ax_size_failed,
+           sol_t_failed[valid_indices_failed],
+           size_failed[valid_indices_failed]; color = :black, linewidth = 1.5)
+
+
+    # --- 4. Final Layout Adjustments ---
+    colgap!(f.layout, 20)
+    rowgap!(f.layout, 8)
+    rowgap!(f.layout, 2, 25) # extra space between the two main rows
+
+    f
+end
+
+# ╔═╡ 838fb0ef-03b6-4501-b66c-07859355e5e2
+begin
+	local fig=Figure()
+	lines!(Axis(fig[1, 1], xscale=log10), μ_ok_raw[:, 3])
+	fig
+end
+
+# ╔═╡ 7adf32b0-b602-44e7-b5bf-1f86a14dfd01
+mean_sol(sol1)
+
+# ╔═╡ d0ad5800-4b37-4722-b884-07af915a3d7f
+save("bn.png", f)
+
+# ╔═╡ c1a92cd0-ffed-43d7-81c5-021799578d0d
+begin
+	states1 = collect(sol[100][1])
+	V1 = sol[100][2]
+	P1 = zeros(600, 600)
+	P1v = zeros(600, 600)
+	P1[states1] .= 1;
+	P1v[states1] .= V1;
+	     
+	
+	states2 = sol[200][1]
+	V2 = sol[100][2]
+	P2 = zeros(600, 600)
+	P2v = zeros(600, 600)
+	P2[states2] .= 1;
+	P2v[states2] .= V2;
+	     
+	
+	statesm = states1 ∪ states2
+	Pm = zeros(600, 600)
+	Pmv = zeros(600, 600)
+	Pm[statesm] .= 1;
+	Pmv[states2] .= V2;
+end
+
+# ╔═╡ 5e389838-a3cc-46d2-986d-c407edc8e93a
+begin
+	
+	# Initialize figure
+	fig = Figure(size=(1000, 550))
+	
+	# Data arrays
+	top = [P1, Pm, P2]
+	bot = [P1v, Pmv, P2v]
+	local T = LinRange(0, 30, length(sol))
+	
+	# Create 2x3 grid of axes
+	axes = []
+	for i in 1:2, j in 1:3
+	    ax = Axis(fig[i, j])
+	    push!(axes, ax)
+	end
+	
+	# Plot contours
+	for (i, idx) in enumerate(points)
+	    # Top row - binary contours
+	    ax_top = axes[i]
+	    contour!(ax_top, top[i], color=:black, linewidth=2.5, levels=[1])
+	    
+	    # Bottom row - log contours  
+	    ax_bot = axes[i + 3]
+	    contour!(ax_bot, bot[i], color=:black, linewidth=2.5, levels=4)
+	    
+	    # Add colorbar only for rightmost column
+	    if i == 3
+	        Colorbar(fig[1, 4], colormap=:viridis, label=L"1 if active, 0 otherwise")
+	        Colorbar(fig[2, 4], colormap=:viridis, label=L"\operatorname{log}_{10}(p_S(t))")
+	    end
+	end
+	
+	# Set axis properties
+	for (i, ax) in enumerate(axes)
+	    xlims!(ax, 400, 475)
+	    ylims!(ax, 60, 135)
+	    
+	    # X labels for bottom row
+	    if i > 3
+	        ax.xlabel = L"|U|"
+	    end
+	    
+	    # Y labels for left column
+	    if i == 1 || i == 4
+	        ax.ylabel = L"|V|"
+	    end
+	    
+	    # Set ticks
+	    ax.xticks = [150, 350, 550]
+	end
+	
+	# Set font properties
+	set_theme!(fontsize=12, fontfamily="Computer Modern")
+	
+	display(fig)
+	save("toggle_switch_grid.pdf", fig)
+end
+
+# ╔═╡ 9867082b-f32b-4c92-adbf-866efeec8ced
+lines(flux1)
+
+# ╔═╡ 9e8a68b4-630f-4051-a764-dc44ccc8847e
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+    # --- 1. Process Data ---
+    num_species = 3 # A, B, C
+    N_initial = 1 # The initial population of species A
+
+    # Ensure time vectors are standard Arrays
+
+	iters = 1:length(T)
+
+    sol_t_correct =  collect(T[iters])
+    sol_t_failed = collect(T[iters]) # Assuming a separate time vector for the failed sim
+
+    # Calculate mean trajectories
+    fsp_mean_correct = mean_sol(sol[iters])
+    fsp_mean_failed = mean_sol(sol1[iters])
+
+    # Calculate state space size evolution
+    size_correct = size_𝒮ₜ[iters]
+    size_failed = [length(s[1]) for s in sol1[iters]]
+    
+    # Extract final marginal distributions
+    counts_A_correct, probs_A_correct = get_final_marginal_distribution(sol[iters], 1)
+    counts_B_correct, probs_B_correct = get_final_marginal_distribution(sol[iters], 2)
+    counts_C_correct, probs_C_correct = get_final_marginal_distribution(sol[iters], 3)
+
+    counts_A_failed, probs_A_failed = get_final_marginal_distribution(sol1[iters], 1)
+    counts_B_failed, probs_B_failed = get_final_marginal_distribution(sol1[iters], 2)
+    counts_C_failed, probs_C_failed = get_final_marginal_distribution(sol1[iters], 3)
+
+    # --- 2. Create Figure and Layout ---
+    f = Figure(size = (1200, 800), fontsize=14)
+    
+    # Add row titles
+    Label(f[1, 1:3], "Adaptive FSP With Flux Filter", fontsize=18, font=:bold, tellwidth=false, padding=(0,0,20,0))
+    Label(f[3, 1:3], "No Flux Filter", fontsize=18, font=:bold, tellwidth=false, padding=(0,0,20,0))
+
+    # --- Row 1: Correct Simulation ---
+    dist_grid_correct = f[2, 1] = GridLayout()
+    ax_dist_A_correct = Axis(dist_grid_correct[1, 1], ylabel="Probability", xticks=[0, 1])
+    ax_dist_B_correct = Axis(dist_grid_correct[1, 2], xticks=[0, 1])
+    ax_dist_C_correct = Axis(dist_grid_correct[1, 3], xticks=[minimum(counts_C_correct), maximum(counts_C_correct)]) 
+    
+    ax_means_correct = Axis(f[2, 2], title="Mean Trajectories", xscale=log10)
+    ax_size_correct = Axis(f[2, 3], ylabel="State Space Size", xscale=log10)
+	ax_flux_correct = Axis(f[2, 3], ylabel="Ergodcity after Pruning",  yaxisposition = :right, xscale=log10)
+
+    # --- Row 2: Failed Simulation ---
+    dist_grid_failed = f[4, 1] = GridLayout()
+    ax_dist_A_failed = Axis(dist_grid_failed[1, 1], ylabel="Probability", xlabel=L"N_A", xticks=[0, 1])
+    ax_dist_B_failed = Axis(dist_grid_failed[1, 2], xlabel=L"N_B", xticks=[0, 1])
+    ax_dist_C_failed = Axis(dist_grid_failed[1, 3], xlabel=L"N_C", xticks=[0, 1])
+
+    ax_means_failed = Axis(f[4, 2], title="Mean Trajectories", xscale=log10, xlabel="Time, t")
+    ax_size_failed = Axis(f[4, 3], title="State Space Size", xscale=log10, xlabel="Time, t")
+	ax_flux_failed = Axis(f[4, 3], ylabel="Ergodcity after Pruning",  yaxisposition = :right, xscale=log10)
+
+    # Link axes for direct comparison
+    linkyaxes!(ax_means_correct, ax_means_failed)
+    linkyaxes!(ax_size_correct, ax_size_failed)
+    linkyaxes!(ax_dist_A_correct, ax_dist_B_correct, ax_dist_A_failed, ax_dist_B_failed, ax_dist_C_failed)
+
+    # --- 3. Plotting ---
+    bar_color = (:black, 0.8)
+    linestyles = [:solid, :dash, :dot]
+    species_labels = ["A", "B", "C"]
+    
+    # Plot Correct Distributions
+    barplot!(ax_dist_A_correct, counts_A_correct, probs_A_correct, color=bar_color)
+    barplot!(ax_dist_B_correct, counts_B_correct, probs_B_correct, color=bar_color)
+    barplot!(ax_dist_C_correct, counts_C_correct, probs_C_correct, color=bar_color)
+
+    # Plot Failed Distributions
+    barplot!(ax_dist_A_failed, counts_A_failed, probs_A_failed, color=bar_color)
+    barplot!(ax_dist_B_failed, counts_B_failed, probs_B_failed, color=bar_color)
+    barplot!(ax_dist_C_failed, counts_C_failed, probs_C_failed, color=bar_color)
+
+    # Set refined x-limits to focus on the single tick
+    xlims!(ax_dist_A_correct, 0, 1)
+    xlims!(ax_dist_B_correct, 0, 1)
+    #xlims!(ax_dist_C_correct, N_initial - 50, N_initial + 50)
+    xlims!(ax_dist_A_failed, 0, 1)
+    xlims!(ax_dist_B_failed, 0, 1)
+    xlims!(ax_dist_C_failed, 0, 1)
+
+    # Plot Correct Mean Trajectories
+    valid_indices_correct = findall(t -> t > 0, sol_t_correct)
+    for i in 1:num_species-1
+        lines!(ax_means_correct, sol_t_correct[valid_indices_correct], fsp_mean_correct[valid_indices_correct, i], color=:black, linestyle=linestyles[i], label=species_labels[i])
+    end
+	lines!(ax_means_correct, sol_t_correct[valid_indices_correct], fsp_mean_correct[valid_indices_correct, end] ./ maximum(fsp_mean_correct[valid_indices_correct, end]), color=:black, linestyle=linestyles[end], label=species_labels[end])
+    axislegend(ax_means_correct, "Species", position=:cc)
+
+    # Plot Failed Mean Trajectories
+    valid_indices_failed = findall(t -> t > 0, sol_t_failed)
+    for i in 1:num_species
+        lines!(ax_means_failed, sol_t_failed[valid_indices_failed], fsp_mean_failed[valid_indices_failed, i], color=:black, linestyle=linestyles[i], label=species_labels[i])
+    end
+    axislegend(ax_means_failed, "Species", position=:rc)
+
+    # Plot State Space Sizes
+    lines!(ax_size_correct, sol_t_correct[valid_indices_correct], size_correct[valid_indices_correct], color=:black)
+	lines!(ax_flux_correct, sol_t_correct[valid_indices_correct], local_ϵ[valid_indices_correct],  linestyle=:dash,color=:black)
+    lines!(ax_size_failed, sol_t_failed[valid_indices_failed], size_failed[valid_indices_failed], color=:black)
+	lines!(ax_flux_failed, sol_t_failed[valid_indices_failed], local_ϵ1[valid_indices_failed], color=:black, linestyle=:dash)
+    
+    # --- 4. Final Layout Adjustments ---
+    colgap!(f.layout, 25)
+    rowgap!(f.layout, 10)
+    rowgap!(f.layout, 2, 30) # Add extra space between the two main rows
+
+    f
+end
+
+  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -282,6 +700,7 @@ ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
@@ -308,9 +727,9 @@ StatsBase = "~0.34.5"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.6"
+julia_version = "1.12.0"
 manifest_format = "2.0"
-project_hash = "8f772b1bdcb98603a66edc7cf9c1c94801a087ad"
+project_hash = "8b32ef780c69e025dcf05636c866f629d044b206"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -777,7 +1196,7 @@ version = "0.1.1"
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.1.1+0"
+version = "1.3.0+1"
 
 [[deps.CompositeTypes]]
 git-tree-sha1 = "bce26c3dab336582805503bed209faab1c279768"
@@ -1653,6 +2072,11 @@ git-tree-sha1 = "937da4713526b96ac9a178e2035019d3b78ead4a"
 uuid = "70703baa-626e-46a2-a12c-08ffd08c73b4"
 version = "0.4.10"
 
+[[deps.JuliaSyntaxHighlighting]]
+deps = ["StyledStrings"]
+uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
+version = "1.12.0"
+
 [[deps.JumpProcesses]]
 deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "DiffEqCallbacks", "DocStringExtensions", "FunctionWrappers", "Graphs", "LinearAlgebra", "Markdown", "PoissonRandom", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "Setfield", "StaticArrays", "SymbolicIndexingInterface", "UnPack"]
 git-tree-sha1 = "f8da88993c914357031daf0023f18748ff473924"
@@ -1765,24 +2189,24 @@ uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
 version = "0.6.4"
 
 [[deps.LibCURL_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "8.6.0+0"
+version = "8.11.1+1"
 
 [[deps.LibGit2]]
-deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
+deps = ["LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 version = "1.11.0"
 
 [[deps.LibGit2_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll"]
 uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
-version = "1.7.2+0"
+version = "1.9.0+0"
 
 [[deps.LibSSH2_jll]]
-deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.0+1"
+version = "1.11.3+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -1843,7 +2267,7 @@ version = "7.4.0"
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.LinearOperators]]
 deps = ["FastClosures", "LinearAlgebra", "Printf", "Requires", "SparseArrays", "TimerOutputs"]
@@ -2000,7 +2424,7 @@ uuid = "dbb5928d-eab1-5f90-85c2-b9b0edb7c900"
 version = "0.4.2"
 
 [[deps.Markdown]]
-deps = ["Base64"]
+deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
 
@@ -2029,11 +2453,6 @@ weakdeps = ["SparseArrays"]
 
     [deps.MaybeInplace.extensions]
     MaybeInplaceSparseArraysExt = "SparseArrays"
-
-[[deps.MbedTLS_jll]]
-deps = ["Artifacts", "Libdl"]
-uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
-version = "2.28.6+0"
 
 [[deps.MicrosoftMPI_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2087,7 +2506,7 @@ version = "0.3.7"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2023.12.12"
+version = "2025.5.20"
 
 [[deps.MuladdMacro]]
 git-tree-sha1 = "cac9cc5499c25554cba55cd3c30543cff5ca4fab"
@@ -2132,7 +2551,7 @@ version = "1.1.1"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
-version = "1.2.0"
+version = "1.3.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
@@ -2237,7 +2656,7 @@ version = "0.3.29+0"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.27+1"
+version = "0.3.29+0"
 
 [[deps.OpenEXR]]
 deps = ["Colors", "FileIO", "OpenEXR_jll"]
@@ -2254,7 +2673,7 @@ version = "3.2.4+0"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.5+0"
+version = "0.8.7+0"
 
 [[deps.OpenMPI_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Hwloc_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "MPIPreferences", "TOML", "Zlib_jll"]
@@ -2263,8 +2682,7 @@ uuid = "fe0851c0-eecd-5654-98d4-656369965a5c"
 version = "5.0.8+0"
 
 [[deps.OpenSSL_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "87510f7292a2b21aeff97912b0898f9553cc5c2c"
+deps = ["Artifacts", "Libdl"]
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "3.5.1+0"
 
@@ -2494,7 +2912,7 @@ version = "1.2.0"
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+1"
+version = "10.44.0+1"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
@@ -2559,7 +2977,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.11.0"
+version = "1.12.0"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -2622,9 +3040,9 @@ version = "0.4.29"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
-git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
+git-tree-sha1 = "516f18f048a195409d6e072acf879a9f017d3900"
 uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
-version = "1.2.1"
+version = "1.3.2"
 
 [[deps.Preferences]]
 deps = ["TOML"]
@@ -2685,7 +3103,7 @@ version = "2.11.2"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.REPL]]
-deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
+deps = ["InteractiveUtils", "JuliaSyntaxHighlighting", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
@@ -2971,7 +3389,7 @@ version = "1.2.1"
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.SparseConnectivityTracer]]
 deps = ["ADTypes", "DocStringExtensions", "FillArrays", "LinearAlgebra", "Random", "SparseArrays"]
@@ -3153,7 +3571,7 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "7.7.0+0"
+version = "7.8.3+2"
 
 [[deps.Sundials]]
 deps = ["CEnum", "DataStructures", "DiffEqBase", "Libdl", "LinearAlgebra", "Logging", "PrecompileTools", "Reexport", "SciMLBase", "SparseArrays", "Sundials_jll"]
@@ -3420,7 +3838,7 @@ version = "1.6.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+1"
+version = "1.3.1+2"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3455,7 +3873,7 @@ version = "0.15.2+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.11.0+0"
+version = "5.13.1+1"
 
 [[deps.libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3490,7 +3908,7 @@ version = "1.6.0+0"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.59.0+0"
+version = "1.64.0+1"
 
 [[deps.oneTBB_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3501,7 +3919,7 @@ version = "2022.0.0+0"
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+2"
+version = "17.5.0+2"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3521,15 +3939,21 @@ version = "3.6.0+0"
 # ╠═cb9fa0aa-1588-4647-8b02-69fca1415974
 # ╠═ae7ff050-c76d-4c0d-8c8a-23724f10485a
 # ╠═85c4ad39-d14a-4e73-bfa3-4a22fef4d537
-# ╠═1fd172ed-0297-4883-8ac2-9a8033315013
-# ╠═8c374694-4992-46b0-b0a2-ffe217089e48
+# ╠═91bec3fc-65cc-4344-98d2-09f4944fc0e5
 # ╟─ebd5f20c-88c2-46d1-982f-de864ba33727
-# ╠═2b05437f-0508-4a92-b12a-3dec7bbd9f12
 # ╠═256f8d0d-7c2b-4415-969e-356ee271e908
-# ╠═845ce313-709f-4ec6-a2dc-71ba08f8fc22
+# ╠═ca5f05c8-96ea-42a8-adb0-c095a223b4cf
 # ╠═6ad6db9b-f87c-4320-9a45-a18a170b5db7
+# ╠═838fb0ef-03b6-4501-b66c-07859355e5e2
 # ╠═32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
-# ╠═8e1e415f-9132-4340-aa0c-d4d82cee26d3
-# ╠═48f9aac2-7ed5-4fdf-b708-bf890dd3cd66
+# ╠═b9cf4dc2-9817-493b-940b-5e3677ceb92e
+# ╠═690d5609-6bd0-4caa-b88e-a28e3b9da19c
+# ╠═e2e71c4e-4782-46bb-8560-9ffbae1145b3
+# ╠═7adf32b0-b602-44e7-b5bf-1f86a14dfd01
+# ╠═d0ad5800-4b37-4722-b884-07af915a3d7f
+# ╠═c1a92cd0-ffed-43d7-81c5-021799578d0d
+# ╠═5e389838-a3cc-46d2-986d-c407edc8e93a
+# ╠═9867082b-f32b-4c92-adbf-866efeec8ced
+# ╠═9e8a68b4-630f-4051-a764-dc44ccc8847e
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
