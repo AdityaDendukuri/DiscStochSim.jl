@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.13
+# v0.20.20
 
 using Markdown
 using InteractiveUtils
@@ -204,85 +204,6 @@ end
 # ╔═╡ 0555410a-e4c5-4777-bb5e-dc819bfa316f
 exp(-100000)
 
-# ╔═╡ 7cce53ab-f500-44e9-85f3-0233b769fefd
-fsp_sim_oragonator = begin
-    tf = 3
-    ϵ_dt = 1.0
-
-    global 𝒮ₜ = Set([U₀])
-    global pₜ = zeros(length(𝒮ₜ))
-    global pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-    global t = 0.0
-    global sol_t = [t]
-    global sol_S_size = [length(𝒮ₜ)]
-    global sol = [(copy(𝒮ₜ), copy(pₜ))]
-    global flx = Float64[]
-    global tresh = Float64[]
-
-    global δt = 1e-5
-    global iter = 0
-
-    # cache for reconstruction
-    global old_vec = collect(𝒮ₜ)
-
-	# reconstruction cache
-    S_old = Set{eltype(𝒮ₜ)}()
-    A_old = spzeros(Float64, 0, 0)
-	tim3=[]
-	
-    while t < tf
-        # 1) SSA expand (your existing API)
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
-
-		el= @elapsed begin
-			if isempty(S_old) || nnz(A_old) == 0
-            	# full build 
-            	global A, in_flow, out_flow = MasterEquation(
-					𝒮ₜ, model, rates, boundary_condition, t)
-			else
-            	# reconstruction 
-            	global A, in_flow, out_flow = reconstruct_MasterEquation(
-                	𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t)
-        	end
-		end
-		
-        # update cache for next step (use the CURRENT compact order)
-        global A_old = A
-        global old_vec = collect(𝒮ₜ)
-
-        # 3) Flux-based Δt (unchanged)
-        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
-        global total_flux = sum(out_flux)
-        global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t)
-
-        @assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
-        @assert isapprox(in_flux .- out_flux, Vector(A * pₜ))
-
-        # 4) Evolve
-        pₜ = expv(δt, A, pₜ)
-
-        # 5) Prune 
-        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=0.0001)
-        global pₜ ./= sum(pₜ)
-        @assert sum(pₜ) ≈ 1.0
-
-        # 6) Advance time + logging
-        global t += δt
-        
-        if iter % 1e3 == 0
-			push!(tim3, el)
-            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-            push!(sol_t, t)
-            push!(sol_S_size, length(𝒮ₜ))
-            push!(tresh, total_flux)
-        end
-        global iter += 1
-		global S_old = copy(𝒮ₜ)
-        global A_old = A
-    end
-end
-
 # ╔═╡ 18ceadf7-c263-4d25-9633-6067621b82cc
 
 
@@ -305,12 +226,6 @@ end
 
 # ╔═╡ 76ff0602-6857-49d9-bcc1-c07814b33756
 #@save "orag_times1.jld" tim3
-
-# ╔═╡ ced1d15c-56e8-47d7-8ae7-6021be478e39
-begin
-	sol_t_orag = copy(sol_t)
-	@save "orag_tim.jld" sol_t_orag 
-end
 
 # ╔═╡ 3ff7c188-d203-4466-83fd-d25d46105244
 Set([1, 2]) == Set([2, 1])
@@ -362,15 +277,98 @@ begin
 	end
 end
 
+# ╔═╡ e0f5a3f3-2bd5-401a-a40d-f20f38c3d2ba
+lines(tim1)
+
+# ╔═╡ 7be857e9-5409-4eda-9cdd-a32ecc02a81c
+t
+
+# ╔═╡ f8b9f831-61e5-4099-9c10-07178f7c2638
+
+
+# ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
+
+	iter = 0
+    while t < tf
+		
+        # Expand state space 
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, in_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-5)
+        
+		global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
+											   model, 
+											   rates, 
+											   boundary_condition, 
+											   t) 
+	
+        A = MasterEquation(in_flow, out_flow)
+		global in_flux, out_flux = Vector(in_flow * pₜ) , Vector(-out_flow * pₜ)
+		total_flux = sum(in_flux)
+
+		# based on out-flux, compute δt
+		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t, 1e6) 
+
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+
+		if iter > 5 
+			break
+		end
+
+		
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.1; flux_tolerance=1e-9)
+		
+        if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – skipping"
+        end
+
+        # 7. Normalize
+        pₜ ./= sum(pₜ)
+
+        # 8. Advance time
+        t += δt
+
+        # note .. im storing values in logarithemic intervals 
+		# (too many snapshots to save)
+		if iter % 1e3 == 0
+        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        	push!(sol_t, t)
+        	push!(sol_S_size, length(𝒮ₜ))
+        	push!(tresh, total_flux)
+		end
+		global iter = iter + 1
+    end
+
+
+# ╔═╡ 90b624e8-6531-43c0-b994-f959faf4accf
+100000*60000*30000
+
+# ╔═╡ a4822e24-f8d9-40ac-974c-364dc93c4eac
+
+
+# ╔═╡ dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
+
+
+# ╔═╡ ced1d15c-56e8-47d7-8ae7-6021be478e39
+#=╠═╡
+begin
+	sol_t_orag = copy(sol_t)
+	@save "orag_tim.jld" sol_t_orag 
+end
+  ╠═╡ =#
+
 # ╔═╡ c8b60db2-5474-4c4e-9fc7-baed1fa6960c
+#=╠═╡
 begin
 	sol_mean = map(1:size(sol)[1]) do i
 	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
 	end 
 	fsp_mean=hcat(sol_mean...)'
 end
+  ╠═╡ =#
 
 # ╔═╡ 9b71854c-b269-4ca2-b4bc-32b6401b1b9d
+#=╠═╡
 begin
 	using CairoMakie
 	
@@ -537,75 +535,17 @@ begin
 	println("(f) Y-Z plane.")
 	fig
 end
-
-# ╔═╡ e0f5a3f3-2bd5-401a-a40d-f20f38c3d2ba
-lines(tim1)
-
-# ╔═╡ 7be857e9-5409-4eda-9cdd-a32ecc02a81c
-t
+  ╠═╡ =#
 
 # ╔═╡ 1de465f9-dd63-4ac5-a03a-5fa3bd0115b4
+#=╠═╡
 save("orag.png", fig)
+  ╠═╡ =#
 
-# ╔═╡ f8b9f831-61e5-4099-9c10-07178f7c2638
-
-
-# ╔═╡ 006cb103-dc41-4742-a440-35923c802dc5
-
-	iter = 0
-    while t < tf
-		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, in_flux, model, rates, t, boundary_condition, 1; flux_tol=1e-5)
-        
-		global in_flow, out_flow = ComputeFlow(𝒮ₜ, 
-											   model, 
-											   rates, 
-											   boundary_condition, 
-											   t) 
-	
-        A = MasterEquation(in_flow, out_flow)
-		global in_flux, out_flux = Vector(in_flow * pₜ) , Vector(-out_flow * pₜ)
-		total_flux = sum(in_flux)
-
-		# based on out-flux, compute δt
-		global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
-        δt = min(δt, tf - t, 1e6) 
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-		if iter > 5 
-			break
-		end
-
-		
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.1; flux_tolerance=1e-9)
-		
-        if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – skipping"
-        end
-
-        # 7. Normalize
-        pₜ ./= sum(pₜ)
-
-        # 8. Advance time
-        t += δt
-
-        # note .. im storing values in logarithemic intervals 
-		# (too many snapshots to save)
-		if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-        	push!(tresh, total_flux)
-		end
-		global iter = iter + 1
-    end
-
-
-# ╔═╡ 90b624e8-6531-43c0-b994-f959faf4accf
-100000*60000*30000
+# ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
+#=╠═╡
+plot(sol_S_size, title="state space size")
+  ╠═╡ =#
 
 # ╔═╡ 9f592c0e-313e-48dd-bcbe-22e4b41ad55a
 # ╠═╡ disabled = true
@@ -670,90 +610,6 @@ fsp_sim_oregonator = begin
     
 end
   ╠═╡ =#
-
-# ╔═╡ 2221d90b-8c6f-41d1-be00-35e18b5e2f60
-# ╠═╡ disabled = true
-#=╠═╡
-fsp_sim_oragonator = begin
-    tf = 10
-    ϵ_dt = 0.1# Tolerance for flux-based adaptive dt
-
-    # Initial condition for Robertson problem
-    global 𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    # Time and diagnostics
-    local t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = Float64[]
-    tresh = Float64[]
-	δt_max = 1e-2
-
-	
-	global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 2)
-	global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-	global exit_flux_vec = Vector(-diag(A) .* pₜ)
-	δt = ϵ_dt / sum(exit_flux_vec)
-
-	iter = 0
-    while t < tf
-		
-        # Expand state space 
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, exit_flux_vec, model, rates, t, boundary_condition, 1; flux_tol=1e-4)
-        
-		
-        global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
-
-		# compute out-flux
-		d = [A[i,i] for i in 1:size(A,1)]     # diagonal of A
-		global exit_flux_vec = @. -d * pₜ
-		global total_flux = sum(exit_flux_vec)
-
-		# based on out-flux, compute δt
-		#δt = total_flux > 0 ? min(ϵ_dt/total_flux, tf - t, δt_max) : (tf - t)
-        δt = 0.01#min(δt, tf - t, 1e5) 
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-
-		# based on probability mass and out-flux, prune
-		in_flux = Vector(A * pₜ .- diag(A) .* pₜ)
-        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.3; flux_tolerance=1e-3)
-		
-        if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – skipping"
-        end
-
-        # 7. Normalize
-        pₜ ./= sum(pₜ)
-
-        # 8. Advance time
-        t += δt
-
-        # 9. Store diagnostics
-		if iter % 1e3 == 0
-        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-        	push!(sol_t, t)
-        	push!(sol_S_size, length(𝒮ₜ))
-        	push!(tresh, total_flux)
-		end
-		global iter = iter + 1
-    end
-end
-
-  ╠═╡ =#
-
-# ╔═╡ a4822e24-f8d9-40ac-974c-364dc93c4eac
-
-
-# ╔═╡ dcf8bd9b-d8ae-4a30-bae3-e6d4b08925b2
-
-
-# ╔═╡ 5c736465-5bfc-45e6-8445-266e3eaffd47
-plot(sol_S_size, title="state space size")
 
 # ╔═╡ f0de5260-35fb-4b19-ada4-13d7764151f8
 # ╠═╡ disabled = true
@@ -842,6 +698,162 @@ S_old = Set()
         	push!(tresh, total_flux)
 		end
 		global iter = iter + 1
+    end
+end
+  ╠═╡ =#
+
+# ╔═╡ 2221d90b-8c6f-41d1-be00-35e18b5e2f60
+# ╠═╡ disabled = true
+#=╠═╡
+fsp_sim_oragonator = begin
+    tf = 10
+    ϵ_dt = 0.1# Tolerance for flux-based adaptive dt
+
+    # Initial condition for Robertson problem
+    global 𝒮ₜ = Set([U₀])
+    pₜ = zeros(length(𝒮ₜ))
+    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+
+    # Time and diagnostics
+    local t = 0.0
+    sol_t = [t]
+    sol_S_size = [length(𝒮ₜ)]
+    sol = [(copy(𝒮ₜ), copy(pₜ))]
+    flx = Float64[]
+    tresh = Float64[]
+	δt_max = 1e-2
+
+	
+	global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 2)
+	global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
+	global exit_flux_vec = Vector(-diag(A) .* pₜ)
+	δt = ϵ_dt / sum(exit_flux_vec)
+
+	iter = 0
+    while t < tf
+		
+        # Expand state space 
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, exit_flux_vec, model, rates, t, boundary_condition, 1; flux_tol=1e-4)
+        
+		
+        global A = MasterEquation(𝒮ₜ, model, rates, boundary_condition, t)
+
+		# compute out-flux
+		d = [A[i,i] for i in 1:size(A,1)]     # diagonal of A
+		global exit_flux_vec = @. -d * pₜ
+		global total_flux = sum(exit_flux_vec)
+
+		# based on out-flux, compute δt
+		#δt = total_flux > 0 ? min(ϵ_dt/total_flux, tf - t, δt_max) : (tf - t)
+        δt = 0.01#min(δt, tf - t, 1e5) 
+
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+
+		# based on probability mass and out-flux, prune
+		in_flux = Vector(A * pₜ .- diag(A) .* pₜ)
+        𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, in_flux, model, rates, t, 0.3; flux_tolerance=1e-3)
+		
+        if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – skipping"
+        end
+
+        # 7. Normalize
+        pₜ ./= sum(pₜ)
+
+        # 8. Advance time
+        t += δt
+
+        # 9. Store diagnostics
+		if iter % 1e3 == 0
+        	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+        	push!(sol_t, t)
+        	push!(sol_S_size, length(𝒮ₜ))
+        	push!(tresh, total_flux)
+		end
+		global iter = iter + 1
+    end
+end
+
+  ╠═╡ =#
+
+# ╔═╡ 7cce53ab-f500-44e9-85f3-0233b769fefd
+#=╠═╡
+fsp_sim_oragonator = begin
+    tf = 3
+    ϵ_dt = 1.0
+
+    global 𝒮ₜ = Set([U₀])
+    global pₜ = zeros(length(𝒮ₜ))
+    global pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+    global t = 0.0
+    global sol_t = [t]
+    global sol_S_size = [length(𝒮ₜ)]
+    global sol = [(copy(𝒮ₜ), copy(pₜ))]
+    global flx = Float64[]
+    global tresh = Float64[]
+
+    global δt = 1e-5
+    global iter = 0
+
+    # cache for reconstruction
+    global old_vec = collect(𝒮ₜ)
+
+	# reconstruction cache
+    S_old = Set{eltype(𝒮ₜ)}()
+    A_old = spzeros(Float64, 0, 0)
+	tim3=[]
+	
+    while t < tf
+        # 1) SSA expand (your existing API)
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates, t, boundary_condition, 1)
+
+		el= @elapsed begin
+			if isempty(S_old) || nnz(A_old) == 0
+            	# full build 
+            	global A, in_flow, out_flow = MasterEquation(
+					𝒮ₜ, model, rates, boundary_condition, t)
+			else
+            	# reconstruction 
+            	global A, in_flow, out_flow = reconstruct_MasterEquation(
+                	𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t)
+        	end
+		end
+		
+        # update cache for next step (use the CURRENT compact order)
+        global A_old = A
+        global old_vec = collect(𝒮ₜ)
+
+        # 3) Flux-based Δt (unchanged)
+        global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ)
+        global total_flux = sum(out_flux)
+        global δt = (total_flux > 0.0) ? (ϵ_dt / total_flux) : (tf - t)
+        δt = min(δt, tf - t)
+
+        @assert all(in_flux .≥ 0) && all(out_flux .≥ 0)
+        @assert isapprox(in_flux .- out_flux, Vector(A * pₜ))
+
+        # 4) Evolve
+        pₜ = expv(δt, A, pₜ)
+
+        # 5) Prune 
+        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.1; flux_tolerance=0.0001)
+        global pₜ ./= sum(pₜ)
+        @assert sum(pₜ) ≈ 1.0
+
+        # 6) Advance time + logging
+        global t += δt
+        
+        if iter % 1e3 == 0
+			push!(tim3, el)
+            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
+            push!(tresh, total_flux)
+        end
+        global iter += 1
+		global S_old = copy(𝒮ₜ)
+        global A_old = A
     end
 end
   ╠═╡ =#

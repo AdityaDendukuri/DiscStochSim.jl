@@ -103,7 +103,15 @@ end
 Expands `X` using `ssa_step` (with `rates` and `t`) for `N` iterations and updates the probability vector.
 (Optimized: O(|X|) reindex using a Dict; preserves eltype of `pₜ`.)
 """
-function expand!(X::Set{Element}, pₜ::Vector, model::Model, rates::AbstractArray, t::Number, boundary_condition::Function, N::Int) where {Element,Model}
+function expand!(
+    X::Set{Element},
+    pₜ::Vector, 
+    model::Model, 
+    rates::AbstractArray,
+    t::Number,
+    boundary_condition::Function, 
+    N::Int
+) where {Element,Model}
     X_prev = collect(X)
     @inbounds for _ in 1:N
         expand1!(X, model, rates, t, boundary_condition)

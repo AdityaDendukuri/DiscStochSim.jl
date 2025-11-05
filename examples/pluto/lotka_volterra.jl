@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.6
+# v0.20.20
 
 using Markdown
 using InteractiveUtils
@@ -38,6 +38,50 @@ def_params = begin
 	# time interval and initial values
 end
 
+# ╔═╡ e3e0c398-9db0-420a-86b3-65220761028c
+function robust_purge1!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+    candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    flux_vector = zeros(T, length(p))
+
+    for i in eachindex(X_vec)
+        current_state = X_vec[i]
+        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * weight
+    end
+
+    total_flux = sum(flux_vector)
+
+    # Set an adaptive threshold based on the total system flux
+    flux_threshold = total_flux * flux_tolerance
+
+    # Filter the candidates based on this adaptive threshold
+    final_idxs_to_prune = Set{Int}()
+    for idx in candidate_idxs
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs_to_prune, idx)
+        end
+    end
+
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+
+    return new_X, new_p, total_flux
+end
+
 # ╔═╡ 91bec3fc-65cc-4344-98d2-09f4944fc0e5
 function robust_purge!(
     X::Set{Element}, 
@@ -55,7 +99,7 @@ function robust_purge!(
     idx = sortperm(p; rev=false)
     k = round(Int, prob_quantile * length(idx))            
     drop_idxs = k > 0 ? idx[1:k] : Int[]
-	candidate_idxs = drop_idxs
+	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
 
     # Build new containers
     keep_mask = trues(length(p))
@@ -218,8 +262,8 @@ fsp_sim_flux = begin
 	# time stepping loop
 	local iter = 1
 	local pₜ = p₀
-	local δt = 1e2
-	global T =0:δt:1e8
+	local δt = 1.0
+	global T =0:δt:1e4
 	
 	# variables to store simulation observables
 	size_𝒮ₜ = Int.(zeros(length(T))) # system sizes
@@ -239,46 +283,51 @@ fsp_sim_flux = begin
 													 boundary_condition, 
 													 t)
 
-		pₜ = expv(δt, A, pₜ)
+		pₜ = expmv(δt, A, pₜ)
     	push!(sol, (𝒮ₜ, pₜ))
 		
 		# purge state space
-		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
+		𝒮ₜ, pₜ, total_flux = robust_purge1!(𝒮ₜ, 
 									pₜ, 
 									model,
 									rates,
 									δt,
-									0.7; flux_tolerance=0.1)
+									0.9; flux_tolerance=0.00001)
 	 	
 
 		local_ϵ[iter] = 1.0 - sum(pₜ)
     	pₜ ./= sum(pₜ)
-		flux[iter] = max(0.0, 1.0 - δt * total_flux)
+		#flux[iter] = max(0.0, 1.0 - δt * total_flux)
 		pₜ ./= sum(pₜ)		
 	end
+	global afsp_mean = map(1:length(sol)) do i
+		sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
+	end 
+	afsp_mean=hcat(afsp_mean...)'
 end
 
+# ╔═╡ 7aaa031a-5cf4-421c-bb78-c9b30fb3fe0f
+sol[end][1]
 
 # ╔═╡ 7ea7ecaf-7a46-4b9b-a0e0-56171ffd7c23
-
+afsp_mean
 
 # ╔═╡ 18962357-9f6a-4668-82cb-7f133a130b5e
-
 fsp_full = begin
-		# 4. Initialize p₀
 	local U₀ = CartesianIndex(1,0,0)
-	local 𝒮ₜ = Set{CartesianIndex{3}}()
+	global 𝒮ₜ = Set{CartesianIndex{3}}()
 	local iter = 1
 	local δt = 1.0
-	local T =0:δt:Integer(1e6)
-	for i in 0:10
-		for j in 0:10
-			for k in 0:10
+	local T =0:δt:Integer(1e4)
+	for i in 0:2
+		for j in 0:2
+			for k in 0:1000
 				push!(𝒮ₜ, CartesianIndex(i, j, k))
 			end
 		end
 	end
-	local pₜ = zeros(length(𝒮ₜ))
+	idxmap = Dict([collect(𝒮ₜ)[i] => i for i in length(𝒮ₜ)])
+	local pₜ = zeros(length(𝒮ₜ)) 
 	local pₜ[FindElement(U₀,𝒮ₜ)] = 1.0
 	local A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
 												model,
@@ -287,35 +336,678 @@ fsp_full = begin
 												δt)
 	global sol_exact = []
 	@progress for t ∈ T
-		pₜ = expv(δt, A, pₜ)
-		if iter%1000==0
-			push!(sol_exact, pₜ)
-		end
+		p = expmv(t, A, pₜ)
+		push!(sol_exact, p)
 		iter+=1
 	end
 	global exact_mean = map(1:length(sol_exact)) do i
 		    sum(collect.(Tuple.(𝒮ₜ)) .* sol_exact[i])
 	end 
 	exact_mean=hcat(exact_mean...)'
-
 end
 
+# ╔═╡ 7813ebfd-f674-44da-b2d5-dfed9e028457
+begin
+	# Distribution Comparison Functions - CairoMakie Version for Pluto
+	# ============================================================================
+	
+	
+	# ============================================================================
+	# 1. MARGINAL DISTRIBUTIONS
+	# ============================================================================
+	
+	"""
+	Compute marginal distribution for a single species
+	"""
+	function compute_marginal(𝒮, p, species_idx)
+	    # species_idx: 1=A, 2=B, 3=C
+	    𝒮_vec = collect(𝒮)
+	    
+	    # Find range of values for this species
+	    values = [state[species_idx] for state in 𝒮_vec]
+	    min_val = minimum(values)
+	    max_val = maximum(values)
+	    
+	    # Compute marginal probabilities
+	    marginal = zeros(max_val - min_val + 1)
+	    for (i, state) in enumerate(𝒮_vec)
+	        idx = state[species_idx] - min_val + 1
+	        marginal[idx] += p[i]
+	    end
+	    
+	    return (values=collect(min_val:max_val), probs=marginal)
+	end
+	
+	"""
+	Compare marginal distributions between adaptive and exact
+	"""
+	function compare_marginals(time_idx_adaptive, time_idx_exact, species_idx; 
+	                          species_name="Species")
+	    
+	    # Get solutions
+	    𝒮_adaptive, p_adaptive = sol[time_idx_adaptive]
+	    p_exact = sol_exact[time_idx_exact]
+	    
+	    # Compute marginals
+	    marg_adaptive = compute_marginal(𝒮_adaptive, p_adaptive, species_idx)
+	    marg_exact = compute_marginal(𝒮ₜ, p_exact, species_idx)
+	    
+	    # Compute error on overlapping support
+	    min_val = max(marg_adaptive.values[1], marg_exact.values[1])
+	    max_val = min(marg_adaptive.values[end], marg_exact.values[end])
+	    
+	    l1_error = 0.0
+	    for val in min_val:max_val
+	        idx_a = val - marg_adaptive.values[1] + 1
+	        idx_e = val - marg_exact.values[1] + 1
+	        
+	        p_a = (1 <= idx_a <= length(marg_adaptive.probs)) ? marg_adaptive.probs[idx_a] : 0.0
+	        p_e = (1 <= idx_e <= length(marg_exact.probs)) ? marg_exact.probs[idx_e] : 0.0
+	        
+	        l1_error += abs(p_a - p_e)
+	    end
+	    
+	    # Account for probability mass outside overlapping region
+	    for (i, val) in enumerate(marg_adaptive.values)
+	        if val < marg_exact.values[1] || val > marg_exact.values[end]
+	            l1_error += marg_adaptive.probs[i]
+	        end
+	    end
+	    for (i, val) in enumerate(marg_exact.values)
+	        if val < marg_adaptive.values[1] || val > marg_adaptive.values[end]
+	            l1_error += marg_exact.probs[i]
+	        end
+	    end
+	    
+	    tv_distance = l1_error / 2.0
+	    
+	    println("\n$species_name Marginal Distribution:")
+	    println("  L1 Error:     $l1_error")
+	    println("  TV Distance:  $tv_distance")
+	    println("  Support (Adaptive): [$(marg_adaptive.values[1]), $(marg_adaptive.values[end])]")
+	    println("  Support (Exact):    [$(marg_exact.values[1]), $(marg_exact.values[end])]")
+	    
+	    return (adaptive=marg_adaptive, exact=marg_exact, l1=l1_error, tv=tv_distance)
+	end
+	
+	"""
+	Plot marginal distribution comparison using CairoMakie (black and white)
+	"""
+	function plot_marginal_comparison(time_idx_adaptive, time_idx_exact, species_idx;
+	                                 species_name="Species")
+	    
+	    result = compare_marginals(time_idx_adaptive, time_idx_exact, species_idx; 
+	                              species_name=species_name)
+	    
+	    fig = Figure(resolution=(600, 400))
+	    ax = Axis(fig[1, 1], 
+	             xlabel="$species_name Count", 
+	             ylabel="Probability",
+	             title="$species_name Marginal (TV=$(round(result.tv, digits=4)))")
+	    
+	    # Plot exact (solid line, circles)
+	    lines!(ax, result.exact.values, result.exact.probs, 
+	          label="Exact", linewidth=2, color=:black)
+	    scatter!(ax, result.exact.values, result.exact.probs, 
+	            color=:black, markersize=10, marker=:circle)
+	    
+	    # Plot adaptive (dashed line, squares)
+	    lines!(ax, result.adaptive.values, result.adaptive.probs,
+	          label="Adaptive", linewidth=2, color=:black, linestyle=:dash)
+	    scatter!(ax, result.adaptive.values, result.adaptive.probs,
+	            color=:black, markersize=10, marker=:rect)
+	    
+	    axislegend(ax, position=:rt)
+	    
+	    return fig
+	end
+	
+	# ============================================================================
+	# 2. JOINT DISTRIBUTIONS (2D)
+	# ============================================================================
+	
+	"""
+	Compute 2D joint distribution for two species
+	"""
+	function compute_joint_2d(𝒮, p, species_idx1, species_idx2)
+	    𝒮_vec = collect(𝒮)
+	    
+	    # Find ranges
+	    vals1 = [state[species_idx1] for state in 𝒮_vec]
+	    vals2 = [state[species_idx2] for state in 𝒮_vec]
+	    
+	    min1, max1 = minimum(vals1), maximum(vals1)
+	    min2, max2 = minimum(vals2), maximum(vals2)
+	    
+	    # Create 2D array
+	    joint = zeros(max1 - min1 + 1, max2 - min2 + 1)
+	    
+	    for (i, state) in enumerate(𝒮_vec)
+	        idx1 = state[species_idx1] - min1 + 1
+	        idx2 = state[species_idx2] - min2 + 1
+	        joint[idx1, idx2] += p[i]
+	    end
+	    
+	    return (values1=collect(min1:max1), values2=collect(min2:max2), probs=joint)
+	end
+	
+	"""
+	Compare 2D joint distributions
+	"""
+	function compare_joint_2d(time_idx_adaptive, time_idx_exact, species_idx1, species_idx2;
+	                         species_name1="Species 1", species_name2="Species 2")
+	    
+	    # Get solutions
+	    𝒮_adaptive, p_adaptive = sol[time_idx_adaptive]
+	    p_exact = sol_exact[time_idx_exact]
+	    
+	    # Compute joints
+	    joint_adaptive = compute_joint_2d(𝒮_adaptive, p_adaptive, species_idx1, species_idx2)
+	    joint_exact = compute_joint_2d(𝒮ₜ, p_exact, species_idx1, species_idx2)
+	    
+	    # Compute error on overlapping support
+	    min1 = max(joint_adaptive.values1[1], joint_exact.values1[1])
+	    max1 = min(joint_adaptive.values1[end], joint_exact.values1[end])
+	    min2 = max(joint_adaptive.values2[1], joint_exact.values2[1])
+	    max2 = min(joint_adaptive.values2[end], joint_exact.values2[end])
+	    
+	    l1_error = 0.0
+	    
+	    # Compare on overlapping region
+	    for val1 in min1:max1
+	        for val2 in min2:max2
+	            idx1_a = val1 - joint_adaptive.values1[1] + 1
+	            idx2_a = val2 - joint_adaptive.values2[1] + 1
+	            idx1_e = val1 - joint_exact.values1[1] + 1
+	            idx2_e = val2 - joint_exact.values2[1] + 1
+	            
+	            p_a = joint_adaptive.probs[idx1_a, idx2_a]
+	            p_e = joint_exact.probs[idx1_e, idx2_e]
+	            
+	            l1_error += abs(p_a - p_e)
+	        end
+	    end
+	    
+	    # Add probability mass outside overlapping region (simplified)
+	    total_mass_adaptive = sum(joint_adaptive.probs)
+	    total_mass_exact = sum(joint_exact.probs)
+	    
+	    tv_distance = l1_error / 2.0
+	    
+	    println("\n$species_name1-$species_name2 Joint Distribution:")
+	    println("  L1 Error:     $l1_error")
+	    println("  TV Distance:  $tv_distance")
+	    
+	    return (adaptive=joint_adaptive, exact=joint_exact, l1=l1_error, tv=tv_distance)
+	end
+	
+	"""
+	Plot 2D joint distribution comparison using CairoMakie heatmaps (grayscale)
+	"""
+	function plot_joint_comparison(time_idx_adaptive, time_idx_exact, species_idx1, species_idx2;
+	                              species_name1="Species 1", species_name2="Species 2")
+	    
+	    result = compare_joint_2d(time_idx_adaptive, time_idx_exact, species_idx1, species_idx2;
+	                             species_name1=species_name1, species_name2=species_name2)
+	    
+	    fig = Figure(resolution=(1500, 400))
+	    
+	    # Plot exact
+	    ax1 = Axis(fig[1, 1], 
+	              xlabel=species_name2, ylabel=species_name1,
+	              title="Exact Joint")
+	    hm1 = heatmap!(ax1, result.exact.values2, result.exact.values1, result.exact.probs',
+	                  colormap=:grays)
+	    Colorbar(fig[1, 2], hm1)
+	    
+	    # Plot adaptive
+	    ax2 = Axis(fig[1, 3],
+	              xlabel=species_name2, ylabel=species_name1,
+	              title="Adaptive Joint")
+	    hm2 = heatmap!(ax2, result.adaptive.values2, result.adaptive.values1, result.adaptive.probs',
+	                  colormap=:grays, colorrange=(0, maximum(result.exact.probs)))
+	    Colorbar(fig[1, 4], hm2)
+	    
+	    # Plot difference on common grid
+	    min1 = max(result.exact.values1[1], result.adaptive.values1[1])
+	    max1 = min(result.exact.values1[end], result.adaptive.values1[end])
+	    min2 = max(result.exact.values2[1], result.adaptive.values2[1])
+	    max2 = min(result.exact.values2[end], result.adaptive.values2[end])
+	    
+	    diff = zeros(max1-min1+1, max2-min2+1)
+	    for (i, val1) in enumerate(min1:max1)
+	        for (j, val2) in enumerate(min2:max2)
+	            idx1_e = val1 - result.exact.values1[1] + 1
+	            idx2_e = val2 - result.exact.values2[1] + 1
+	            idx1_a = val1 - result.adaptive.values1[1] + 1
+	            idx2_a = val2 - result.adaptive.values2[1] + 1
+	            
+	            diff[i, j] = result.exact.probs[idx1_e, idx2_e] - result.adaptive.probs[idx1_a, idx2_a]
+	        end
+	    end
+	    
+	    ax3 = Axis(fig[1, 5],
+	              xlabel=species_name2, ylabel=species_name1,
+	              title="Difference (Exact - Adaptive)")
+	    max_diff = maximum(abs.(diff))
+	    hm3 = heatmap!(ax3, collect(min2:max2), collect(min1:max1), diff',
+	                  colormap=:grays, colorrange=(-max_diff, max_diff))
+	    Colorbar(fig[1, 6], hm3)
+	    
+	    return fig
+	end
+	
+	# ============================================================================
+	# 3. COMPREHENSIVE COMPARISON
+	# ============================================================================
+	
+	"""
+	Complete distribution comparison at a single time point
+	"""
+	function full_distribution_comparison(time_idx_adaptive, time_idx_exact)
+	    
+	    println("="^70)
+	    println("DISTRIBUTION COMPARISON")
+	    println("  Adaptive time index: $time_idx_adaptive")
+	    println("  Exact time index:    $time_idx_exact")
+	    println("="^70)
+	    
+	    # Marginals
+	    println("\n--- MARGINAL DISTRIBUTIONS ---")
+	    marg_A = compare_marginals(time_idx_adaptive, time_idx_exact, 1; species_name="A")
+	    marg_B = compare_marginals(time_idx_adaptive, time_idx_exact, 2; species_name="B")
+	    marg_C = compare_marginals(time_idx_adaptive, time_idx_exact, 3; species_name="C")
+	    
+	    # Joints
+	    println("\n--- JOINT DISTRIBUTIONS ---")
+	    joint_AB = compare_joint_2d(time_idx_adaptive, time_idx_exact, 1, 2; 
+	                                species_name1="A", species_name2="B")
+	    joint_BC = compare_joint_2d(time_idx_adaptive, time_idx_exact, 2, 3;
+	                                species_name1="B", species_name2="C")
+	    joint_AC = compare_joint_2d(time_idx_adaptive, time_idx_exact, 1, 3;
+	                                species_name1="A", species_name2="C")
+	    
+	    # Means
+	    println("\n--- MEAN VALUES ---")
+	    mean_adaptive = afsp_mean[time_idx_adaptive, :]
+	    mean_exact = exact_mean[time_idx_exact, :]
+	    println("  Adaptive: A=$(mean_adaptive[1]), B=$(mean_adaptive[2]), C=$(mean_adaptive[3])")
+	    println("  Exact:    A=$(mean_exact[1]), B=$(mean_exact[2]), C=$(mean_exact[3])")
+	    println("  Errors:   A=$(mean_adaptive[1]-mean_exact[1]), B=$(mean_adaptive[2]-mean_exact[2]), C=$(mean_adaptive[3]-mean_exact[3])")
+	    
+	    println("\n" * "="^70)
+	    
+	    return (marginals=(A=marg_A, B=marg_B, C=marg_C),
+	            joints=(AB=joint_AB, BC=joint_BC, AC=joint_AC))
+	end
+	
+	"""
+	Create comprehensive visualization with CairoMakie (black and white)
+	"""
+	function plot_full_comparison(time_idx_adaptive, time_idx_exact)
+	    
+	    # Get all marginal results
+	    marg_A = compare_marginals(time_idx_adaptive, time_idx_exact, 1; species_name="A")
+	    marg_B = compare_marginals(time_idx_adaptive, time_idx_exact, 2; species_name="B")
+	    marg_C = compare_marginals(time_idx_adaptive, time_idx_exact, 3; species_name="C")
+	    
+	    # Create figure with all three marginals
+	    fig = Figure(resolution=(1500, 400))
+	    
+	    # Species A
+	    ax1 = Axis(fig[1, 1], xlabel="A Count", ylabel="Probability",
+	              title="A Marginal (TV=$(round(marg_A.tv, digits=4)))")
+	    lines!(ax1, marg_A.exact.values, marg_A.exact.probs, label="Exact", linewidth=2, color=:black)
+	    scatter!(ax1, marg_A.exact.values, marg_A.exact.probs, color=:black, markersize=10, marker=:circle)
+	    lines!(ax1, marg_A.adaptive.values, marg_A.adaptive.probs, label="Adaptive", 
+	          linewidth=2, color=:black, linestyle=:dash)
+	    scatter!(ax1, marg_A.adaptive.values, marg_A.adaptive.probs, 
+	            color=:black, markersize=10, marker=:rect)
+	    axislegend(ax1, position=:rt)
+	    
+	    # Species B
+	    ax2 = Axis(fig[1, 2], xlabel="B Count", ylabel="Probability",
+	              title="B Marginal (TV=$(round(marg_B.tv, digits=4)))")
+	    lines!(ax2, marg_B.exact.values, marg_B.exact.probs, label="Exact", linewidth=2, color=:black)
+	    scatter!(ax2, marg_B.exact.values, marg_B.exact.probs, color=:black, markersize=10, marker=:circle)
+	    lines!(ax2, marg_B.adaptive.values, marg_B.adaptive.probs, label="Adaptive",
+	          linewidth=2, color=:black, linestyle=:dash)
+	    scatter!(ax2, marg_B.adaptive.values, marg_B.adaptive.probs,
+	            color=:black, markersize=10, marker=:rect)
+	    axislegend(ax2, position=:rt)
+	    
+	    # Species C
+	    ax3 = Axis(fig[1, 3], xlabel="C Count", ylabel="Probability",
+	              title="C Marginal (TV=$(round(marg_C.tv, digits=4)))")
+	    lines!(ax3, marg_C.exact.values, marg_C.exact.probs, label="Exact", linewidth=2, color=:black)
+	    scatter!(ax3, marg_C.exact.values, marg_C.exact.probs, color=:black, markersize=10, marker=:circle)
+	    lines!(ax3, marg_C.adaptive.values, marg_C.adaptive.probs, label="Adaptive",
+	          linewidth=2, color=:black, linestyle=:dash)
+	    scatter!(ax3, marg_C.adaptive.values, marg_C.adaptive.probs,
+	            color=:black, markersize=10, marker=:rect)
+	    axislegend(ax3, position=:rt)
+	    
+	    return fig
+	end
+	
+	# ============================================================================
+	# USAGE IN PLUTO
+	# ============================================================================
+	
+	#=
+	# In your Pluto notebook, after running fsp_full and fsp_sim_flux:
+	
+	# Cell 1: Text comparison
+	full_distribution_comparison(length(sol), length(sol_exact))
+	
+	# Cell 2: Plot all marginals (returns Figure directly)
+	plot_full_comparison(length(sol), length(sol_exact))
+	
+	# Cell 3: Plot individual marginal
+	plot_marginal_comparison(length(sol), length(sol_exact), 3; species_name="C")
+	
+	# Cell 4: Plot joint distribution
+	plot_joint_comparison(length(sol), length(sol_exact), 2, 3; 
+	                     species_name1="B", species_name2="C")
+	
+	# Cell 5: Time evolution of errors
+	let
+	    time_indices = 1:10:length(sol)
+	    tv_A = Float64[]
+	    tv_B = Float64[]
+	    tv_C = Float64[]
+	    
+	    for i in time_indices
+	        if i <= length(sol_exact)
+	            result_A = compare_marginals(i, i, 1; species_name="A")
+	            result_B = compare_marginals(i, i, 2; species_name="B")
+	            result_C = compare_marginals(i, i, 3; species_name="C")
+	            push!(tv_A, result_A.tv)
+	            push!(tv_B, result_B.tv)
+	            push!(tv_C, result_C.tv)
+	        end
+	    end
+	    
+	    fig = Figure(resolution=(800, 500))
+	    ax = Axis(fig[1, 1], xlabel="Time Index", ylabel="TV Distance",
+	             title="Marginal Distribution Errors", yscale=log10)
+	    lines!(ax, time_indices[1:length(tv_A)], tv_A, label="A", linewidth=2)
+	    lines!(ax, time_indices[1:length(tv_B)], tv_B, label="B", linewidth=2)
+	    lines!(ax, time_indices[1:length(tv_C)], tv_C, label="C", linewidth=2)
+	    axislegend(ax, position=:rt)
+	    fig
+	end
+	=#
+end
 
-# ╔═╡ 0a53249d-ec7d-464a-bab7-0f2361c2a599
-
-
-# ╔═╡ 7362a236-8f50-4890-800b-71274ac50cdb
-exact_mean
-
+# ╔═╡ 01a13951-2701-48bc-bb48-6c9594c89888
+begin
+	using LsqFit
+	siam_theme = Theme(
+	    fontsize = 10,
+	    font = "CMU Serif",
+	    
+	    Axis = (
+	        titlesize = 10,
+	        xlabelsize = 10,
+	        ylabelsize = 10,
+	        xticklabelsize = 9,
+	        yticklabelsize = 9,
+	        
+	        xgridvisible = false,
+	        ygridvisible = false,
+	        
+	        leftspinevisible = true,
+	        rightspinevisible = true,
+	        topspinevisible = true,
+	        bottomspinevisible = true,
+	        
+	        spinewidth = 0.75,
+	        xtickwidth = 0.75,
+	        ytickwidth = 0.75,
+	        xtickalign = 1,
+	        ytickalign = 1,
+	        xticksize = 3,
+	        yticksize = 3,
+	    ),
+	    
+	    Legend = (
+	        framevisible = false,
+	        patchsize = (20, 3),
+	        labelsize = 9,
+	        rowgap = 2,
+	        padding = (2, 2, 2, 2),
+	    ),
+	    
+	    Lines = (
+	        linewidth = 1.0,
+	    ),
+	    
+	    backgroundcolor = :white,
+	)
+	
+	set_theme!(siam_theme)
+	
+	# Create figure with 4 panels
+	begin
+	    local errors_C = abs.(afsp_mean[:, 3] .- exact_mean[:, 3])
+	    Δt = 1.0
+	    
+	    local fig = Figure(size=(504, 380))  # SIAM double-column width
+	    
+	    # Panel (a): Error accumulation over time
+	    local ax_a = Axis(fig[1, 1],
+	        xlabel = "Time (s)",
+	        ylabel = "Absolute error",
+	        title = "(a) Mean error accumulation")
+	    
+	    lines!(ax_a, T, errors_C, 
+	        color = :black, linewidth = 1.0)
+	    
+	    # Mark phase transition
+	    vlines!(ax_a, [5000], 
+	        color = :black, linestyle = :dash, linewidth = 0.75)
+	    
+	    text!(ax_a, 4200, 0.18, 
+	        text = "Phase transition", 
+	        fontsize = 8, rotation = π/2)
+	    
+	    # Panel (b): Error rate over time
+	    local ax_b = Axis(fig[1, 2],
+	        xlabel = "Time (s)",
+	        ylabel = "Error rate (s⁻¹)",
+	        title = "(b) Instantaneous error rate")
+	    
+	    error_rate = diff(errors_C) ./ Δt
+	    # Smooth for visualization
+	    window = 50
+	    error_rate_smooth = [mean(error_rate[max(1,i-window):min(end,i+window)]) 
+	                         for i in 1:length(error_rate)]
+	    
+	    lines!(ax_b, T[1:end-1], error_rate_smooth, 
+	        color = :black, linewidth = 1.0)
+	    
+	    vlines!(ax_b, [5000], 
+	        color = :black, linestyle = :dash, linewidth = 0.75)
+	    
+	    # Add phase rate annotations
+	    text!(ax_b, 2500, 4.5e-5, 
+	        text = "Phase 1\n3.8×10⁻⁶ s⁻¹", 
+	        fontsize = 8, align = (:center, :top))
+	    
+	    text!(ax_b, 7500, 4.5e-5, 
+	        text = "Phase 2\n4.2×10⁻⁵ s⁻¹", 
+	        fontsize = 8, align = (:center, :top))
+	    
+	    # Panel (c): Mean trajectories comparison
+	    local ax_c = Axis(fig[2, 1],
+	        xlabel = "Time (s)",
+	        ylabel = "Mean copy number",
+	        title = "(c) Mean trajectories")
+	    
+	    # Species A
+	    lines!(ax_c, T, exact_mean[:, 1], 
+	        color = :black, linewidth = 1.0, label = "A (exact)")
+	    lines!(ax_c, T, afsp_mean[:, 1], 
+	        color = :black, linewidth = 1.0, linestyle = :dash, label = "A (adaptive)")
+	    
+	    # Species C
+	    lines!(ax_c, T, exact_mean[:, 3], 
+	        color = :gray40, linewidth = 1.0, label = "C (exact)")
+	    lines!(ax_c, T, afsp_mean[:, 3], 
+	        color = :gray40, linewidth = 1.0, linestyle = :dash, label = "C (adaptive)")
+	    
+	    vlines!(ax_c, [5000], 
+	        color = :black, linestyle = :dot, linewidth = 0.75)
+	    
+	    axislegend(ax_c, position = :lt, nbanks = 2, labelsize = 8)
+	    
+	    # Panel (d): Error vs mean C (showing moment sensitivity)
+	    local ax_d = Axis(fig[2, 2],
+	        xlabel = "Mean C copy number",
+	        ylabel = "Absolute error",
+	        title = "(d) Error vs. mean C")
+	    
+	    # Color by time phase
+	    phase1_mask = T .< 5000
+	    phase2_mask = T .>= 5000
+	    
+	    scatter!(ax_d, exact_mean[phase1_mask, 3], errors_C[phase1_mask],
+	        color = :black, marker = :circle, markersize = 2, 
+	        label = "Phase 1 (t < 5000s)")
+	    
+	    scatter!(ax_d, exact_mean[phase2_mask, 3], errors_C[phase2_mask],
+	        color = :gray40, marker = :xcross, markersize = 3,
+	        label = "Phase 2 (t ≥ 5000s)")
+	    
+	    # Fit linear relationship
+	    lmodel(C, p) = p[1] .* C .+ p[2]
+	    fit = LsqFit.curve_fit(lmodel, exact_mean[1000:end, 3], errors_C[1000:end], [0.05, 0.0])
+	    C_range = range(0, maximum(exact_mean[:, 3]), length=100)
+	    
+	    lines!(ax_d, C_range, lmodel(C_range, coef(fit)),
+	        color = :black, linewidth = 1.0, linestyle = :dash,
+	        label = "Linear fit")
+	    
+	    axislegend(ax_d, position = :lt, labelsize = 8)
+	    
+	    # Adjust layout
+	    colgap!(fig.layout, 10)
+	    rowgap!(fig.layout, 10)
+	    
+	    # Save figure
+	    save("error_accumulation_analysis.eps", fig, pt_per_unit=1)
+	    save("error_accumulation_analysis.png", fig, px_per_unit=2)
+	    
+	    fig
+	end
+end
 
 # ╔═╡ fd852a0c-24fe-4807-afb5-c9157d3c746a
 begin
 	local fig = Figure()
-	ax = Axis(fig[1, 1])
-	plot!(ax, exact_mean[:, 1])
-	plot!(ax, exact_mean[:, 2])
-	plot!(ax, exact_mean[:, 3]./maximum(exact_mean[:, 3]))
+	local ax = Axis(fig[1, 1])
+	#plot!(ax, exact_mean[:, 1])
+	plot!(ax,T, abs.(afsp_mean[:, 1].-exact_mean[:, 1]), label="A")
+	plot!(ax,T, abs.(afsp_mean[:, 2].-exact_mean[:, 2]), label="B")
+	plot!(ax,T, abs.(afsp_mean[:, 3].-exact_mean[:, 3]), label="C")
+
+	axislegend(ax)
 	fig
+end
+
+# ╔═╡ 6ba472e0-0c0f-4840-9640-fa4e848e2f8d
+# Detailed phase analysis
+begin
+    errors_C = abs.(afsp_mean[:, 3] .- exact_mean[:, 3])
+    
+    # Split into phases
+    phase1_idx = T .< 5000
+    phase2_idx = T .>= 5000
+    
+    # Fit each phase separately
+    
+    # Phase 1: Early behavior
+    t1 = T[phase1_idx][100:end]  # Skip initial transient
+    e1 = errors_C[phase1_idx][100:end]
+    linear1(t, p) = p[1] .* t
+    fit1 = curve_fit(linear1, t1, e1, [1e-7])
+    rate1 = coef(fit1)[1]
+    
+    # Phase 2: Late behavior
+    t2 = T[phase2_idx]
+    e2 = errors_C[phase2_idx]
+    linear2(t, p) = p[1] .* (t .- 5000) .+ p[2]
+    fit2 = curve_fit(linear2, t2, e2, [1e-5, e2[1]])
+    rate2 = coef(fit2)[1]
+    
+    println("\n=== PHASE ANALYSIS ===")
+    println("Phase 1 (t < 5000s): rate = $(round(rate1, sigdigits=4)) per second")
+    println("Phase 2 (t > 5000s): rate = $(round(rate2, sigdigits=4)) per second")
+    println("Rate increase: $(round(rate2/rate1, digits=2))x")
+    
+    # Theoretical prediction
+    N_total = length(T) - 1
+    ε_flux = 1e-4
+    theoretical_per_step = ε_flux
+    theoretical_per_second = theoretical_per_step / 1.0  # Δt = 1.0s
+    
+    println("\nTheoretical rate: $(theoretical_per_second) per second")
+    println("Phase 1 obs/theory: $(round(rate1/theoretical_per_second, digits=4))")
+    println("Phase 2 obs/theory: $(round(rate2/theoretical_per_second, digits=4))")
+    
+    # Plot with phase markers
+    local fig = Figure(size=(1000, 600))
+    ax = Axis(fig[1,1], xlabel="Time (s)", ylabel="Absolute Error (C)")
+    scatter!(ax, T, errors_C, label="Observed", markersize=2, alpha=0.5)
+    vlines!(ax, [5000], color=:red, linestyle=:dash, linewidth=2, 
+        label="Phase transition")
+    
+    # Overlay phase fits
+    lines!(ax, t1, linear1(t1, coef(fit1)), linewidth=3, 
+        label="Phase 1 fit (rate=$(round(rate1, sigdigits=3)))")
+    lines!(ax, t2, linear2(t2, coef(fit2)), linewidth=3,
+        label="Phase 2 fit (rate=$(round(rate2, sigdigits=3)))")
+    
+    axislegend(ax, position=:lt)
+    fig
+end
+
+# ╔═╡ 035c4b08-7be6-4b89-b6cc-49374ee36418
+# Critical insight: Check per-step error vs theoretical bound
+begin
+    local errors_C = abs.(afsp_mean[:, 3] .- exact_mean[:, 3])
+    local Δt = 1.0
+    N = length(T) - 1
+    
+    # Average per-step error
+    avg_per_step_obs = errors_C[end] / N
+    
+    # Theoretical bound: ε_n ≤ ε_flux for each step
+    local ε_flux = 1e-4
+    theoretical_bound = N * ε_flux
+    
+    println("\n=== GLOBAL ERROR COMPARISON ===")
+    println("Number of steps:       $(N)")
+    println("Time step size:        $(Δt) s")
+    println("Flux tolerance:        $(ε_flux)")
+    println("")
+    println("Final observed error:  $(round(errors_C[end], sigdigits=5))")
+    println("Theoretical bound:     $(round(theoretical_bound, sigdigits=5))")
+    println("Observed/Bound ratio:  $(round(errors_C[end]/theoretical_bound, digits=4))")
+    println("")
+    println("Avg per-step observed: $(round(avg_per_step_obs, sigdigits=5))")
+    println("Avg per-step theory:   $(ε_flux)")
+    println("Ratio (obs/theory):    $(round(avg_per_step_obs/ε_flux, digits=4))")
+    
+    # This tells us if theory is conservative or tight
+    if errors_C[end] < theoretical_bound
+        println("\n✓ Theory is CONSERVATIVE (observed < bound)")
+        println("  Bound is loose by factor: $(round(theoretical_bound/errors_C[end], digits=2))")
+    else
+        println("\n✗ Theory is VIOLATED (observed > bound)")
+        println("  Theory underestimates by: $(round(errors_C[end]/theoretical_bound, digits=2))x")
+    end
 end
 
 # ╔═╡ 32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
@@ -385,7 +1077,6 @@ begin
     size_correct = size_𝒮ₜ[iters]
     size_failed  = [length(s[1]) for s in sol1[iters]]
 
-    # Optional: per-step leakage arrays (must align with T)
     local_ϵ_ok   = local_ϵ[iters]
     local_ϵ_fail = local_ϵ1[iters]
 
@@ -530,12 +1221,14 @@ end
 # ╔═╡ 838fb0ef-03b6-4501-b66c-07859355e5e2
 begin
 	local fig=Figure()
-	lines!(Axis(fig[1, 1], xscale=log10), μ_ok_raw[:, 3])
+	a = Axis(fig[1, 1])
+	lines!(a, μ_ok_raw[:, 1], label = "accurate value")
+	lines!(a,Axis(fig[1, 1]), μ_ok_raw[:, 2], label = "pade approximation")
+	lines!(a,Axis(fig[1, 1]), μ_ok_raw[:, 3], label = "taylor approximation")
+	lines!(a, Axis(fig[1, 1]), exact_mean[:, 3], label = "empty val")
+	axislegend(a)
 	fig
 end
-
-# ╔═╡ 7adf32b0-b602-44e7-b5bf-1f86a14dfd01
-1e2*40557
 
 # ╔═╡ d0ad5800-4b37-4722-b884-07af915a3d7f
 save("bn.png", f)
@@ -747,6 +1440,19 @@ end
 
   ╠═╡ =#
 
+# ╔═╡ 8d9d0907-dc0d-4ad2-9faf-fbd015eb7234
+full_distribution_comparison(length(sol), length(sol_exact))
+
+# ╔═╡ 6f4ca781-97e6-4c70-a200-ea230eebd449
+plot_full_comparison(length(sol), length(sol_exact))
+
+# ╔═╡ afe2ea2f-b3e8-49f9-a42a-bbfc60d53c04
+plot_joint_comparison(length(sol), length(sol_exact), 2, 3; 
+                     species_name1="B", species_name2="C")
+
+# ╔═╡ e7b739ac-a39e-494f-8ba1-4e554f9ac06c
+
+
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -760,6 +1466,7 @@ Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 JLD = "4138dd39-2aa7-5051-a626-17a0bb65d9c8"
 JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 PROPACK = "b169e327-5944-5131-97a6-5d3d3f0a476a"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
@@ -776,6 +1483,7 @@ ExponentialUtilities = "~1.27.0"
 Interpolations = "~0.15.1"
 JLD = "~0.13.5"
 JumpProcesses = "~9.16.1"
+LsqFit = "~0.15.1"
 PROPACK = "~0.5.0"
 ProgressLogging = "~0.1.5"
 Revise = "~3.8.0"
@@ -786,9 +1494,9 @@ StatsBase = "~0.34.5"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.1"
+julia_version = "1.12.0"
 manifest_format = "2.0"
-project_hash = "584c01a1abf8ca2c4d02ba95f68eb5ea5ede6552"
+project_hash = "b2c6e58f4c1f10e915c9a4a4850dc27e53b646a8"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "be7ae030256b8ef14a441726c4c37766b90b93a3"
@@ -1255,7 +1963,7 @@ version = "0.1.1"
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.1.1+0"
+version = "1.3.0+1"
 
 [[deps.CompositeTypes]]
 git-tree-sha1 = "bce26c3dab336582805503bed209faab1c279768"
@@ -2131,6 +2839,11 @@ git-tree-sha1 = "937da4713526b96ac9a178e2035019d3b78ead4a"
 uuid = "70703baa-626e-46a2-a12c-08ffd08c73b4"
 version = "0.4.10"
 
+[[deps.JuliaSyntaxHighlighting]]
+deps = ["StyledStrings"]
+uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
+version = "1.12.0"
+
 [[deps.JumpProcesses]]
 deps = ["ArrayInterface", "DataStructures", "DiffEqBase", "DiffEqCallbacks", "DocStringExtensions", "FunctionWrappers", "Graphs", "LinearAlgebra", "Markdown", "PoissonRandom", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "Setfield", "StaticArrays", "SymbolicIndexingInterface", "UnPack"]
 git-tree-sha1 = "f8da88993c914357031daf0023f18748ff473924"
@@ -2243,24 +2956,24 @@ uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
 version = "0.6.4"
 
 [[deps.LibCURL_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "8.6.0+0"
+version = "8.11.1+1"
 
 [[deps.LibGit2]]
-deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
+deps = ["LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 version = "1.11.0"
 
 [[deps.LibGit2_jll]]
-deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "OpenSSL_jll"]
 uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
-version = "1.7.2+0"
+version = "1.9.0+0"
 
 [[deps.LibSSH2_jll]]
-deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
+deps = ["Artifacts", "Libdl", "OpenSSL_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.11.0+1"
+version = "1.11.3+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -2321,7 +3034,7 @@ version = "7.4.0"
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.LinearOperators]]
 deps = ["FastClosures", "LinearAlgebra", "Printf", "Requires", "SparseArrays", "TimerOutputs"]
@@ -2415,6 +3128,12 @@ git-tree-sha1 = "16f11159553e5869972d7ca6a8b861e37197b1f8"
 uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
 version = "3.4.0"
 
+[[deps.LsqFit]]
+deps = ["Distributions", "ForwardDiff", "LinearAlgebra", "NLSolversBase", "Printf", "StatsAPI"]
+git-tree-sha1 = "f386224fa41af0c27f45e2f9a8f323e538143b43"
+uuid = "2fda8390-95c7-5789-9bda-21331edee243"
+version = "0.15.1"
+
 [[deps.Lz4_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "191686b1ac1ea9c89fc52e996ad15d1d241d1e33"
@@ -2478,7 +3197,7 @@ uuid = "dbb5928d-eab1-5f90-85c2-b9b0edb7c900"
 version = "0.4.2"
 
 [[deps.Markdown]]
-deps = ["Base64"]
+deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
 
@@ -2507,11 +3226,6 @@ weakdeps = ["SparseArrays"]
 
     [deps.MaybeInplace.extensions]
     MaybeInplaceSparseArraysExt = "SparseArrays"
-
-[[deps.MbedTLS_jll]]
-deps = ["Artifacts", "Libdl"]
-uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
-version = "2.28.6+0"
 
 [[deps.MicrosoftMPI_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2565,7 +3279,7 @@ version = "0.3.7"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2023.12.12"
+version = "2025.5.20"
 
 [[deps.MuladdMacro]]
 git-tree-sha1 = "cac9cc5499c25554cba55cd3c30543cff5ca4fab"
@@ -2610,7 +3324,7 @@ version = "1.1.1"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
-version = "1.2.0"
+version = "1.3.0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DiffEqBase", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "SparseArrays", "SparseMatrixColorings", "StaticArraysCore", "SymbolicIndexingInterface"]
@@ -2715,7 +3429,7 @@ version = "0.3.29+0"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.27+1"
+version = "0.3.29+0"
 
 [[deps.OpenEXR]]
 deps = ["Colors", "FileIO", "OpenEXR_jll"]
@@ -2732,7 +3446,7 @@ version = "3.2.4+0"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+2"
+version = "0.8.7+0"
 
 [[deps.OpenMPI_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Hwloc_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "MPIPreferences", "TOML", "Zlib_jll"]
@@ -2741,8 +3455,7 @@ uuid = "fe0851c0-eecd-5654-98d4-656369965a5c"
 version = "5.0.8+0"
 
 [[deps.OpenSSL_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "87510f7292a2b21aeff97912b0898f9553cc5c2c"
+deps = ["Artifacts", "Libdl"]
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "3.5.1+0"
 
@@ -2972,7 +3685,7 @@ version = "1.2.0"
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+1"
+version = "10.44.0+1"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
@@ -3037,7 +3750,7 @@ version = "0.44.2+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.11.0"
+version = "1.12.0"
 weakdeps = ["REPL"]
 
     [deps.Pkg.extensions]
@@ -3163,7 +3876,7 @@ version = "2.11.2"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.REPL]]
-deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
+deps = ["InteractiveUtils", "JuliaSyntaxHighlighting", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
@@ -3449,7 +4162,7 @@ version = "1.2.1"
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-version = "1.11.0"
+version = "1.12.0"
 
 [[deps.SparseConnectivityTracer]]
 deps = ["ADTypes", "DocStringExtensions", "FillArrays", "LinearAlgebra", "Random", "SparseArrays"]
@@ -3631,7 +4344,7 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "7.7.0+0"
+version = "7.8.3+2"
 
 [[deps.Sundials]]
 deps = ["CEnum", "DataStructures", "DiffEqBase", "Libdl", "LinearAlgebra", "Logging", "PrecompileTools", "Reexport", "SciMLBase", "SparseArrays", "Sundials_jll"]
@@ -3898,7 +4611,7 @@ version = "1.6.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+1"
+version = "1.3.1+2"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3933,7 +4646,7 @@ version = "0.15.2+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.11.0+0"
+version = "5.13.1+1"
 
 [[deps.libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3968,7 +4681,7 @@ version = "1.5.0+0"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.59.0+0"
+version = "1.64.0+1"
 
 [[deps.oneTBB_jll]]
 deps = ["Artifacts", "JLLWrappers", "LazyArtifacts", "Libdl"]
@@ -3979,7 +4692,7 @@ version = "2022.0.0+0"
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+2"
+version = "17.5.0+2"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3996,29 +4709,36 @@ version = "3.6.0+0"
 
 # ╔═╡ Cell order:
 # ╠═453819dc-e207-46db-9c9b-9f10f7fd4daf
+# ╠═7813ebfd-f674-44da-b2d5-dfed9e028457
 # ╠═cb9fa0aa-1588-4647-8b02-69fca1415974
 # ╠═ae7ff050-c76d-4c0d-8c8a-23724f10485a
 # ╠═85c4ad39-d14a-4e73-bfa3-4a22fef4d537
+# ╠═e3e0c398-9db0-420a-86b3-65220761028c
 # ╠═91bec3fc-65cc-4344-98d2-09f4944fc0e5
 # ╟─ebd5f20c-88c2-46d1-982f-de864ba33727
 # ╠═256f8d0d-7c2b-4415-969e-356ee271e908
 # ╠═ca5f05c8-96ea-42a8-adb0-c095a223b4cf
 # ╠═6ad6db9b-f87c-4320-9a45-a18a170b5db7
+# ╠═7aaa031a-5cf4-421c-bb78-c9b30fb3fe0f
 # ╠═7ea7ecaf-7a46-4b9b-a0e0-56171ffd7c23
 # ╠═18962357-9f6a-4668-82cb-7f133a130b5e
-# ╠═0a53249d-ec7d-464a-bab7-0f2361c2a599
-# ╠═7362a236-8f50-4890-800b-71274ac50cdb
 # ╠═fd852a0c-24fe-4807-afb5-c9157d3c746a
+# ╠═6ba472e0-0c0f-4840-9640-fa4e848e2f8d
+# ╠═01a13951-2701-48bc-bb48-6c9594c89888
+# ╠═035c4b08-7be6-4b89-b6cc-49374ee36418
 # ╠═838fb0ef-03b6-4501-b66c-07859355e5e2
 # ╠═32e6fa3b-dc9f-4cca-bfb1-380b4dddbf3c
 # ╠═b9cf4dc2-9817-493b-940b-5e3677ceb92e
 # ╠═690d5609-6bd0-4caa-b88e-a28e3b9da19c
 # ╠═e2e71c4e-4782-46bb-8560-9ffbae1145b3
-# ╠═7adf32b0-b602-44e7-b5bf-1f86a14dfd01
 # ╠═d0ad5800-4b37-4722-b884-07af915a3d7f
 # ╠═c1a92cd0-ffed-43d7-81c5-021799578d0d
 # ╠═5e389838-a3cc-46d2-986d-c407edc8e93a
 # ╠═9867082b-f32b-4c92-adbf-866efeec8ced
 # ╠═9e8a68b4-630f-4051-a764-dc44ccc8847e
+# ╠═8d9d0907-dc0d-4ad2-9faf-fbd015eb7234
+# ╠═6f4ca781-97e6-4c70-a200-ea230eebd449
+# ╠═afe2ea2f-b3e8-49f9-a42a-bbfc60d53c04
+# ╠═e7b739ac-a39e-494f-8ba1-4e554f9ac06c
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

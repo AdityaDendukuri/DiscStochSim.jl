@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.13
+# v0.20.20
 
 using Markdown
 using InteractiveUtils
@@ -17,280 +17,6 @@ begin
 	using Revise
 	local_mod = include("../src/DiscStochSim.jl")
 	using .local_mod.DiscStochSim
-end
-
-# ╔═╡ eef14334-d43c-49d2-b40b-fe16a3747fb2
-rn = @reaction_network begin
-    k1, A --> B
-    k2, 2B --> C + B
-    k3, C + B --> A + C
-end
-
-# ╔═╡ 068fa5b2-629c-44a7-aaa1-f1e2ed68c840
-model = DiscreteStochasticSystem(rn);
-
-# ╔═╡ 08430a94-9c7f-4616-9141-7846bd7e2c7a
-
-function dobrushin(A::SparseMatrixCSC{Float64,Int}, τ::Float64=1.0)
-    n = size(A, 1)
-    γ_min = 1.0
-
-    for i in 1:n-1
-        eᵢ = zeros(n); eᵢ[i] = 1.0
-        Pi = expv(τ, A, eᵢ)
-
-        for j in i+1:n
-            eⱼ = zeros(n); eⱼ[j] = 1.0
-            Pj = expv(τ, A, eⱼ)
-
-            γ_ij = sum(min(Pi[k], Pj[k]) for k in 1:n)
-            γ_min = min(γ_min, γ_ij)
-        end
-    end
-
-    return 1 - γ_min
-end
-
-
-# ╔═╡ edbbe300-3044-4aef-855b-4587ef6a8c90
-function purgea!(
-    X::Set{Element},
-    p::Vector{T}, 
-	flux_vector,
-    model::Model,
-    rates,
-    t,
-    prob_quantile::Number;
-    flux_tolerance::Number = 1e-9 
-) where {Element, T, Model}
-
-    X_vec = collect(X)
-
-	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
-
-    total_flux = sum(flux_vector[candidate_idxs])
-    flux_threshold = total_flux * flux_tolerance
-	
-    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
-		
-    # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
-    states_to_remove = Set(X_vec[collect(ℛ)])
-    new_X = setdiff(X, states_to_remove)
-    return new_X, new_p, total_flux, flux_threshold
-end
-
-# ╔═╡ 328472f8-f139-40ae-a9f0-4fd10a6159d9
-function robust_purge!(
-    X::Set{Element}, 
-    p::Vector{T}, 
-    model::Model,
-    rates,
-    t,
-    prob_quantile::Number;
-    flux_tolerance::Number = 1e-9 
-) where {Element, T, Model}
-
-    X_vec = collect(X)
-
-	# 1. Candidate Selection: Find states with low probability mass
-     idx = sortperm(p; rev=false)
-    k = round(Int, prob_quantile * length(idx))            
-    drop_idxs = k > 0 ? idx[1:k] : Int[]
-	candidate_idxs = drop_idxs
-
-    # Build new containers
-    keep_mask = trues(length(p))
-    keep_mask[drop_idxs] .= false
-
-    flux_vector = zeros(T, length(p))
-    local total_flux = 0
-	if flux_tolerance > 0
-    	for i in eachindex(X_vec)
-        	current_state = X_vec[i]
-        	weight = sum(prop(current_state, rates, t) 
-						 for prop in model.propensities)
-        	flux_vector[i] = p[i] * weight
-    	end
-    	total_flux = sum(flux_vector)
-    	# Set an adaptive threshold based on the total system flux
-   		flux_threshold = total_flux * flux_tolerance
-		# Filter the candidates based on this adaptive threshold
-
-    	final_idxs_to_prune = Set{Int}()
-    	for idx in candidate_idxs
-        	if flux_vector[idx] < flux_threshold
-            	push!(final_idxs_to_prune, idx)
-        	end
-    	end
-	else
-		final_idxs_to_prune = candidate_idxs
-	end
-    # 3. Purge the final set of states
-    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
-    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
-    new_X = setdiff(X, states_to_remove)
-    return new_X, new_p, total_flux
-end
-
-
-
-# ╔═╡ 991b1783-d70e-4bd7-856b-59cdc237b38e
-function reconstruct_MasterEquation(
-    S_new::Set{E},
-    S_old_vec::Vector{E},         
-    A_old::SparseMatrixCSC{T,Int}, 
-    model, rates, bc::Function, t::Real;
-) where {E,T}
-
-    # --- Setup ---
-    S_new_vec = collect(S_new)
-    n_new = length(S_new_vec)
-    new_id = Dict{E,Int}(s => i for (i,s) in enumerate(S_new_vec))
-    old_id  = Dict{E,Int}(s => i for (i,s) in enumerate(S_old_vec))
-
-    # --- Overlap check (can be kept as a performance heuristic) ---
-    n_retained = count(s -> haskey(old_id, s), S_new_vec)
-    if n_new == 0 #|| n_retained / n_new < overlap_threshold
-        return MasterEquation(S_new, model, rates, bc, t)
-    end
-    
-    I = Int[]; J = Int[]; V = T[]
-    @inbounds for (j_new, x) in enumerate(S_new_vec)
-        col_sum = zero(T)
-        
-        # Build the entire column from scratch based on propensities
-        for (k, ν) in enumerate(model.stoichvecs)
-            y = x + ν
-            # Check if the destination `y` is in our new state space
-            i_new = get(new_id, y, 0)
-            
-            if i_new != 0
-                α = model.propensities[k](x, rates, t)
-                if α > 0
-                    # Allow duplicates for sparse() to sum them up
-                    push!(I, i_new); push!(J, j_new); push!(V, α)
-                    col_sum += α
-                end
-            end
-        end
-        
-        # Diagonal = minus the sum of all off-diagonals in this column
-        if col_sum > 0
-            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
-        end
-    end
-
-    A = sparse(I, J, V, n_new, n_new)
-    out_flow = spdiagm(0 => diag(A))
-    in_flow  = A - out_flow
-    
-    return A, in_flow, out_flow
-end
-
-# ╔═╡ 1f4bfd5c-1c44-4b07-ae58-1f704d133c5e
-fsp_sim_rober = begin
-    tf = 1e4
-	ϵ_dt = 0.01                   
-
-    global next_log_iter = 1
-
-    # IC + setup
-    U₀ = CartesianIndex(Integer(1e4), 0, 0)
-    rates = [0.04, 3e6, 1e0]
-    bounds = (0, Integer(1e5 + 1))
-    boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
-
-    global 𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
-
-    # time + logs
-    t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = Float64[]
-    tresh = Float64[]
-    dob = []
-	tim  = []
-	
-    savefreq = 10
-    δt = 1e-5
-    iter = 0
-    log_target = 1e-6
-    log_factor = 1.025
-
-    # reconstruction cache
-    S_old = Set{eltype(𝒮ₜ)}()
-    A_old = spzeros(Float64, 0, 0)
-
-    while t < tf
-        global iter += 1
-
-		expandt = @elapsed begin
-        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
-		end
-		
-		global elapsed = @elapsed begin
-			if isempty(S_old) || nnz(A_old) == 0
-            	# full build 
-            	global A, in_flow, out_flow = MasterEquation(
-				𝒮ₜ, model, rates, boundary_condition, t)
-        	else
-            	# reconstruction 
-            	global A, in_flow, out_flow = reconstruct_MasterEquation(
-                	𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t;
-            	)
-        	end
-		end
-
-        # 3) Adaptive step f
-        in_flux  = Vector(in_flow * pₜ)
-        out_flux = Vector(-out_flow * pₜ)
-        max_flux = maximum(out_flux)
-        global δt = (max_flux > 0.0) ? (ϵ_dt / max_flux) : (tf - t)
-        global δt = min(δt, tf - t)
-
-        # 4) Advance probability
-		expt = @elapsed begin
-        	pₜ = expv(δt, A, pₜ)
-		end
-
-        # 5) Prune (robust) + renormalize
-		prunt = @elapsed begin
-        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.4; flux_tolerance=1e-9)
-		end
-        s = sum(pₜ)
-        if s <= 0
-            @warn "All probability mass lost in pruning – stopping"
-            break
-        end
-       global  pₜ ./= s
-
-        # 6) Advance time
-        global t += δt
-
-        # 7) Log on geometric schedule
-        if t >= log_target
-			@show expandt
-			@show elapsed
-			@show expt
-			@show prunt
-			@show "---"
-			
-			push!(tim, elapsed)
-            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-            push!(sol_t, t)
-            push!(sol_S_size, length(𝒮ₜ))
-            push!(tresh, total_flux)
-            global log_target *= log_factor
-        end
-
-        # 8) Update reconstruction cache *after pruning*
-        global S_old = copy(𝒮ₜ)
-        global A_old = A
-    end
 end
 
 # ╔═╡ 87cebd5b-f264-4997-9520-38bf33ac7212
@@ -503,49 +229,174 @@ begin
 	println("="^70)
 end
 
-# ╔═╡ 0b9d9f7e-1ec1-4678-bffb-468811e4ade4
-begin
-    using ImageFiltering   # for Gaussian blur
-
-    i1 = 800
-    i2 = 500  # (unused here)
-
-    local fig = Figure()
-    ax = Axis(fig[1, 1], xlabel = "A", ylabel = "C", aspect = DataAspect())
-
-    # Build binary support (P1) and probability grid (P2) on (A, C)
-    P1 = zeros(10001, 10001)
-    P2 = zeros(10001, 10001)
-    for (i, idx) in enumerate(sol[i1][1])
-        P1[idx[1] + 1, idx[3] + 1] = 1.0
-        P2[idx[1] + 1, idx[3] + 1] = sol[i1][2][i]
-    end
-
-    # Crop to the occupied region (+ padding), with safe bounds
-    posvals = findall(P1 .> 0)
-    padding = 10
-    mx = maximum(posvals) + CartesianIndex(padding, padding)
-    mn = minimum(posvals) - CartesianIndex(padding, padding)
-    mnI = max(mn[1], 1); mnJ = max(mn[2], 1)
-    mxI = min(mx[1], size(P1, 1)); mxJ = min(mx[2], size(P1, 2))
-
-    # --- Recommended fix: smooth + log-prob ---
-    # small Gaussian blur to make thin support visible (tweak σ if needed)
-    σ = 1.5
-    P2s = imfilter(P2, Kernel.gaussian(σ))
-    # clamp zeros to a tiny epsilon before log
-    Plog = log10.(clamp.(P2s, 1e-15, Inf))
-
-    # Draw filled contours of log-prob in grayscale
-    contourf!(ax, Plog[mnI:mxI, mnJ:mxJ]; colormap = :grays)
-
-    # Overlay the state-space boundary as a dotted line (from binary mask)
-    contour!(ax, P1[mnI:mxI, mnJ:mxJ];
-             levels = [0.5], color = :black, linestyle = :dot, linewidth = 1.6)
-
-    fig
+# ╔═╡ eef14334-d43c-49d2-b40b-fe16a3747fb2
+rn = @reaction_network begin
+    k1, A --> B
+    k2, 2B --> C + B
+    k3, C + B --> A + C
 end
 
+# ╔═╡ 068fa5b2-629c-44a7-aaa1-f1e2ed68c840
+model = DiscreteStochasticSystem(rn);
+
+# ╔═╡ 08430a94-9c7f-4616-9141-7846bd7e2c7a
+
+function dobrushin(A::SparseMatrixCSC{Float64,Int}, τ::Float64=1.0)
+    n = size(A, 1)
+    γ_min = 1.0
+
+    for i in 1:n-1
+        eᵢ = zeros(n); eᵢ[i] = 1.0
+        Pi = expv(τ, A, eᵢ)
+
+        for j in i+1:n
+            eⱼ = zeros(n); eⱼ[j] = 1.0
+            Pj = expv(τ, A, eⱼ)
+
+            γ_ij = sum(min(Pi[k], Pj[k]) for k in 1:n)
+            γ_min = min(γ_min, γ_ij)
+        end
+    end
+
+    return 1 - γ_min
+end
+
+
+# ╔═╡ edbbe300-3044-4aef-855b-4587ef6a8c90
+function purgea!(
+    X::Set{Element},
+    p::Vector{T}, 
+	flux_vector,
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+	candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    total_flux = sum(flux_vector[candidate_idxs])
+    flux_threshold = total_flux * flux_tolerance
+	
+    ℛ = candidate_idxs[findall(x -> x < flux_threshold, flux_vector[candidate_idxs])]
+		
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ ℛ]
+    states_to_remove = Set(X_vec[collect(ℛ)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p, total_flux, flux_threshold
+end
+
+# ╔═╡ 328472f8-f139-40ae-a9f0-4fd10a6159d9
+function robust_purge!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+	# 1. Candidate Selection: Find states with low probability mass
+     idx = sortperm(p; rev=false)
+    k = round(Int, prob_quantile * length(idx))            
+    drop_idxs = k > 0 ? idx[1:k] : Int[]
+	candidate_idxs = drop_idxs
+
+    # Build new containers
+    keep_mask = trues(length(p))
+    keep_mask[drop_idxs] .= false
+
+    flux_vector = zeros(T, length(p))
+    local total_flux = 0
+	if flux_tolerance > 0
+    	for i in eachindex(X_vec)
+        	current_state = X_vec[i]
+        	weight = sum(prop(current_state, rates, t) 
+						 for prop in model.propensities)
+        	flux_vector[i] = p[i] * weight
+    	end
+    	total_flux = sum(flux_vector)
+    	# Set an adaptive threshold based on the total system flux
+   		flux_threshold = total_flux * flux_tolerance
+		# Filter the candidates based on this adaptive threshold
+
+    	final_idxs_to_prune = Set{Int}()
+    	for idx in candidate_idxs
+        	if flux_vector[idx] < flux_threshold
+            	push!(final_idxs_to_prune, idx)
+        	end
+    	end
+	else
+		final_idxs_to_prune = candidate_idxs
+	end
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+    return new_X, new_p, total_flux
+end
+
+
+
+# ╔═╡ 991b1783-d70e-4bd7-856b-59cdc237b38e
+function reconstruct_MasterEquation(
+    S_new::Set{E},
+    S_old_vec::Vector{E},         
+    A_old::SparseMatrixCSC{T,Int}, 
+    model, rates, bc::Function, t::Real;
+) where {E,T}
+
+    # --- Setup ---
+    S_new_vec = collect(S_new)
+    n_new = length(S_new_vec)
+    new_id = Dict{E,Int}(s => i for (i,s) in enumerate(S_new_vec))
+    old_id  = Dict{E,Int}(s => i for (i,s) in enumerate(S_old_vec))
+
+    # --- Overlap check (can be kept as a performance heuristic) ---
+    n_retained = count(s -> haskey(old_id, s), S_new_vec)
+    if n_new == 0 #|| n_retained / n_new < overlap_threshold
+        return MasterEquation(S_new, model, rates, bc, t)
+    end
+    
+    I = Int[]; J = Int[]; V = T[]
+    @inbounds for (j_new, x) in enumerate(S_new_vec)
+        col_sum = zero(T)
+        
+        # Build the entire column from scratch based on propensities
+        for (k, ν) in enumerate(model.stoichvecs)
+            y = x + ν
+            # Check if the destination `y` is in our new state space
+            i_new = get(new_id, y, 0)
+            
+            if i_new != 0
+                α = model.propensities[k](x, rates, t)
+                if α > 0
+                    # Allow duplicates for sparse() to sum them up
+                    push!(I, i_new); push!(J, j_new); push!(V, α)
+                    col_sum += α
+                end
+            end
+        end
+        
+        # Diagonal = minus the sum of all off-diagonals in this column
+        if col_sum > 0
+            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
+        end
+    end
+
+    A = sparse(I, J, V, n_new, n_new)
+    out_flow = spdiagm(0 => diag(A))
+    in_flow  = A - out_flow
+    
+    return A, in_flow, out_flow
+end
 
 # ╔═╡ a6ceeed5-fd5e-46df-9fa0-fcbcbba10bc2
 tim1
@@ -571,9 +422,6 @@ tim1 |> plot
 
 # ╔═╡ 3aefe50d-d168-488b-ad3e-f716b232d357
 S_old |> length
-
-# ╔═╡ dfc70a21-0563-4b2b-a845-639eb04f13f3
-𝒮ₜ |> length
 
 # ╔═╡ f37ef080-7dc7-471f-b83d-05b664368a55
 """
@@ -643,130 +491,89 @@ begin
 	
 end
 
-# ╔═╡ 655b46ff-bec5-4dfe-9cfc-45e3418d8be5
-# ╠═╡ disabled = true
+# ╔═╡ dfc70a21-0563-4b2b-a845-639eb04f13f3
 #=╠═╡
-fsp_sim_rober = begin
-    tf = 1e4
-    ϵ_dt = 0.01# Tolerance for flux-based adaptive dt
-    global next_log_iter = 1
-    # Initial condition for Robertson problem
-    U₀ = CartesianIndex(Integer(1e4), 0, 0)
-	rates = [0.04, 3e6, 1e0]
-	bounds = (0, Integer(1e5+1))
-	boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
-	
-    global 𝒮ₜ = Set([U₀])
-    pₜ = zeros(length(𝒮ₜ))
-    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+𝒮ₜ |> length
+  ╠═╡ =#
 
-    # Time and diagnostics
-    local t = 0.0
-    sol_t = [t]
-    sol_S_size = [length(𝒮ₜ)]
-    sol = [(copy(𝒮ₜ), copy(pₜ))]
-    flx = Float64[]
-    tresh = Float64[]
-	dob = []
+# ╔═╡ 0b9d9f7e-1ec1-4678-bffb-468811e4ade4
+#=╠═╡
+begin
+    using ImageFiltering   # for Gaussian blur
 
-	savefreq = 10
-	t=0.0
-	δt = 1e-5
+    i1 = 800
+    i2 = 500  # (unused here)
 
-	iter = 0
-	log_target = 1e-6  
-    log_factor = 1.025
-    while t < tf
-		
-        # Expand state space 
-		#global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 1)
-		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ,
-								model, 
-								boundary_condition, 
-								1)
-		
+    local fig = Figure()
+    ax = Axis(fig[1, 1], xlabel = "A", ylabel = "C", aspect = DataAspect())
 
-        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
-													 model,
-													 rates,
-													 boundary_condition, 
-													 t)
-		
-		
-		
-		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
-		max_flux = maximum(out_flux)
-
-		# based on out-flux, compute δt
-		global δt = (max_flux > 0.0) ? (ϵ_dt / max_flux) : (tf - t)
-        δt = min(δt, tf - t) 
-
-		# evolve probability distribution
-		pₜ = expv(δt, A, pₜ)
-		
-
-
-		out_flux = Vector(-out_flow * pₜ)
-
-		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
-													 pₜ, 
-													 model, 
-													 rates, 
-													 t, 
-													 0.4; 
-													 flux_tolerance=1e-9)
-		
-		if sum(pₜ) <= 0
-            @warn "All probability mass lost in pruning – stopping"
-			break
-        end		
-
-		# update time 
-        t = t + δt
-
-		
-		if t >= log_target
-    push!(sol, (copy(𝒮ₜ), copy(pₜ)))
-    push!(sol_t, t)
-    push!(sol_S_size, length(𝒮ₜ))
-    push!(tresh, total_flux)
-
-    # advance to the next log target
-    global log_target *= log_factor
-end
-
-		global iter = iter + 1
+    # Build binary support (P1) and probability grid (P2) on (A, C)
+    P1 = zeros(10001, 10001)
+    P2 = zeros(10001, 10001)
+    for (i, idx) in enumerate(sol[i1][1])
+        P1[idx[1] + 1, idx[3] + 1] = 1.0
+        P2[idx[1] + 1, idx[3] + 1] = sol[i1][2][i]
     end
+
+    # Crop to the occupied region (+ padding), with safe bounds
+    posvals = findall(P1 .> 0)
+    padding = 10
+    mx = maximum(posvals) + CartesianIndex(padding, padding)
+    mn = minimum(posvals) - CartesianIndex(padding, padding)
+    mnI = max(mn[1], 1); mnJ = max(mn[2], 1)
+    mxI = min(mx[1], size(P1, 1)); mxJ = min(mx[2], size(P1, 2))
+
+    # --- Recommended fix: smooth + log-prob ---
+    # small Gaussian blur to make thin support visible (tweak σ if needed)
+    σ = 1.5
+    P2s = imfilter(P2, Kernel.gaussian(σ))
+    # clamp zeros to a tiny epsilon before log
+    Plog = log10.(clamp.(P2s, 1e-15, Inf))
+
+    # Draw filled contours of log-prob in grayscale
+    contourf!(ax, Plog[mnI:mxI, mnJ:mxJ]; colormap = :grays)
+
+    # Overlay the state-space boundary as a dotted line (from binary mask)
+    contour!(ax, P1[mnI:mxI, mnJ:mxJ];
+             levels = [0.5], color = :black, linestyle = :dot, linewidth = 1.6)
+
+    fig
 end
 
   ╠═╡ =#
 
 # ╔═╡ ac8c249b-0284-4355-b410-8d47efcc829b
+#=╠═╡
 begin
 	sol_mean = map(1:length(sol)) do i
 	    sum(collect.(Tuple.(sol[i][1])) .* sol[i][2])
 	end 
 	fsp_mean=hcat(sol_mean...)'
 end
+  ╠═╡ =#
 
 # ╔═╡ 0deee751-7103-4b19-9a9b-e8db87cc97b8
 CartesianIndex(2, 1) .+ 1
 
 # ╔═╡ 158bc641-f77f-46b8-816d-9685562c4930
+#=╠═╡
 begin
 	pop!(sol)
 		    pop!(sol_t)
 		    pop!(sol_S_size)
 		    pop!(tresh)
 end
+  ╠═╡ =#
 
 # ╔═╡ 7836cb30-4206-4b27-9457-ae9f35244bf4
+#=╠═╡
 begin
 	push!(sol, (copy(𝒮ₜ), copy(pₜ)))
 	    push!(sol_t, tf)
 	    push!(sol_S_size, length(𝒮ₜ))
 	    push!(tresh, tresh[end])
 end
+  ╠═╡ =#
 
 # ╔═╡ 0b25194a-6e34-47f6-b111-30965d84f72b
 begin
@@ -774,6 +581,7 @@ begin
 end
 
 # ╔═╡ 1a3f749e-6dce-42e8-9b2e-bd096e24e665
+#=╠═╡
 begin
 	
 	# SIAM-compliant theme
@@ -944,12 +752,222 @@ begin
 	println("(c) Adaptive time step selection showing logarithmic scaling. (d) Flux")
 	println("threshold evolution used for state space truncation control.")
 end
+  ╠═╡ =#
 
 # ╔═╡ 0b0b322c-8b67-4ecd-9488-8d05692dfe01
+#=╠═╡
 fig
+  ╠═╡ =#
 
 # ╔═╡ cfc8e508-0dd0-4e29-9309-ef1d22a8cb5f
+#=╠═╡
 findfirst(sol_t .> 10^3)
+  ╠═╡ =#
+
+# ╔═╡ 1f4bfd5c-1c44-4b07-ae58-1f704d133c5e
+#=╠═╡
+fsp_sim_rober = begin
+    tf = 1e4
+	ϵ_dt = 0.01                   
+
+    global next_log_iter = 1
+
+    # IC + setup
+    U₀ = CartesianIndex(Integer(1e4), 0, 0)
+    rates = [0.04, 3e6, 1e0]
+    bounds = (0, Integer(1e5 + 1))
+    boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+
+    global 𝒮ₜ = Set([U₀])
+    pₜ = zeros(length(𝒮ₜ))
+    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+
+    # time + logs
+    t = 0.0
+    sol_t = [t]
+    sol_S_size = [length(𝒮ₜ)]
+    sol = [(copy(𝒮ₜ), copy(pₜ))]
+    flx = Float64[]
+    tresh = Float64[]
+    dob = []
+	tim  = []
+	
+    savefreq = 10
+    δt = 1e-5
+    iter = 0
+    log_target = 1e-6
+    log_factor = 1.025
+
+    # reconstruction cache
+    S_old = Set{eltype(𝒮ₜ)}()
+    A_old = spzeros(Float64, 0, 0)
+
+    while t < tf
+        global iter += 1
+
+		expandt = @elapsed begin
+        global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, boundary_condition, 1)
+		end
+		
+		global elapsed = @elapsed begin
+			if isempty(S_old) || nnz(A_old) == 0
+            	# full build 
+            	global A, in_flow, out_flow = MasterEquation(
+				𝒮ₜ, model, rates, boundary_condition, t)
+        	else
+            	# reconstruction 
+            	global A, in_flow, out_flow = reconstruct_MasterEquation(
+                	𝒮ₜ, collect(S_old), A_old, model, rates, boundary_condition, t;
+            	)
+        	end
+		end
+
+        # 3) Adaptive step f
+        in_flux  = Vector(in_flow * pₜ)
+        out_flux = Vector(-out_flow * pₜ)
+        max_flux = maximum(out_flux)
+        global δt = (max_flux > 0.0) ? (ϵ_dt / max_flux) : (tf - t)
+        global δt = min(δt, tf - t)
+
+        # 4) Advance probability
+		expt = @elapsed begin
+        	pₜ = expv(δt, A, pₜ)
+		end
+
+        # 5) Prune (robust) + renormalize
+		prunt = @elapsed begin
+        𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.4; flux_tolerance=1e-9)
+		end
+        s = sum(pₜ)
+        if s <= 0
+            @warn "All probability mass lost in pruning – stopping"
+            break
+        end
+       global  pₜ ./= s
+
+        # 6) Advance time
+        global t += δt
+
+        # 7) Log on geometric schedule
+        if t >= log_target
+			@show expandt
+			@show elapsed
+			@show expt
+			@show prunt
+			@show "---"
+			
+			push!(tim, elapsed)
+            push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+            push!(sol_t, t)
+            push!(sol_S_size, length(𝒮ₜ))
+            push!(tresh, total_flux)
+            global log_target *= log_factor
+        end
+
+        # 8) Update reconstruction cache *after pruning*
+        global S_old = copy(𝒮ₜ)
+        global A_old = A
+    end
+end
+  ╠═╡ =#
+
+# ╔═╡ 655b46ff-bec5-4dfe-9cfc-45e3418d8be5
+# ╠═╡ disabled = true
+#=╠═╡
+fsp_sim_rober = begin
+    tf = 1e4
+    ϵ_dt = 0.01# Tolerance for flux-based adaptive dt
+    global next_log_iter = 1
+    # Initial condition for Robertson problem
+    U₀ = CartesianIndex(Integer(1e4), 0, 0)
+	rates = [0.04, 3e6, 1e0]
+	bounds = (0, Integer(1e5+1))
+	boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+	
+    global 𝒮ₜ = Set([U₀])
+    pₜ = zeros(length(𝒮ₜ))
+    pₜ[FindElement(U₀, 𝒮ₜ)] = 1.0
+
+    # Time and diagnostics
+    local t = 0.0
+    sol_t = [t]
+    sol_S_size = [length(𝒮ₜ)]
+    sol = [(copy(𝒮ₜ), copy(pₜ))]
+    flx = Float64[]
+    tresh = Float64[]
+	dob = []
+
+	savefreq = 10
+	t=0.0
+	δt = 1e-5
+
+	iter = 0
+	log_target = 1e-6  
+    log_factor = 1.025
+    while t < tf
+		
+        # Expand state space 
+		#global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model,  rates, t, boundary_condition, 1)
+		global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ,
+								model, 
+								boundary_condition, 
+								1)
+		
+
+        global A, in_flow, out_flow = MasterEquation(𝒮ₜ, 
+													 model,
+													 rates,
+													 boundary_condition, 
+													 t)
+		
+		
+		
+		global in_flux, out_flux = Vector(in_flow * pₜ), Vector(-out_flow * pₜ) 
+		max_flux = maximum(out_flux)
+
+		# based on out-flux, compute δt
+		global δt = (max_flux > 0.0) ? (ϵ_dt / max_flux) : (tf - t)
+        δt = min(δt, tf - t) 
+
+		# evolve probability distribution
+		pₜ = expv(δt, A, pₜ)
+		
+
+
+		out_flux = Vector(-out_flow * pₜ)
+
+		𝒮ₜ, pₜ, total_flux = robust_purge!(𝒮ₜ, 
+													 pₜ, 
+													 model, 
+													 rates, 
+													 t, 
+													 0.4; 
+													 flux_tolerance=1e-9)
+		
+		if sum(pₜ) <= 0
+            @warn "All probability mass lost in pruning – stopping"
+			break
+        end		
+
+		# update time 
+        t = t + δt
+
+		
+		if t >= log_target
+    push!(sol, (copy(𝒮ₜ), copy(pₜ)))
+    push!(sol_t, t)
+    push!(sol_S_size, length(𝒮ₜ))
+    push!(tresh, total_flux)
+
+    # advance to the next log target
+    global log_target *= log_factor
+end
+
+		global iter = iter + 1
+    end
+end
+
+  ╠═╡ =#
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
