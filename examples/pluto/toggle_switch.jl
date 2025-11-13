@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.13
+# v0.20.20
 
 using Markdown
 using InteractiveUtils
@@ -117,6 +117,50 @@ init_fsp_vars = begin
 	global p₀[FindElement(U₀, 𝒮₀)] = 1
 end;
 
+# ╔═╡ 5a3ad8bd-7e26-460f-ab5e-ffc60671c793
+function robust_purge1!(
+    X::Set{Element}, 
+    p::Vector{T}, 
+    model::Model,
+    rates,
+    t,
+    prob_quantile::Number;
+    flux_tolerance::Number = 1e-9 
+) where {Element, T, Model}
+
+    X_vec = collect(X)
+
+    candidate_idxs = DiscStochSim.findLowestValuesPercent_naive(p, prob_quantile)
+
+    flux_vector = zeros(T, length(p))
+
+    for i in eachindex(X_vec)
+        current_state = X_vec[i]
+        weight = sum(prop(current_state, rates, t) for prop in model.propensities)
+        flux_vector[i] = p[i] * weight
+    end
+
+    total_flux = sum(flux_vector)
+
+    # Set an adaptive threshold based on the total system flux
+    flux_threshold = total_flux * flux_tolerance
+
+    # Filter the candidates based on this adaptive threshold
+    final_idxs_to_prune = Set{Int}()
+    for idx in candidate_idxs
+        if flux_vector[idx] < flux_threshold
+            push!(final_idxs_to_prune, idx)
+        end
+    end
+
+    # 3. Purge the final set of states
+    new_p = [p[i] for i in eachindex(p) if i ∉ final_idxs_to_prune]
+    states_to_remove = Set(X_vec[collect(final_idxs_to_prune)])
+    new_X = setdiff(X, states_to_remove)
+
+    return new_X, new_p, total_flux
+end
+
 # ╔═╡ a5361b7f-c2d3-4e8a-ac4d-d03c5ada7692
 function robust_purge!(
     X::Set{Element}, 
@@ -194,9 +238,9 @@ fsp_sim = begin
 
 	nsteps=0
 	tms1=[]
-	for (iter, t) ∈ enumerate(T)
+	@progress for (iter, t) ∈ enumerate(T)
 		# expand state space
-	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates , t, boundary_condition, 50)
+	    global 𝒮ₜ, pₜ = expand!(𝒮ₜ, pₜ, model, rates , t, boundary_condition, 5)
 		global size_𝒮ₜ[iter] = length(𝒮ₜ)
 
 		global elapsed = @elapsed begin
@@ -222,7 +266,7 @@ fsp_sim = begin
     	global sol[iter] = sparse(I, J, pₜ)
 		
 		# purge state space
-		𝒮ₜ, pₜ = robust_purge!(𝒮ₜ, pₜ, model, rates, t, 0.6;flux_tolerance=1e-9)
+		𝒮ₜ, pₜ = purge!(𝒮ₜ, pₜ, 1e-8)
 		ϵₜ[iter] = 1.0 - sum(pₜ)
 		pₜ ./= sum(pₜ)
 		global S_old = copy(𝒮ₜ)
@@ -317,7 +361,6 @@ begin
         P .= 0
         P[states] .= V
         contour!(ax2, log10.(abs.(P)), color = :black, linewidth = 1.5, levels = 5)
-        
         # Add ylabel only to first column
         if col_idx == 1
             ax2.ylabel = L"|V|"
@@ -3565,7 +3608,7 @@ uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
 version = "1.64.0+1"
 
 [[deps.oneTBB_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
+deps = ["Artifacts", "JLLWrappers", "LazyArtifacts", "Libdl"]
 git-tree-sha1 = "d5a767a3bb77135a99e433afe0eb14cd7f6914c3"
 uuid = "1317d2d5-d96f-522e-a858-c73665f53c3e"
 version = "2022.0.0+0"
@@ -3595,6 +3638,7 @@ version = "3.6.0+0"
 # ╠═3a3a7362-0d5f-4a09-8ee5-dea46cd2afb2
 # ╠═b26f6054-dc8c-400a-8ea6-057c9c6c9785
 # ╠═d02f007d-2366-49f5-b961-112ce9a21483
+# ╠═5a3ad8bd-7e26-460f-ab5e-ffc60671c793
 # ╠═a5361b7f-c2d3-4e8a-ac4d-d03c5ada7692
 # ╠═f938c001-2930-4c9b-a8a9-8cab6aa7871f
 # ╠═cee1819a-8c54-4856-9b9d-01452c5cd68a
