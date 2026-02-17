@@ -1,0 +1,290 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,fullpage}
+
+\begin{document}
+
+\title{HW9 Concept Handout:\\
+Prime Factorization, GCD/LCM, Modular Arithmetic, and Relations}
+\author{CMPSC 40}
+\date{}
+\maketitle
+
+\section*{1. Prime Factorization}
+
+\textbf{Prime:} integer $p>1$ whose only positive divisors are $1$ and $p$.  
+
+\textbf{Composite:} integer $n>1$ that is not prime.
+
+\medskip
+\textbf{Fundamental Theorem of Arithmetic:}  
+Every integer $n>1$ can be written uniquely (up to order) as a product of primes:
+\[
+n = p_1^{\alpha_1} p_2^{\alpha_2}\cdots p_k^{\alpha_k}.
+\]
+
+\textbf{How to factor:}
+\begin{itemize}
+  \item Try dividing by small primes $2,3,5,7,11,\dots$.
+  \item Each time division works, record the prime and divide the number by it.
+  \item Stop when the quotient becomes $1$.
+\end{itemize}
+
+\section*{2. GCD, LCM, and Euclid's Algorithm}
+
+\subsection*{2.1 Definitions}
+
+For integers $a,b$ (not both zero):
+
+\textbf{Greatest common divisor (gcd).}
+\[
+\gcd(a,b) = \text{largest integer $d$ such that } d\mid a \text{ and } d\mid b.
+\]
+
+\textbf{Least common multiple (lcm).}
+\[
+\operatorname{lcm}(a,b) = \text{smallest positive integer $m$ such that } a\mid m \text{ and } b\mid m.
+\]
+
+\subsection*{2.2 From prime factors}
+
+If
+\[
+a = \prod p_i^{\alpha_i},\quad b = \prod p_i^{\beta_i}
+\]
+(with missing primes having exponent $0$), then
+\[
+\gcd(a,b) = \prod p_i^{\min(\alpha_i,\beta_i)},\qquad
+\operatorname{lcm}(a,b) = \prod p_i^{\max(\alpha_i,\beta_i)}.
+\]
+
+Useful check:
+\[
+\gcd(a,b)\cdot \operatorname{lcm}(a,b) = |a\cdot b|\quad(a,b\neq 0).
+\]
+
+\subsection*{2.3 Euclid's Algorithm}
+
+To compute $\gcd(a,b)$ (assume $a\ge b>0$):
+
+\begin{enumerate}
+  \item Divide: $a = bq_1 + r_1$, with $0\le r_1<b$.
+  \item If $r_1=0$, then $\gcd(a,b)=b$. Stop.
+  \item Otherwise, repeat with $(b,r_1)$:
+  \[
+  b = r_1 q_2 + r_2,\quad
+  r_1 = r_2 q_3 + r_3,\ \dots
+  \]
+  \item Continue until a remainder $0$ appears.
+  \item The last nonzero remainder is $\gcd(a,b)$.
+\end{enumerate}
+
+\section*{3. Modular Arithmetic (Quick Review)}
+
+\subsection*{3.1 Congruence}
+
+Let $n>0$. For integers $a,b$,
+\[
+a \equiv b \pmod{n} \iff n\mid(a-b).
+\]
+
+\textbf{Properties:}
+\begin{itemize}
+  \item Reflexive: $a\equiv a\pmod{n}$.
+  \item Symmetric: $a\equiv b\pmod{n} \Rightarrow b\equiv a\pmod{n}$.
+  \item Transitive: $a\equiv b\pmod{n}$ and $b\equiv c\pmod{n}$ $\Rightarrow a\equiv c\pmod{n}$.
+\end{itemize}
+So ``$\equiv\pmod{n}$'' is an \textbf{equivalence relation} on $\mathbb{Z}$.
+
+\textbf{Arithmetic:} If $a\equiv b\pmod{n}$ and $c\equiv d\pmod{n}$, then
+\[
+a+c\equiv b+d,\quad a-c\equiv b-d,\quad ac\equiv bd \pmod{n}.
+\]
+
+\section*{4. Binary Relations (Core for HW9)}
+
+\subsection*{4.1 Basic idea}
+
+Let $A$ and $B$ be sets. A \textbf{binary relation} $R$ from $A$ to $B$ is any subset
+\[
+R \subseteq A\times B.
+\]
+If $(a,b)\in R$, we can write $a\,R\,b$.
+
+When $A=B$, we say $R$ is a relation \textbf{on} $A$.
+
+\subsection*{4.2 Examples relevant to HW9}
+
+On $\mathbb{R}$:
+\[
+R_1 = \{(a,b): a>b\},\quad
+R_2 = \{(a,b): a\ge b\},\quad
+R_3 = \{(a,b): a<b\},
+\]
+\[
+R_4 = \{(a,b): a\le b\},\quad
+R_5 = \{(a,b): a\neq b\}.
+\]
+
+On $\mathbb{Z}$ (modular):
+\[
+R_{1,3} = \{(a,b): a\equiv b\pmod{3}\},\quad
+R_{1,4} = \{(a,b): a\equiv b\pmod{4}\}.
+\]
+
+\subsection*{4.3 Relation properties}
+
+Let $R$ be a relation on a set $A$.
+
+\textbf{Reflexive:}
+\[
+\forall a\in A,\ (a,a)\in R.
+\]
+Example: $\le$ on $\mathbb{R}$ is reflexive (since $a\le a$).
+
+\textbf{Symmetric:}
+\[
+\forall a,b\in A,\ (a,b)\in R \Rightarrow (b,a)\in R.
+\]
+Example: equality on $A$ is symmetric; if $a=b$ then $b=a$.
+
+\textbf{Antisymmetric:}
+\[
+\forall a,b\in A,\ (a,b)\in R \text{ and } (b,a)\in R \Rightarrow a=b.
+\]
+Example: $\le$ on $\mathbb{R}$ is antisymmetric: if $a\le b$ and $b\le a$, then $a=b$.
+
+\textbf{Transitive:}
+\[
+\forall a,b,c\in A,\ (a,b)\in R \text{ and } (b,c)\in R \Rightarrow (a,c)\in R.
+\]
+Example: $\le$ on $\mathbb{R}$ is transitive: $a\le b$ and $b\le c$ implies $a\le c$.
+
+\subsection*{4.4 Equivalence relations and partial orders}
+
+\textbf{Equivalence relation:} $R$ on $A$ is an \emph{equivalence relation} if it is:
+\[
+\text{reflexive, symmetric, and transitive}.
+\]
+
+Example: $a\sim b$ iff $a\equiv b\pmod{n}$ on $\mathbb{Z}$.
+
+\medskip
+\textbf{Partial order:} $R$ on $A$ is a \emph{partial order} if it is:
+\[
+\text{reflexive, antisymmetric, and transitive}.
+\]
+
+Example: $\subseteq$ on the power set of a set $X$ is a partial order.
+
+\section*{5. Set Operations on Relations}
+
+Let $R,S\subseteq A\times B$.
+
+\subsection*{5.1 Union}
+
+\[
+R\cup S = \{(a,b): (a,b)\in R \text{ or } (a,b)\in S\}.
+\]
+
+Example (on $\mathbb{R}$):
+\[
+R_1 = \{(a,b): a>b\},\quad R_3 = \{(a,b): a<b\}.
+\]
+Then
+\[
+R_1\cup R_3 = \{(a,b): a\neq b\} = R_5.
+\]
+
+\subsection*{5.2 Intersection}
+
+\[
+R\cap S = \{(a,b): (a,b)\in R \text{ and } (a,b)\in S\}.
+\]
+
+Example:
+\[
+R_4 = \{(a,b): a\le b\},\quad R_5 = \{(a,b): a\neq b\},
+\]
+\[
+R_4\cap R_5 = \{(a,b): a\le b \text{ and } a\neq b\} = \{(a,b): a<b\} = R_3.
+\]
+
+\subsection*{5.3 Set difference}
+
+\[
+R - S = \{(a,b): (a,b)\in R \text{ and } (a,b)\notin S\}.
+\]
+
+Example:
+\[
+R_2 = \{(a,b): a\ge b\},\quad R_1 = \{(a,b): a>b\}.
+\]
+Then
+\[
+R_2 - R_1 = \{(a,b): a\ge b \text{ and not }(a>b)\}.
+\]
+``Not $(a>b)$'' means $a\le b$, so we must have $a\ge b$ and $a\le b$, i.e.\ $a=b$:
+\[
+R_2 - R_1 = \{(a,b): a=b\}.
+\]
+
+\section*{6. Composition of Relations}
+
+Let $R\subseteq A\times B$ and $S\subseteq B\times C$.
+
+\textbf{Definition (Composition).}
+\[
+S\circ R = \{(a,c)\in A\times C: \exists b\in B,\ (a,b)\in R \text{ and } (b,c)\in S\}.
+\]
+
+\textbf{Example (inequalities):}
+On $\mathbb{R}$, let
+\[
+R_2 = \{(a,b): a\ge b\},\quad R_5 = \{(b,c): b\neq c\}.
+\]
+
+Then $(a,c)\in R_2\circ R_5$ if there exists $b$ with $a\ge b$ and $b\neq c$.
+
+For any real $a,c$, we can pick such a $b$:
+\begin{itemize}
+  \item If $a<c$: choose $b=a$ ($a\ge a$, and $a\neq c$).
+  \item If $a=c$: choose $b=a-1$ ($a\ge a-1$, and $b\neq c$).
+  \item If $a>c$: choose $b=c-1$ ($a>c>c-1$, and $b\neq c$).
+\end{itemize}
+So $R_2\circ R_5 = \mathbb{R}^2$.
+
+\textbf{Example (modular):}
+On $\mathbb{Z}$, let
+\[
+R_1 = \{(a,b): a\equiv b\pmod{3}\},\quad
+R_2 = \{(b,c): b\equiv c\pmod{4}\}.
+\]
+
+Then $(a,c)\in R_1\circ R_2$ if there exists $b$ such that
+\[
+a\equiv b\pmod{4},\quad b\equiv c\pmod{3}.
+\]
+Since $\gcd(3,4)=1$, such a $b$ always exists for any $a,c$, so $R_1\circ R_2 = \mathbb{Z}^2$.
+
+\section*{7. Honey and Banana Sets (Logical Practice)}
+
+\textbf{Honey:} A set $S$ of nonnegative integers is Honey if
+\[
+\forall a,b\in S,\ \gcd(a,b)>1.
+\]
+
+\textbf{Banana:} A set $S$ is Banana if
+\[
+\exists x>1 \text{ such that } \forall a\in S,\ x\mid a.
+\]
+
+\textbf{Key facts:}
+\begin{itemize}
+  \item Every \textbf{Banana} set is \textbf{Honey}: a single $x>1$ divides all elements, so every pair has gcd $\ge x>1$.
+  \item Not every \textbf{Honey} set is \textbf{Banana}: e.g.\ $S=\{6,10,15\}$ is Honey, but no $x>1$ divides all three.
+  \item Intersection of Honey sets is Honey; union of Honey sets may fail to be Honey.
+\end{itemize}
+
+These definitions and examples show how to prove or disprove statements about sets using $\gcd$ and logical quantifiers (``for all'', ``there exists'').
+
+\end{document}

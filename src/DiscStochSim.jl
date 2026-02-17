@@ -2,16 +2,29 @@ module DiscStochSim
 
 using Catalyst
 using SparseArrays
+using LinearAlgebra
 using Expokit
-using DifferentialEquations
-using Random
+import CommonSolve
 
-include("util/helper_functions.jl")
-include("state_space/rstep_expanders.jl")
-include("state_space/boundary_conditions.jl")
-include("state_space/space_exploration.jl")
-include("core/discrete_system.jl")
-include("core/master_equation.jl")
-include("core/ssa.jl")
+# Core types
+include("reaction_system.jl")
+include("boundary_conditions.jl")
+include("state_space.jl")
+include("generator.jl")
+
+# Adaptive FSP solver
+include("adaptive_fsp/problem.jl")
+include("adaptive_fsp/solution.jl")
+include("adaptive_fsp/solve.jl")
+
+# Exports
+export DiscreteStochasticSystem
+export RectLatticeBoundaryCondition
+export StateSpace, add_state!, remove_states!, expand!, compress!, renormalize!, get_global_ids
+export build_generator, reconstruct_generator
+export FSPProblem, FSPSolution, AdaptiveFSP
+using CommonSolve: solve
+export solve
+export mean_trajectory, marginal
 
 end

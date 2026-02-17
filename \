@@ -1,0 +1,52 @@
+include("src/DiscStochSim.jl")
+using .DiscStochSim 
+using Catalyst
+using SparseArrays
+using ExponentialUtilities
+using Optim, LinearAlgebra, PROPACK 
+
+def_model = begin
+  rn = @reaction_network begin
+    k1, S + E --> SE
+    k2, SE --> S + E 
+    k3, SE --> P + E 
+  end
+  model = DiscStochSim.DiscreteStochasticSystem(rn)
+end
+
+def_boundary = begin
+  # define function that charctarizes global hard boundary
+  bounds = (0, 200)
+  boundary_condition(x) = DiscStochSim.RectLatticeBoundaryCondition(x, bounds)
+end
+
+sim_params = begin
+  dt = 0.001 
+  U0 = CartesianIndex(50, 10, 1, 1)
+  rates = [0.01, 0.1, 0.1] 
+  X = Set([U0])
+  p = [1.0]
+end
+
+build_matrix = begin
+  X, p= DiscStochSim.expand!(X, p, model, boundary_condition, 3)
+  global A, _, _ = DiscStochSim.MasterEquation(X, model, rates, boundary_condition, dt) 
+end
+
+
+block_approach = begin
+  using FastExpm
+  E = sprand(size(A)[1], size(A)[1], 0.3)
+  O = copy(E) .* 0
+  @info size(O)
+  @info size(E)
+  @info size(A)
+  A = [A E;
+       A O]
+  E1 = fastExpm(A)
+end
+
+
+
+
+

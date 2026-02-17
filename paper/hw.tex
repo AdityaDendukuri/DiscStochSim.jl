@@ -1,0 +1,501 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{fullpage}
+
+\newtheorem*{solution}{Solution}
+
+\begin{document}
+
+\title{HW9 Solutions: Modular Algebra and Set Relations}
+\author{CMPSC 40 -- Fall 2025}
+\date{}
+\maketitle
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{1. Prime Factorization}
+
+\begin{solution}
+We find the prime factorization of each integer.
+
+\subsubsection*{(a) $143$}
+Check small primes:
+
+\begin{itemize}
+  \item $143$ is odd, so not divisible by $2$.
+  \item Sum of digits is $1+4+3=8$, so not divisible by $3$.
+  \item Last digit is not $0$ or $5$, so not divisible by $5$.
+  \item Try $7$: $143 / 7 \notin \mathbb{Z}$.
+  \item Try $11$: $143 / 11 = 13$, and $13$ is prime.
+\end{itemize}
+
+Thus
+\[
+143 = 11 \cdot 13.
+\]
+
+\subsubsection*{(b) $289$}
+Notice that $289$ is a perfect square:
+\[
+17^2 = 289,
+\]
+and $17$ is prime. Hence
+\[
+289 = 17^2.
+\]
+
+\subsubsection*{(c) $899$}
+We check primes near $\sqrt{899} \approx 30$. Consider $29$ and $31$:
+\[
+29 \cdot 31 = (30-1)(30+1) = 30^2 - 1 = 900 - 1 = 899.
+\]
+Both $29$ and $31$ are prime. Therefore
+\[
+899 = 29 \cdot 31.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{2. Greatest Common Divisors from Prime Factors}
+
+\begin{solution}
+We are given the prime factorizations:
+
+\begin{align*}
+\text{(a)}\quad
+a &= 3^7 \cdot 5^3 \cdot 7^3, &
+b &= 2^{11} \cdot 3^5 \cdot 5^9,\\[4pt]
+\text{(b)}\quad
+a &= 11 \cdot 13 \cdot 17, &
+b &= 2^9 \cdot 3^7 \cdot 5^5 \cdot 7^3.
+\end{align*}
+
+Recall: if
+\[
+a = \prod p_i^{\alpha_i},\quad b = \prod p_i^{\beta_i},
+\]
+then
+\[
+\gcd(a,b) = \prod p_i^{\min(\alpha_i,\beta_i)}.
+\]
+
+\subsubsection*{(a)}
+Compare exponents of each prime appearing in $a$ or $b$:
+
+\begin{itemize}
+  \item Prime $2$: exponents $0$ and $11$ $\Rightarrow \min(0,11)=0$.
+  \item Prime $3$: exponents $7$ and $5$ $\Rightarrow \min(7,5)=5$.
+  \item Prime $5$: exponents $3$ and $9$ $\Rightarrow \min(3,9)=3$.
+  \item Prime $7$: exponents $3$ and $0$ $\Rightarrow \min(3,0)=0$.
+\end{itemize}
+
+Hence
+\[
+\gcd(a,b) = 3^5 \cdot 5^3.
+\]
+
+\subsubsection*{(b)}
+The primes in $a$ are $11,13,17$, and the primes in $b$ are $2,3,5,7$. 
+There are no primes in common, so all minimum exponents are $0$. Therefore
+\[
+\gcd(a,b) = 1.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{3. Least Common Multiples from Prime Factors}
+
+\begin{solution}
+We use the same factorizations as in Question~2.
+
+Recall: if
+\[
+a = \prod p_i^{\alpha_i},\quad b = \prod p_i^{\beta_i},
+\]
+then
+\[
+\operatorname{lcm}(a,b) = \prod p_i^{\max(\alpha_i,\beta_i)}.
+\]
+
+\subsubsection*{(a)}
+For $a = 3^7 \cdot 5^3 \cdot 7^3$ and $b = 2^{11} \cdot 3^5 \cdot 5^9$:
+
+\begin{itemize}
+  \item Prime $2$: $\max(0,11) = 11$.
+  \item Prime $3$: $\max(7,5) = 7$.
+  \item Prime $5$: $\max(3,9) = 9$.
+  \item Prime $7$: $\max(3,0) = 3$.
+\end{itemize}
+
+Thus
+\[
+\operatorname{lcm}(a,b) = 2^{11} \cdot 3^7 \cdot 5^9 \cdot 7^3.
+\]
+
+\subsubsection*{(b)}
+For $a = 11 \cdot 13 \cdot 17$ and $b = 2^9 \cdot 3^7 \cdot 5^5 \cdot 7^3$, none of the primes overlap, so we take each prime with its exponent as given:
+
+\[
+\operatorname{lcm}(a,b) = 2^9 \cdot 3^7 \cdot 5^5 \cdot 7^3 \cdot 11 \cdot 13 \cdot 17.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{4. Euclid's Algorithm}
+
+\begin{solution}
+
+\subsubsection*{(a) $\gcd(1,5)$}
+We may write
+\[
+5 = 1 \cdot 5 + 0.
+\]
+Once the remainder is zero, the last nonzero divisor is the gcd. Thus
+\[
+\gcd(1,5) = 1.
+\]
+
+\subsubsection*{(b) $\gcd(34,55)$}
+
+Apply Euclid's algorithm:
+
+\begin{align*}
+55 &= 34\cdot 1 + 21,\\
+34 &= 21\cdot 1 + 13,\\
+21 &= 13\cdot 1 + 8,\\
+13 &= 8\cdot 1 + 5,\\
+8 &= 5\cdot 1 + 3,\\
+5 &= 3\cdot 1 + 2,\\
+3 &= 2\cdot 1 + 1,\\
+2 &= 1\cdot 2 + 0.
+\end{align*}
+
+The last nonzero remainder is $1$, so
+\[
+\gcd(34,55) = 1.
+\]
+
+\subsubsection*{(c) $\gcd(100,101)$}
+
+\begin{align*}
+101 &= 100\cdot 1 + 1,\\
+100 &= 1\cdot 100 + 0.
+\end{align*}
+The last nonzero remainder is $1$, hence
+\[
+\gcd(100,101) = 1.
+\]
+
+\subsubsection*{(d) $\gcd(1529,14039)$}
+
+Let $a=14039$ and $b=1529$. Then:
+
+\begin{align*}
+14039 &= 1529 \cdot 9 + 278,\\
+1529 &= 278 \cdot 5 + 139,\\
+278 &= 139 \cdot 2 + 0.
+\end{align*}
+
+The last nonzero remainder is $139$, so
+\[
+\gcd(1529,14039) = 139.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{5. Set Relations on $\mathbb{R}$}
+
+We have relations on $\mathbb{R}$:
+\begin{align*}
+R_1 &= \{(a,b)\in\mathbb{R}^2 : a>b\},\\
+R_2 &= \{(a,b)\in\mathbb{R}^2 : a\ge b\},\\
+R_3 &= \{(a,b)\in\mathbb{R}^2 : a<b\},\\
+R_4 &= \{(a,b)\in\mathbb{R}^2 : a\le b\},\\
+R_5 &= \{(a,b)\in\mathbb{R}^2 : a\neq b\}.
+\end{align*}
+
+\begin{solution}
+
+\subsubsection*{(a) $R_1 \cup R_3$}
+We have
+\[
+R_1 \cup R_3 = \{(a,b) : a>b \text{ or } a<b\}.
+\]
+The only time neither $a>b$ nor $a<b$ holds is when $a=b$. Thus
+\[
+R_1 \cup R_3 = \{(a,b)\in\mathbb{R}^2 : a\neq b\} = R_5.
+\]
+
+\subsubsection*{(b) $R_2 - R_1$}
+By definition,
+\[
+R_2 - R_1 = \{(a,b) : (a,b)\in R_2 \text{ and } (a,b)\notin R_1\}.
+\]
+The condition $(a,b)\in R_2$ means $a\ge b$, and $(a,b)\notin R_1$ means $\neg(a>b)$, i.e.\ $a\le b$. Together we have
+\[
+a\ge b \text{ and } a\le b \iff a=b.
+\]
+Hence
+\[
+R_2 - R_1 = \{(a,b)\in\mathbb{R}^2: a=b\},
+\]
+the equality relation.
+
+\subsubsection*{(c) $R_4 \cap R_5$}
+Here
+\[
+R_4 \cap R_5 = \{(a,b): a\le b \text{ and } a\neq b\}.
+\]
+But $a\le b$ and $a\neq b$ together imply $a<b$. Therefore
+\[
+R_4 \cap R_5 = \{(a,b): a<b\} = R_3.
+\]
+
+\subsubsection*{(d) $R_2 \circ R_5$}
+The composition $R_2\circ R_5$ is
+\[
+R_2\circ R_5 = \{(a,c)\in\mathbb{R}^2 : \exists b\in\mathbb{R},\ (a,b)\in R_2 \text{ and } (b,c)\in R_5\}.
+\]
+That is, $a\ge b$ and $b\neq c$.
+
+We show that for every pair $(a,c)\in\mathbb{R}^2$, we can choose such a $b$:
+\begin{itemize}
+  \item If $a<c$, take $b=a$. Then $a\ge b$ holds (since $a=b$) and $b=a\neq c$ because $a<c$.
+  \item If $a>c$, take $b=c-1$. Then $b<c\le a$, so $a\ge b$, and clearly $b\neq c$.
+  \item If $a=c$, take $b=a-1$. Then $b<a=a=c$, so $a\ge b$ and $b\neq c$.
+\end{itemize}
+Thus for all $(a,c)$ we can find such a $b$, meaning
+\[
+R_2\circ R_5 = \mathbb{R}^2.
+\]
+
+\subsubsection*{(e) $R_4 - R_5$}
+We have
+\[
+R_4 - R_5 = \{(a,b): (a,b)\in R_4 \text{ and } (a,b)\notin R_5\}.
+\]
+The condition $(a,b)\in R_4$ means $a\le b$ and $(a,b)\notin R_5$ means $\neg(a\neq b)$, i.e.\ $a=b$. Hence
+\[
+R_4 - R_5 = \{(a,b)\in\mathbb{R}^2 : a=b\},
+\]
+the equality relation.
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{6. Modular Relations on $\mathbb{Z}$}
+
+We have relations on $\mathbb{Z}$:
+\[
+R_1 = \{(a,b)\in\mathbb{Z}^2 : a\equiv b \pmod{3}\},\qquad
+R_2 = \{(a,b)\in\mathbb{Z}^2 : a\equiv b \pmod{4}\}.
+\]
+
+\begin{solution}
+
+\subsubsection*{(a) $R_1 - R_2$}
+By definition,
+\[
+R_1 - R_2 = \{(a,b)\in\mathbb{Z}^2 : (a,b)\in R_1 \text{ and } (a,b)\notin R_2\}.
+\]
+That is,
+\[
+a\equiv b\pmod{3} \quad\text{and}\quad a\not\equiv b\pmod{4}.
+\]
+Equivalently,
+\[
+3 \mid (a-b) \quad\text{and}\quad 4 \nmid (a-b).
+\]
+So
+\[
+R_1 - R_2 = \{(a,b)\in\mathbb{Z}^2 : 3\mid(a-b) \text{ and } 4\nmid(a-b)\}.
+\]
+
+\subsubsection*{(b) $R_1 \circ R_2$}
+The composition is
+\[
+R_1\circ R_2 = \{(a,c)\in\mathbb{Z}^2 : \exists b\in\mathbb{Z},\ (a,b)\in R_2 \text{ and } (b,c)\in R_1\}.
+\]
+That is,
+\[
+a\equiv b\pmod{4},\quad b\equiv c\pmod{3}.
+\]
+We want to know for which $(a,c)$ there exists such a $b$.
+
+Since $\gcd(3,4)=1$, the system
+\[
+b \equiv a \pmod{4},\qquad b\equiv c \pmod{3}
+\]
+always has a solution $b$ for any given pair of residues $(a \bmod 4, c \bmod 3)$ (by the Chinese Remainder Theorem). Therefore for \emph{every} $(a,c)\in\mathbb{Z}^2$, there exists a $b$ such that $(a,b)\in R_2$ and $(b,c)\in R_1$.
+
+Hence
+\[
+R_1\circ R_2 = \mathbb{Z}^2.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{7. Designing Relations on $A = \{9,8,7,6\}$}
+
+\begin{solution}
+We define $R\subseteq A\times A$ with the requested properties.
+
+\subsubsection*{(a) $R$ reflexive and antisymmetric}
+Reflexive means $(x,x)\in R$ for all $x\in A$. Antisymmetric means that if $(a,b)\in R$ and $(b,a)\in R$, then $a=b$.
+
+A simple choice is the equality relation:
+\[
+R = \{(6,6), (7,7), (8,8), (9,9)\}.
+\]
+This is reflexive (each element is related to itself) and antisymmetric (the only time both $(a,b)$ and $(b,a)$ occur is when $a=b$).
+
+\subsubsection*{(b) $R$ reflexive and symmetric, but not transitive}
+Reflexive again requires $(x,x)\in R$ for all $x\in A$, and symmetric means if $(a,b)\in R$ then $(b,a)\in R$. To be \emph{not} transitive, we need at least one example of $(a,b)\in R$ and $(b,c)\in R$ but $(a,c)\notin R$.
+
+Start with all reflexive pairs:
+\[
+(6,6), (7,7), (8,8), (9,9).
+\]
+Add the pairs
+\[
+(6,7), (7,6), (7,8), (8,7),
+\]
+and do \emph{not} include $(6,8)$ or $(8,6)$.
+
+Thus we may take
+\[
+R = \{(6,6),(7,7),(8,8),(9,9),(6,7),(7,6),(7,8),(8,7)\}.
+\]
+
+This $R$ is reflexive and symmetric, but not transitive, since
+\[
+(6,7)\in R,\ (7,8)\in R,\ \text{but }(6,8)\notin R.
+\]
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{8. Is $R_m$ an Equivalence Relation?}
+
+We are given
+\[
+R_m = \{(a,b)\in\mathbb{Z}\times\mathbb{Z} : a-b = 3m\},
+\]
+for some fixed positive integer $m$.
+
+\begin{solution}
+To be an equivalence relation on $\mathbb{Z}$, $R_m$ must be reflexive, symmetric, and transitive.
+
+\medskip\noindent
+\textbf{Reflexivity.}  
+We require $(a,a)\in R_m$ for all $a\in\mathbb{Z}$. That is,
+\[
+(a,a)\in R_m \iff a-a = 3m \iff 0 = 3m.
+\]
+But $m>0$ implies $3m\neq 0$, so there is no integer $a$ for which $(a,a)\in R_m$. Therefore $R_m$ is not reflexive.
+
+Because it already fails reflexivity, $R_m$ cannot be an equivalence relation. (One can also check it is not symmetric: if $a-b=3m$, then $b-a=-3m\neq 3m$ for $m>0$.)
+
+\medskip\noindent
+\textbf{Conclusion.} $R_m$ is \emph{not} an equivalence relation.
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{9. Honey and Banana Sets}
+
+A set $S$ of nonnegative integers is:
+\begin{itemize}
+  \item \textbf{Honey} if for all $a,b\in S$, $\gcd(a,b)>1$.
+  \item \textbf{Banana} if there exists an integer $x>1$ such that $x\mid a$ for all $a\in S$.
+\end{itemize}
+
+We analyze the following statements:
+\begin{enumerate}
+  \item Every Honey set is Banana.
+  \item Every Banana set is Honey.
+  \item If $S_1$ and $S_2$ are both Honey, then $S_1\cap S_2$ is Honey.
+  \item If $S_1$ and $S_2$ are both Honey, then $S_1\cup S_2$ is Honey.
+\end{enumerate}
+
+\begin{solution}
+
+\subsubsection*{(a) Every Honey set is Banana.}
+
+This statement is \textbf{false}.
+
+\medskip\noindent
+\textbf{Counterexample.}
+Let
+\[
+S = \{6,10,15\}.
+\]
+Then
+\[
+\gcd(6,10) = 2 > 1,\quad \gcd(6,15) = 3 > 1,\quad \gcd(10,15) = 5 > 1.
+\]
+So $S$ is Honey.
+
+If $S$ were Banana, there would be some integer $x>1$ that divides all elements of $S$. That means $x$ must divide $\gcd(6,10,15)$. However
+\[
+\gcd(6,10) = 2,\quad \gcd(2,15) = 1,
+\]
+so $\gcd(6,10,15) = 1$. No integer $x>1$ divides all three numbers, so $S$ is not Banana.
+
+Thus not every Honey set is Banana.
+
+\subsubsection*{(b) Every Banana set is Honey.}
+
+This statement is \textbf{true}.
+
+\medskip\noindent
+\textbf{Proof.}
+Assume $S$ is Banana. Then there exists an integer $x>1$ such that for every $a\in S$, we have $x\mid a$.
+
+Take any $a,b\in S$. Then $x\mid a$ and $x\mid b$, so $x$ is a common divisor of $a$ and $b$. Thus
+\[
+\gcd(a,b) \ge x > 1.
+\]
+Since this holds for every pair $a,b\in S$, we conclude $S$ is Honey.
+
+\subsubsection*{(c) If $S_1$ and $S_2$ are both Honey, then $S_1\cap S_2$ is Honey.}
+
+This statement is \textbf{true}.
+
+\medskip\noindent
+\textbf{Proof.}
+Assume $S_1$ and $S_2$ are Honey. Consider their intersection $S_1\cap S_2$.
+
+Let $a,b\in S_1\cap S_2$. Then $a,b\in S_1$ and $S_1$ is Honey, so $\gcd(a,b)>1$. Therefore every pair of elements in $S_1\cap S_2$ has gcd $>1$, so $S_1\cap S_2$ is Honey.
+
+(If $S_1\cap S_2$ has fewer than two elements, the Honey condition holds vacuously.)
+
+\subsubsection*{(d) If $S_1$ and $S_2$ are both Honey, then $S_1\cup S_2$ is Honey.}
+
+This statement is \textbf{false}.
+
+\medskip\noindent
+\textbf{Counterexample.}
+Let
+\[
+S_1 = \{6,10\},\quad S_2 = \{21,35\}.
+\]
+Check that each set is Honey:
+
+\begin{itemize}
+  \item In $S_1$, $\gcd(6,10) = 2 > 1$, so $S_1$ is Honey.
+  \item In $S_2$, $\gcd(21,35) = 7 > 1$, so $S_2$ is Honey.
+\end{itemize}
+
+Now consider the union
+\[
+S_1\cup S_2 = \{6,10,21,35\}.
+\]
+Within this union, for example
+\[
+\gcd(6,35) = 1,
+\]
+so not all pairs have gcd $>1$. Therefore $S_1\cup S_2$ is not Honey.
+
+\end{solution}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}
