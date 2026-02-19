@@ -20,7 +20,7 @@ include("adaptive_fsp/solve.jl")
 # Exports
 export DiscreteStochasticSystem
 export RectLatticeBoundaryCondition
-export StateSpace, add_state!, remove_states!, expand!, compress!, renormalize!, get_global_ids
+export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, compress!, renormalize!, get_global_ids
 export build_generator, reconstruct_generator
 export FSPProblem, FSPSolution, AdaptiveFSP
 using CommonSolve: solve

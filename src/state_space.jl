@@ -81,12 +81,57 @@ function expand!(sp::StateSpace{E,T}, model, bc; depth::Int=1) where {E,T}
 end
 
 """
+    expand_ssa!(space, model, rates, t, bc; depth=1)
+
+Legacy SSA-style expansion: for each active state, sample one reaction by
+propensity and add the sampled successor if it satisfies `bc`.
+"""
+function expand_ssa!(sp::StateSpace{E,T}, model, rates, t::Real, bc; depth::Int=1) where {E,T}
+    n_rxn = length(model.stoichvecs)
+    n_rxn == 0 && return sp
+
+    for _ in 1:depth
+        current = copy(sp.states)
+        for x in current
+            props = Vector{Float64}(undef, n_rxn)
+            total = 0.0
+            @inbounds for k in 1:n_rxn
+                α = Float64(model.propensities[k](x, rates, t))
+                α = max(0.0, α)
+                props[k] = α
+                total += α
+            end
+            total <= 0 && continue
+
+            threshold = rand() * total
+            csum = 0.0
+            chosen = 0
+            @inbounds for k in 1:n_rxn
+                csum += props[k]
+                if threshold <= csum
+                    chosen = k
+                    break
+                end
+            end
+            chosen == 0 && continue
+
+            y = x + model.stoichvecs[chosen]
+            if !haskey(sp.index, y) && bc(y)
+                add_state!(sp, y)
+            end
+        end
+    end
+    sp
+end
+
+"""
     compress!(space, model, rates, t, prob_quantile; flux_tolerance=1e-6)
 
-Flux-aware pruning: select the lowest-probability states (up to `prob_quantile`
-cumulative mass) as candidates, then only remove those whose flux is below
-`flux_tolerance * total_flux`.
+Flux-aware pruning with legacy count-quantile candidate selection.
 
+Candidates are chosen by state count:
+`round(prob_quantile * n_states)` lowest-probability states.
+If `flux_tolerance <= 0`, all candidates are pruned.
 Returns `(total_flux, n_removed)`.
 """
 function compress!(sp::StateSpace{E,T}, model, rates, t::Real,
@@ -106,25 +151,23 @@ function compress!(sp::StateSpace{E,T}, model, rates, t::Real,
     total_flux = sum(flux)
     flux_threshold = total_flux * flux_tolerance
 
-    # Candidate selection: accumulate lowest-probability states up to prob_quantile
     idx = sortperm(sp.probs)
-    running_mass = zero(T)
-    candidates = Set{Int}()
-    for i in idx
-        if running_mass + sp.probs[i] > prob_quantile
-            break
-        end
-        running_mass += sp.probs[i]
-        push!(candidates, i)
-    end
+    n_remove = round(Int, clamp(prob_quantile, 0, 1) * n)
+    candidates = n_remove > 0 ? idx[1:min(n_remove, n)] : Int[]
 
-    # Flux protection: only prune candidates with flux below threshold
     remove_mask = falses(n)
     n_removed = 0
-    for i in candidates
-        if flux[i] < flux_threshold
+    if flux_tolerance <= 0
+        for i in candidates
             remove_mask[i] = true
             n_removed += 1
+        end
+    else
+        for i in candidates
+            if flux[i] < flux_threshold
+                remove_mask[i] = true
+                n_removed += 1
+            end
         end
     end
 

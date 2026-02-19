@@ -5,7 +5,7 @@ Algorithm parameters for the adaptive Finite State Projection method.
 
 # Keyword Arguments
 - `ε_dt::Float64 = 1.0`: Time-step control: `dt = ε_dt / total_flux`.
-- `prob_quantile::Float64 = 0.1`: Cumulative probability mass eligible for pruning.
+- `prob_quantile::Float64 = 0.1`: Quantile parameter used by pruning.
 - `flux_tolerance::Float64 = 1e-6`: Flux protection threshold (relative to total flux).
 - `expansion_depth::Int = 1`: Number of neighbor shells added per step.
 - `save_interval::Int = 1000`: Save a snapshot every N iterations.
@@ -23,7 +23,7 @@ end
 
 Run the adaptive FSP algorithm:
 1. Expand state space (stoichiometric neighbors).
-2. Build/reconstruct the CME generator.
+2. Build the CME generator.
 3. Compute adaptive time step from boundary flux.
 4. Propagate probability via matrix exponential (`expv`).
 5. Flux-aware pruning + renormalization.
@@ -48,22 +48,14 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     t = Float64(t0)
     iter = 0
 
-    # Generator cache
-    A_old = spzeros(Float64, 0, 0)
-    gids_old = Int[]
-
     while t < tf
         iter += 1
 
-        # 1) Expand state space
-        expand!(sp, model, bc; depth=alg.expansion_depth)
+        # 1) Expand state space (legacy SSA-style expansion)
+        expand_ssa!(sp, model, rates, t, bc; depth=alg.expansion_depth)
 
-        # 2) Build/reconstruct generator
-        if isempty(gids_old)
-            A, in_flow, out_flow = build_generator(sp, model, rates, t)
-        else
-            A, in_flow, out_flow = reconstruct_generator(sp, model, rates, t, A_old, gids_old)
-        end
+        # 2) Build generator from scratch (legacy behavior)
+        A, in_flow, out_flow = build_generator(sp, model, rates, t)
 
         # 3) Adaptive time step from total outflux
         out_flux = Vector(-out_flow * sp.probs)
@@ -78,10 +70,6 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         compress!(sp, model, rates, t, alg.prob_quantile;
                   flux_tolerance=alg.flux_tolerance)
         renormalize!(sp)
-
-        # 6) Cache for next reconstruction
-        gids_old = get_global_ids(sp)
-        A_old = A
 
         # 7) Advance time
         t += dt

@@ -69,6 +69,32 @@ using Catalyst
         @test all(x -> abs(x) < 1e-12, col_sums)
     end
 
+    @testset "Reconstruction stays aligned after pruning" begin
+        rn = @reaction_network begin
+            kbirth, 0 --> A
+            kdeath, A --> 0
+        end
+        model = DiscreteStochasticSystem(rn)
+        rates = [2.0, 0.5]
+
+        sp = StateSpace{CartesianIndex{1}, Float64}()
+        for n in 0:5
+            add_state!(sp, CartesianIndex(n), n == 2 ? 1.0 : 0.0)
+        end
+
+        A_old, _, _ = build_generator(sp, model, rates, 0.0)
+        gids_old = get_global_ids(sp)
+
+        # Emulate one step where states are pruned/reindexed, then expanded again.
+        remove_states!(sp, BitVector([false, true, false, false, true, false]))
+        add_state!(sp, CartesianIndex(6), 0.0)
+
+        A_recon, _, _ = reconstruct_generator(sp, model, rates, 0.0, A_old, gids_old)
+        A_full, _, _ = build_generator(sp, model, rates, 0.0)
+
+        @test Matrix(A_recon) ≈ Matrix(A_full) atol=1e-12
+    end
+
     @testset "Expand adds neighbors" begin
         rn = @reaction_network begin
             k1, A --> B
