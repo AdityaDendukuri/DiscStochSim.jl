@@ -176,6 +176,30 @@ function compress!(sp::StateSpace{E,T}, model, rates, t::Real,
 end
 
 """
+    prune_threshold!(space, threshold; max_probs=nothing)
+
+Simple threshold-based pruning: remove states whose probability (or lookback-window
+max probability, if `max_probs` is provided) is below `threshold`.
+Returns the number of states removed.
+"""
+function prune_threshold!(sp::StateSpace{E,T}, threshold::Real;
+                          max_probs::Union{Nothing, Dict{E,<:Real}}=nothing) where {E,T}
+    n = length(sp)
+    n == 0 && return 0
+    remove_mask = falses(n)
+    n_removed = 0
+    for i in 1:n
+        p = max_probs !== nothing ? get(max_probs, sp.states[i], sp.probs[i]) : sp.probs[i]
+        if p < threshold
+            remove_mask[i] = true
+            n_removed += 1
+        end
+    end
+    remove_states!(sp, remove_mask)
+    n_removed
+end
+
+"""
     renormalize!(space)
 
 Scale probabilities so they sum to 1. Returns the sum before normalization.

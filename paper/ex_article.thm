@@ -1,0 +1,28 @@
+\contentsline {definition}{{Definition}{2.1}{Chemical Master Equation (CME)}}{2}{theorem.5}%
+\contentsline {remark}{{Remark}{2.2}{Generator matrix properties}}{3}{theorem.9}%
+\contentsline {definition}{{Definition}{2.3}{Finite State Projection}}{3}{theorem.14}%
+\contentsline {theorem}{{Theorem}{2.4}{Classical FSP bounds \cite {Munsky2006}}}{3}{theorem.16}%
+\contentsline {remark}{{Remark}{2.5}{Stiffness and multiscale challenges in adaptive FSP}}{4}{theorem.31}%
+\contentsline {definition}{{Definition}{3.1}{Outgoing probability flux}}{5}{theorem.34}%
+\contentsline {definition}{{Definition}{3.2}{Total system flux}}{5}{theorem.36}%
+\contentsline {proposition}{{Proposition}{3.3}{Total flux properties}}{6}{theorem.38}%
+\contentsline {proof}{{Proof}{1}{}}{6}{proof.40}%
+\contentsline {remark}{{Remark}{3.4}{}}{9}{theorem.91}%
+\contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{11}{theorem.112}%
+\contentsline {proof}{{Proof}{2}{}}{11}{proof.117}%
+\contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{12}{theorem.119}%
+\contentsline {proof}{{Proof}{3}{}}{12}{proof.120}%
+\contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{12}{theorem.122}%
+\contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{13}{theorem.127}%
+\contentsline {proof}{{Proof}{4}{}}{13}{proof.129}%
+\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{14}{theorem.137}%
+\contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{14}{theorem.140}%
+\contentsline {proof}{{Proof}{5}{}}{14}{proof.142}%
+\contentsline {corollary}{{Corollary}{4.7}{Combined flux and probability error control}}{14}{theorem.146}%
+\contentsline {proof}{{Proof}{6}{}}{15}{proof.148}%
+\contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{15}{theorem.151}%
+\contentsline {proof}{{Proof}{7}{}}{15}{proof.153}%
+\contentsline {remark}{{Remark}{4.9}{}}{16}{theorem.157}%
+\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.158}%
+\contentsline {proof}{{Proof}{8}{}}{16}{proof.162}%
+\contentsline {remark}{{Remark}{4.11}{Consistent parameter selection via spatial stiffness}}{16}{theorem.163}%
