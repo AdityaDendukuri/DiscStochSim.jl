@@ -14,7 +14,7 @@ prob = FSPProblem(rn, CartesianIndex(10_000, 0, 0), (0.0, tf), rates; bounds=(0,
 println("Running AdaptiveFSP...")
 Random.default_rng(1)
 t0 = time()
-sol_afsp = solve(prob, AdaptiveFSP(ε_dt=0.01, prob_quantile=0.4, flux_tolerance=1e-9, save_interval=5000))
+sol_afsp, _ = solve(prob, AdaptiveFSP(ε_dt=0.01, prob_quantile=0.4, flux_tolerance=1e-9, save_interval=5000))
 t_afsp = time() - t0
 traj = mean_trajectory(sol_afsp)
 println("  Done: $(length(sol_afsp)) snaps, $(round(t_afsp; digits=1))s, t_final=$(sol_afsp.t[end])")

@@ -49,7 +49,7 @@ function solve_oregonator(; tfinal::Float64=0.11,
     Random.seed!(seed)
 
     prob = oregonator_problem(; tfinal=tfinal, bounds=bounds)
-    sol = solve(prob, AdaptiveFSP(
+    sol, _ = solve(prob, AdaptiveFSP(
         ε_dt=ε_dt,
         prob_quantile=prob_quantile,
         flux_tolerance=flux_tolerance,

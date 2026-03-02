@@ -9,6 +9,16 @@ Algorithm parameters for the adaptive Finite State Projection method.
 - `flux_tolerance::Float64 = 1e-6`: Flux protection threshold (relative to total flux).
 - `expansion_depth::Int = 1`: Number of neighbor shells added per step.
 - `save_interval::Int = 1000`: Save a snapshot every N iterations.
+- `max_iter::Int = typemax(Int)`: Maximum number of iterations.
+
+## Time-step formula
+
+The time step is `dt = ε_dt / Φ_total` where `Φ_total = Σᵢ pᵢ·wᵢ` is the
+probability-weighted total outflux.  As the system evolves and probability
+shifts toward slower states, Φ_total decreases and dt grows naturally.  The
+effective step is:
+
+    dt = min(ε_dt / Φ_total,  tf - t)
 """
 Base.@kwdef struct AdaptiveFSP
     ε_dt::Float64 = 1.0
@@ -16,10 +26,28 @@ Base.@kwdef struct AdaptiveFSP
     flux_tolerance::Float64 = 1e-6
     expansion_depth::Int = 1
     save_interval::Int = 1000
+    max_iter::Int = typemax(Int)
 end
 
 """
-    solve(prob::FSPProblem, alg::AdaptiveFSP) -> FSPSolution
+    AdaptiveFSPDiagnostics
+
+Per-step diagnostic data from an AdaptiveFSP solve.
+
+- `dt_log`: time step taken at each iteration.
+- `t_log`: simulated time after each iteration.
+- `size_log`: projection size `|S|` after each iteration.
+- `total_iters`: total number of iterations executed.
+"""
+struct AdaptiveFSPDiagnostics
+    dt_log::Vector{Float64}
+    t_log::Vector{Float64}
+    size_log::Vector{Int}
+    total_iters::Int
+end
+
+"""
+    solve(prob::FSPProblem, alg::AdaptiveFSP) -> (FSPSolution, AdaptiveFSPDiagnostics)
 
 Run the adaptive FSP algorithm:
 1. Expand state space (stoichiometric neighbors).
@@ -27,7 +55,10 @@ Run the adaptive FSP algorithm:
 3. Compute adaptive time step from boundary flux.
 4. Propagate probability via matrix exponential (`expv`).
 5. Flux-aware pruning + renormalization.
-6. Repeat until `t >= tf`.
+6. Repeat until `t >= tf` or `alg.max_iter` iterations reached.
+
+Returns `(solution, diagnostics)` where `diagnostics` contains per-step
+`dt_log`, `t_log`, and `size_log`.
 """
 function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     model = prob.model
@@ -45,10 +76,15 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     sol_snaps = [(copy(sp.states), copy(sp.probs))]
     sol_sizes = [length(sp)]
 
+    # Per-step diagnostics (lightweight: no state copies)
+    dt_log   = Float64[]
+    t_log    = Float64[]
+    size_log_diag = Int[]
+
     t = Float64(t0)
     iter = 0
 
-    while t < tf
+    while t < tf && iter < alg.max_iter
         iter += 1
 
         # 1) Expand state space (legacy SSA-style expansion)
@@ -57,7 +93,8 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         # 2) Build generator from scratch (legacy behavior)
         A, in_flow, out_flow = build_generator(sp, model, rates, t)
 
-        # 3) Adaptive time step from total outflux
+        # 3) Adaptive time step
+        # Probability-weighted total outflux Φ = Σ pᵢ wᵢ
         out_flux = Vector(-out_flow * sp.probs)
         total_flux = sum(out_flux)
         dt = total_flux > 0 ? alg.ε_dt / total_flux : (tf - t)
@@ -71,8 +108,13 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
                   flux_tolerance=alg.flux_tolerance)
         renormalize!(sp)
 
-        # 7) Advance time
+        # 6) Advance time
         t += dt
+
+        # 7) Record per-step diagnostics
+        push!(dt_log, dt)
+        push!(t_log, t)
+        push!(size_log_diag, length(sp))
 
         # 8) Save snapshot
         if iter % alg.save_interval == 0 || t >= tf
@@ -90,5 +132,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         push!(sol_sizes, length(sp))
     end
 
-    FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
+    sol  = FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
+    diag = AdaptiveFSPDiagnostics(dt_log, t_log, size_log_diag, iter)
+    (sol, diag)
 end

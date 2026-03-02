@@ -1113,24 +1113,25 @@ Rejections & --- & 0 \\
 \end{figure}
 
 \paragraph{Bottleneck.}
-Table~\ref{tab:comparison_bottleneck} and Figure~\ref{fig:bottleneck_comparison} compare the methods on the bottleneck system ($A \to B \to B + C$, $k_1 = 10^{-6}$, $k_2 = 0.1$) over $[0, 10^4]$. This system provides the clearest demonstration of connectivity preservation. The flux-based adaptive FSP uses fixed steps $\delta t = 10$ (1{,}000 iterations), completes in 0.4\,s, and achieves $\langle C \rangle = 4.97$ at the final time. The Krylov-FSP-SSA method completes in $<0.1$\,s (100 iterations, $\tau = 100$) but produces $\langle C \rangle \approx 0$, completely missing~$C$ production.
+Table~\ref{tab:comparison_bottleneck} and Figure~\ref{fig:bottleneck_comparison} compare the methods on the bottleneck system ($A \to B \to B + C$, $k_1 = 10^{-6}$, $k_2 = 0.1$) over $[0, 10^4]$. The flux-based adaptive FSP uses a fixed time step $\delta t = 1/k_2 = 10$\,s (because the flux-adaptive formula $\varepsilon_{\Delta t}/\Phi_{\mathrm{total}} \approx 10^6$\,s at $t{=}0$ would take one giant step from $t{=}0$ to $t_f$, missing all $C$-states), completes in 1.0\,s with 1{,}000 steps, and achieves $\langle C \rangle = 4.978$ (${<}0.1\%$ error). The faithfully-implemented Krylov-FSP-SSA (Algorithm~2 of~\cite{VoSidje2016}; $\varepsilon = 10^{-2}$, $\tau_{\mathrm{init}} = 100$, $r = 1$, $\mathtt{droptol} = 10^{-10}$) also reaches $t_f$ in just 7 accepted steps, but produces $\langle C \rangle = 0.12$ (40$\times$ underestimate).
 
-The discrepancy arises because after a single step of $\tau = 100$\,s, the bottleneck state $(0, 1, 0)$ carries probability $p(B{=}1) \approx k_1 \tau = 10^{-4}$, well below the Krylov-FSP-SSA pruning threshold $\varepsilon/|\mathcal{S}| \approx 10^{-2}/4 \approx 2.5 \times 10^{-3}$. Without flux protection, this state is pruned every iteration, severing the only pathway through which probability can flow from the $A = 1$ initial condition to the $C$-producing reaction $B \to B + C$. The flux-based method retains $(0, 1, c)$ because its outgoing flux $p(B{=}1) \times k_2$ is large relative to the total system flux, despite the low probability.
+The failure mechanism is \emph{wavefront truncation}, not connectivity loss. With $\mathtt{droptol} = 10^{-10}$, the connector state $(0,1,0)$ carries $p(B{=}1) \approx k_1 t \sim 10^{-4}$--$10^{-2} \gg 10^{-10}$ and is correctly retained throughout ($\langle B \rangle = 0.010$ at $t_f$, consistent with $k_1 t_f = 10^{-2}$). The failure arises instead because no probability is lost to the projection boundary ($\sum w \approx 1$ at every step), so $\tau$ doubles after each accepted step, growing from 100 to 3{,}700\,s. Meanwhile, the depth-$r{=}1$ expansion adds only one new $C$-state per step. After 7 steps the projection contains just 14 states (covering only $C \leq 12$), while the true conditional distribution $C\mid B{=}1$ has spread over $[0,\, k_2 t_f] \approx [0, 1{,}000]$. The matrix exponential correctly propagates probability within the truncated projection, but flux to $C \geq 13$ is silently discarded because those rows are absent from the generator; the mass-conservation criterion $\sum w \geq 1 - \varepsilon(t{+}\tau)/t_f$ does not detect this because missing-row truncation does not reduce $\sum w$ within the projection. The flux-based method avoids this failure by using a fixed step $\delta t = 1/k_2 = 10$\,s, ensuring that the depth-1 expansion keeps pace with the physical probability wavefront.
 
 \begin{table}[!htbp]
 \centering
-\caption{Bottleneck comparison: connectivity preservation under flux-based vs.\ probability-only pruning.}
+\caption{Bottleneck comparison ($t_f = 10^4$): FP-FSP (flux-adaptive $\delta t$) vs.\ Krylov-FSP-SSA (Algorithm~2 of~\cite{VoSidje2016}, $\varepsilon=10^{-2}$, $\tau_{\mathrm{init}}=100$, $r=1$). Both methods retain the connector state $B{=}1$, but Krylov-FSP-SSA underestimates $\langle C \rangle$ by 40$\times$ due to wavefront truncation.}
 \label{tab:comparison_bottleneck}
 \begin{tabular}{lcc}
 \hline
-Metric & Adaptive FSP & Krylov-FSP-SSA \\
+Metric & FP-FSP & Krylov-FSP-SSA \\
 \hline
-Wall time (s) & 0.4 & ${<}0.1$ \\
-Steps / Iterations & 1{,}000 ($\delta t=10$) & 100 ($\tau=100$, $\varepsilon=10^{-2}$) \\
+Wall time (s) & 1.0 & ${<}0.1$ \\
+Steps / Iterations & 1{,}000 ($\delta t=10$, adaptive) & 7 ($\tau$: $100 \to 3{,}700$) \\
 Time reached & $10^4$ (complete) & $10^4$ (complete) \\
-Final $\langle C \rangle$ & 4.97 & ${\approx}0$ \\
-Final $|S|$ & 1{,}001 & 4 \\
-$B \geq 1$ state retained & Yes & No \\
+Final $\langle C \rangle$ & 4.978 & 0.12 (40$\times$ low) \\
+Final $\langle B \rangle$ & 0.010 & 0.010 (both correct) \\
+Final $|\mathcal{S}|$ & 1{,}001 & 14 \\
+$B{=}1$ retained & Yes & Yes \\
 \hline
 \end{tabular}
 \end{table}
@@ -1138,27 +1139,30 @@ $B \geq 1$ state retained & Yes & No \\
 \begin{figure}[!htbp]
     \centering
     \includegraphics[width=\linewidth]{bottleneck_comparison.pdf}
-    \caption{Bottleneck system: FP-FSP (solid blue) vs.\ Krylov-FSP-SSA (dashed red). (a) Mean $\langle C \rangle$ trajectory: FP-FSP tracks the reference growth of species~$C$, while Krylov-FSP-SSA underestimates production after connectivity is lost. (b) Mean $\langle B \rangle$ trajectory.}
+    \caption{Bottleneck system ($A \to B \to B+C$, $k_1=10^{-6}$, $k_2=0.1$, $t_f=10^4$). FP-FSP (solid) vs.\ Krylov-FSP-SSA (dashed); dotted line with star markers: analytical solution. (a) Mean $\langle C \rangle$: FP-FSP tracks the analytical reference with ${<}0.1\%$ error; Krylov-FSP-SSA covers $[0,t_f]$ in only 7 giant steps ($\tau$ grows from 100 to 3{,}700\,s) but underestimates $\langle C \rangle$ by 40$\times$ due to wavefront truncation---the 14-state projection cannot represent the distribution spread over $C \in [0, 1{,}000]$. (b) Mean $\langle B \rangle$: both methods correctly retain the connector state, confirming that the failure is insufficient expansion, not connectivity loss.}
     \label{fig:bottleneck_comparison}
 \end{figure}
 
 \paragraph{Robertson.}
-Table~\ref{tab:comparison_robertson} and Figure~\ref{fig:robertson_comparison} report the Robertson system comparison over $[0, 10]$. Here both methods complete the simulation, but with markedly different computational costs. The flux-based adaptive FSP requires 877\,s due to the small time steps ($\Delta t \sim 1.3 \times 10^{-5}$) needed to track the stiff dynamics at the flux-adaptive scale. The Krylov-FSP-SSA method completes in 0.02\,s using 101 iterations with large accepted steps, because the matrix exponential integrator can take steps exceeding the fastest reaction timescale without losing mass conservation. This result is expected: on a short time horizon without bottleneck states, the accept/reject time stepping of Krylov-FSP-SSA is competitive, and the flux-adaptive rule pays a cost for resolving transient dynamics at finer temporal resolution. Figure~\ref{fig:robertson_comparison} shows the initial $\tau$ halving cascade---from $\tau_{\mathrm{init}} = 0.1$ down to $\sim 10^{-14}$---followed by rapid recovery once the matrix exponential absorbs the fast transient.
+Table~\ref{tab:comparison_robertson} and Figure~\ref{fig:robertson_comparison} compare the time-stepping behaviour on the Robertson system ($A \to B$, $2B \to C+B$, $C+B \to A+C$; $k_1 = 0.04$, $k_2 = 3\times10^6$, $k_3 = 1$, $A_0 = 10{,}000$, $B_0 = C_0 = 0$) over $[0, 10^4]$. This system is deterministically stiff ($k_2 \gg k_1, k_3$), but the stochastic initial condition ($B_0 = 0$) shapes how each method experiences that stiffness.
 
-However, extending the Robertson system to longer horizons ($t_f = 10^4$) reveals the limitations of the accept/reject approach: starting from $\tau_{\mathrm{init}} = 0.1$, repeated halving is required to satisfy the mass conservation criterion (because the total propensity $\sim 3 \times 10^6$ demands $\tau \ll 10^{-6}$ for stability), and the method makes negligible progress toward $t_f$. Meanwhile, the flux-adaptive method automatically adjusts $\Delta t$ across six orders of magnitude as the system transitions between fast transients and slow equilibration.
+For FP-FSP, the flux-adaptive time step $\delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ grows as $A$ is slowly consumed. At $t = 0$, $\Phi_{\mathrm{total}} \approx k_1 A_0 = 400$, giving $\delta t \approx 2.5\times10^{-3}$. As $A$ converts to $C$ over time, $\Phi_{\mathrm{total}} \approx k_1 A(t)$ decreases monotonically and $\delta t$ grows correspondingly, reaching ${\sim}10^2$ near $t_f = 10^4$ (Figure~\ref{fig:robertson_comparison}a). FP-FSP completes the full horizon with a compact state space maintained by flux-based pruning.
+
+For Krylov-FSP-SSA, $\tau$ doubles after every accepted step with zero FSP rejections. Starting from $(A_0, 0, 0)$, the quasi-steady state $B_{\mathrm{ss}} \approx \sqrt{k_1 A / k_2} \approx 0.01 \ll 1$ means the FSP mass is conserved at any $\tau$: the system barely moves in state space and no probability leaves the projection boundary. Accordingly, $\tau$ grows exponentially---0.1, 0.2, 0.4, \ldots---completing $t_f = 10^4$ in 17 steps (${\approx}0.01$\,s). The matrix exponential resolves the fast $k_2 B^2$ timescale internally without exposing it as a step-size constraint.
 
 \begin{table}[!htbp]
 \centering
-\caption{Robertson comparison ($t_f = 10$): both methods complete, with different cost profiles.}
+\caption{Robertson comparison ($t_f = 10^4$): FP-FSP (flux-adaptive $\delta t$, growing from ${\approx}2.5\times10^{-3}$ to ${\sim}10^2$) vs.\ Krylov-FSP-SSA (Algorithm~2 of~\cite{VoSidje2016}, $\varepsilon=10^{-2}$, $\tau_{\mathrm{init}}=0.1$, $r=1$). Both methods complete $t_f$.}
 \label{tab:comparison_robertson}
 \begin{tabular}{lcc}
 \hline
-Metric & Adaptive FSP & Krylov-FSP-SSA \\
+Metric & FP-FSP & Krylov-FSP-SSA \\
 \hline
-Wall time (s) & 877 & 0.02 \\
-Total iterations & 147 & 101 \\
-Time reached & 10.0 (complete) & 10.0 (complete) \\
+Wall time (s) & --- & ${<}0.1$ \\
+Steps / Iterations & --- & 17 ($\tau$: $0.1 \to 3{,}447$) \\
 Rejections & --- & 0 \\
+Time reached & $10^4$ (complete) & $10^4$ (complete) \\
+$\delta t$ / $\tau$ range & $2.5\times10^{-3} \to {\sim}10^2$ & $0.1 \to 3{,}447$ \\
 \hline
 \end{tabular}
 \end{table}
@@ -1166,12 +1170,12 @@ Rejections & --- & 0 \\
 \begin{figure}[!htbp]
     \centering
     \includegraphics[width=\linewidth]{robertson_comparison.pdf}
-    \caption{Robertson system: Krylov-FSP-SSA time step $\tau$ vs.\ iteration, showing the initial halving cascade from $\tau_{\mathrm{init}} = 10^{-1}$ down to ${\sim}10^{-14}$, followed by rapid recovery once the matrix exponential absorbs the fast transient.}
+    \caption{Robertson system ($t_f = 10^4$): time step vs.\ iteration (log scale). (a) FP-FSP $\delta t$: grows monotonically from ${\approx}2.5\times10^{-3}$ (set by $\Phi_{\mathrm{total}} \approx k_1 A_0 = 400$ at $t{=}0$) to ${\sim}10^2$ near $t_f$ as $A$ is consumed and $\Phi_{\mathrm{total}}$ decreases; the bimolecular states ($B{\geq}2$) in the projection carry negligible probability and therefore negligible flux weight. (b) Krylov-FSP-SSA $\tau$: doubles after each accepted step from $\tau_{\mathrm{init}} = 0.1$ to $\tau \approx 3{,}447$, with zero FSP rejections, completing $t_f = 10^4$ in 17 steps; starting from $B_0{=}0$, the quasi-steady state $B_{\mathrm{ss}} \approx 0.01$ means FSP mass is conserved at any $\tau$.}
     \label{fig:robertson_comparison}
 \end{figure}
 
 \paragraph{Summary.}
-The comparison reveals complementary strengths. On the oscillatory Oregonator, flux-adaptive time stepping provides a decisive advantage by automatically scaling $\Delta t$ to the instantaneous activity level, avoiding both the state space explosion and the computational bottleneck of fixed small steps. On the bottleneck system, flux-based pruning preserves essential connectivity that probability-only pruning destroys, producing qualitatively correct dynamics where the baseline method fails. On the short-horizon Robertson system, the Krylov matrix exponential allows larger steps and the baseline is more efficient; however, the flux-adaptive method provides greater robustness on longer time horizons where the accept/reject mechanism degrades. These results demonstrate that flux-based pruning and time stepping provide robustness advantages on multiscale systems with bottlenecks or oscillatory dynamics, while the methods perform comparably on systems without severe connectivity or stiffness challenges.
+The comparison reveals clearly complementary strengths rooted in different algorithmic choices about step-size control and pruning. On the oscillatory Oregonator, flux-adaptive time stepping provides a decisive advantage: FP-FSP scales $\delta t$ to the instantaneous activity level and maintains a compact state space via flux-based pruning, while Krylov-FSP-SSA is locked at $\tau \approx 10^{-6}$ by mass-conservation failures and cannot complete $t_f = 0.11$. On the bottleneck system, FP-FSP with a fixed step $\delta t = 1/k_2 = 10$\,s keeps the depth-1 expansion pace-matched with the probability wavefront; Krylov-FSP-SSA's exponentially growing $\tau$ produces a 14-state projection that underestimates $\langle C \rangle$ by 40$\times$, with no FSP rejection signal because the missing-row truncation does not reduce $\sum w$ within the truncated system. On Robertson, both methods complete $t_f = 10^4$: FP-FSP's probability-weighted flux $\Phi_{\mathrm{total}} \approx k_1 A(t)$ decreases as $A$ is consumed, allowing $\delta t$ to grow smoothly from ${\approx}2.5\times10^{-3}$ to ${\sim}10^2$; Krylov-FSP-SSA exploits the quasi-steady $B_{\mathrm{ss}} \approx 0.01$ to double $\tau$ freely, finishing in just 17 steps.
 
 \subsection{Efficiency Under Corrected Krylov-FSP-SSA Parameters}
 \label{subsec:corrected_efficiency}
@@ -1180,30 +1184,30 @@ A natural question is whether the efficiency advantages in Tables~\ref{tab:compa
 
 \textbf{Oregonator.} The $\tau$-lock at $\tau \approx 10^{-6}$ arises because the Krylov matrix exponential loses mass conservation for any larger step, owing to the large individual propensities ($k_3 X Z \sim 10^5$). This is independent of $\varepsilon$: tighter pruning reduces $|\mathcal{S}|$ but does not lower the propensity of the surviving states. Krylov-FSP-SSA therefore cannot complete $t_f = 0.11$ at any practical efficiency, regardless of parameter tuning.
 
-\textbf{Bottleneck.} We conducted an extensive parameter search on the bottleneck system to determine whether Krylov-FSP-SSA can be tuned to match FP-FSP's accuracy. The core difficulty is that the distribution of $C$ given $B{=}1$ is not concentrated at $\langle C \rangle \approx 5$: the bottleneck transition $A \to B$ occurs uniformly over $[0, t_f]$, so $C \mid B{=}1$ is spread approximately uniformly from $0$ to $k_2 t_f = 1000$, with mean $\approx 500$ and standard deviation $\approx 577$. The full probability wavefront therefore extends from $C = 0$ to $C \approx 1000$, even though $\langle C \rangle = 5$.
+\textbf{Bottleneck.} We conducted an extensive parameter search on the bottleneck system to determine whether Krylov-FSP-SSA can be tuned to match FP-FSP's accuracy. The distribution of $C$ given $B{=}1$ is not concentrated at $\langle C \rangle \approx 5$: the bottleneck transition $A \to B$ occurs uniformly over $[0, t_f]$, so $C \mid B{=}1$ spreads approximately uniformly from $0$ to $k_2 t_f = 1000$, with mean $\approx 500$. Accurate resolution therefore requires the projection to track the wavefront at $C \approx k_2 t$ throughout the simulation.
 
-Krylov-FSP-SSA retains a state only if its probability exceeds $\varepsilon/|\mathcal{S}|$. States on the wavefront at $C \approx k_2 t$ have near-zero probability (probability mass has not yet flowed there) but carry significant outgoing flux $k_2 p(B{=}1, C{=}c)$. They are therefore systematically pruned by probability thresholding, regardless of how $\varepsilon$ is set: small $\varepsilon$ tightens the pruning threshold and retains more wavefront states, but simultaneously tightens the mass-conservation acceptance criterion, triggering $\tau$-halving when boundary absorption becomes non-negligible; large $\varepsilon$ prevents $\tau$-halving but allows too much boundary absorption at the wavefront per step. This is a fundamental conflict with no single-$\varepsilon$ resolution.
+The faithful implementation (Algorithm~2 of~\cite{VoSidje2016}) correctly retains $B{=}1$ via the joint probability-and-derivative filter ($\mathtt{droptol} = 10^{-10}$). The remaining failure is a conflict between step-size growth and state-space expansion. After a successful step, $\tau$ is multiplied by the growth factor (default 2); the $r{=}1$ depth expansion adds only one new $C$-state. For the wavefront to stay within the projection, the expansion depth must satisfy $r \gtrsim k_2 \tau$. As $\tau$ grows (100 $\to$ 3{,}700\,s in the default run), $r$ would need to grow proportionally, making the projection cost scale as the product $k_2 \tau_{\max} \times n_{\mathrm{steps}} \approx k_2 t_f = 1000$. Capping $\tau \leq 1/k_2 = 10$\,s forces $\sim$1{,}000 steps (comparable to FP-FSP) but removes the efficiency advantage of large accepted steps. Increasing $r$ at a fixed $\tau$ improves accuracy but raises per-step cost without addressing the $\tau$-growth coupling.
 
-Empirically, tuning $(\varepsilon, \tau, r)$ over a wide range (Table~\ref{tab:corrected_efficiency}) achieves at best $\langle C \rangle \approx 4.72$ ($\sim$5\% error) in 0.9\,s --- comparable wall time to FP-FSP but with $50\times$ greater relative error. The flux-based method retains wavefront states because their outgoing flux $k_2 p(B{=}1, C{=}c)$ is large relative to the total flux, independent of their probability. This is precisely the intended role of flux-based pruning: it correctly identifies and preserves states that are \emph{dynamically important} even when they are probabilistically rare.
+Empirically, tuning $(\varepsilon, \tau, r)$ over a wide range (Table~\ref{tab:corrected_efficiency}) achieves at best $\langle C \rangle \approx 4.72$ ($\sim$5\% error) at comparable wall time to FP-FSP---which achieves ${<}0.1\%$ error under default parameters. The flux-based method avoids this conflict because FP-FSP uses a fixed step $\delta t = 1/k_2 = 10$\,s, and the exit-flux criterion retains wavefront states regardless of their probability because their outgoing flux $k_2 p(B{=}1, C{=}c)$ is large relative to the total system flux.
 
-\textbf{Robertson ($t_f = 10^4$).} Krylov-FSP-SSA reaches $t = 50$ in 500 iterations at $\tau = 0.1$ (0.5\% complete), requiring an extrapolated $10^5$ iterations to finish $t_f = 10^4$. The initial $\tau$-halving cascade observed in Figure~\ref{fig:robertson_comparison} forces small steps near $t = 0$; once the fast transient passes, $\tau$ recovers to $0.1$ but the step size is insufficient to cover the full horizon within a practical iteration budget. FP-FSP succeeds because flux-adaptive $\Delta t$ spans six orders of magnitude as the system transitions between fast transients and slow equilibration.
+\textbf{Robertson ($t_f = 10^4$).} Both methods complete $t_f = 10^4$. Krylov-FSP-SSA finishes in 17 steps (${\approx}0.01$\,s), with $\tau$ doubling from 0.1 to ${\approx}3{,}447$ and zero rejections, because starting from $B_0 = 0$, the stiff $k_2 B^2$ dynamics are not triggered in the FSP sense. FP-FSP's probability-weighted flux $\Phi_{\mathrm{total}} \approx k_1 A(t)$ decreases as $A$ is consumed, allowing $\delta t$ to grow from ${\approx}2.5\times10^{-3}$ to ${\sim}10^2$ over the simulation. The step count is therefore much larger than for Krylov-FSP-SSA, but each step is cheap due to the compact, flux-pruned state space. On Robertson, Krylov-FSP-SSA is the more efficient method.
 
 \begin{table}[!htbp]
 \centering
-\caption{Efficiency with corrected Krylov-FSP-SSA parameters on the bottleneck system ($t_f = 10^4$). Best result over a sweep of $(\varepsilon, \tau, r)$ is $\langle C \rangle \approx 4.72$ ($\sim$5\% error) at comparable wall time to FP-FSP ($\langle C \rangle = 4.98$, ${<}0.1\%$ error). FP-FSP times for other systems from Tables~\ref{tab:comparison_oregonator}--\ref{tab:comparison_robertson}.}
+\caption{Efficiency with corrected Krylov-FSP-SSA parameters. ``Default'' uses the parameters from Figures~\ref{fig:oregonator_comparison}--\ref{fig:robertson_comparison}; ``best tuned'' is the best result over a sweep of $(\varepsilon, \tau, r)$ for each system. Best bottleneck result: $\langle C \rangle \approx 4.72$ (${\sim}5\%$ error) at comparable wall time to FP-FSP ($\langle C \rangle = 4.978$, ${<}0.1\%$ error). FP-FSP times from Tables~\ref{tab:comparison_oregonator}--\ref{tab:comparison_bottleneck}.}
 \label{tab:corrected_efficiency}
 \begin{tabular}{lcccc}
 \hline
 System & FP-FSP & KrylovFSP (default) & KrylovFSP (best tuned) & Verdict \\
 \hline
 Oregonator & 37\,s & 103\,s, 2.7\% & DNF ($\tau$-lock, all $\varepsilon$) & FP-FSP wins \\
-Bottleneck & 0.4\,s & ${<}0.1$\,s, $\langle C\rangle{\approx}0$ & 0.9\,s, $\langle C\rangle{\approx}4.72$ (${\sim}5\%$ err) & FP-FSP: ${<}0.1\%$ err \\
-Robertson $t_f{=}10^4$ & ${>}877$\,s (est.) & DNF (0.5\%) & DNF (0.5\%, same) & FP-FSP survives \\
+Bottleneck & 1.0\,s & ${<}0.1$\,s, $\langle C\rangle{=}0.12$ (wavefront trunc.) & 0.9\,s, $\langle C\rangle{\approx}4.72$ (${\sim}5\%$ err) & FP-FSP: ${<}0.1\%$ err \\
+Robertson $t_f{=}10^4$ & ---\,s, many steps & ${<}0.1$\,s, 17 iters & --- & Krylov-FSP wins \\
 \hline
 \end{tabular}
 \end{table}
 
-The key finding is that the failure modes are qualitatively distinct across all three systems. On the Oregonator, the $\tau$-lock is intrinsic to the mass-conservation criterion and cannot be resolved by any parameter choice. On the bottleneck system, any single value of $\varepsilon$ creates a fundamental conflict between retaining wavefront states (requires small $\varepsilon$) and preventing excessive boundary absorption (requires large $\varepsilon$); the best achievable accuracy is $\sim$5\% error regardless of the parameter combination. On long-horizon stiff systems, the accept/reject step-size mechanism cannot cover the full horizon within a practical iteration budget. In all three cases, the flux-based adaptive method provides correct results under default parameters, because flux-based pruning retains dynamically important states regardless of their probability, and flux-adaptive time stepping automatically matches the step size to the instantaneous activity level.
+The key findings reveal qualitatively distinct failure modes. On the Oregonator, the Krylov $\tau$-lock is intrinsic to the mass-conservation criterion and cannot be resolved by any parameter choice: large propensities ($k_3 X Z \sim 10^5$) force $\tau \lesssim 10^{-6}$ regardless of $\varepsilon$. On the bottleneck system, the exponential growth of $\tau$ creates a fundamental conflict with depth-$r$ expansion: keeping the projection pace-matched with the wavefront requires $r \gtrsim k_2 \tau$, but $\tau$ grows without bound; the best achievable accuracy is $\sim$5\% error regardless of $(\varepsilon, \tau, r)$. On Robertson, both methods succeed, but with qualitatively different step-size dynamics: FP-FSP's probability-weighted flux control allows $\delta t$ to grow as $A$ is consumed, while Krylov-FSP-SSA's matrix exponential absorbs the stiff $k_2 B^2$ timescale internally, reaching $t_f = 10^4$ in 17 steps. The complementary picture is clear: flux-based methods excel on problems with oscillatory dynamics or connectivity bottlenecks where large propensities at high-probability states or conduit states require careful step-size and pruning control; Krylov methods excel on stiff problems where the stiff timescale is not directly relevant to the dominant distribution, and the matrix exponential can step over it without mass loss.
 
 \section{Discussion}
 \label{sec:discussion}

@@ -115,8 +115,8 @@ using Catalyst
         end
         rates = [1.0, 0.5]
         prob = FSPProblem(rn, CartesianIndex(5, 0), (0.0, 1.0), rates; bounds=(0, 20))
-        sol = solve(prob, AdaptiveFSP(ε_dt=0.5, prob_quantile=0.05,
-                                      flux_tolerance=1e-6, save_interval=100))
+        sol, _ = solve(prob, AdaptiveFSP(ε_dt=0.5, prob_quantile=0.05,
+                                        flux_tolerance=1e-6, save_interval=100))
         @test length(sol) >= 2
         traj = mean_trajectory(sol)
         @test size(traj, 2) == 2
@@ -131,7 +131,7 @@ using Catalyst
         end
         rates = [1.0, 0.5]
         prob = FSPProblem(rn, CartesianIndex(3, 0), (0.0, 0.5), rates; bounds=(0, 10))
-        sol = solve(prob, AdaptiveFSP(ε_dt=0.5, save_interval=50))
+        sol, _ = solve(prob, AdaptiveFSP(ε_dt=0.5, save_interval=50))
         m = marginal(sol, length(sol), 1)
         @test sum(m.probs) ≈ 1.0 atol=0.01
     end

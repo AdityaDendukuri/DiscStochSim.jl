@@ -65,7 +65,7 @@ function run_oregonator_comparison()
     println("\nRunning FP-FSP...")
     Random.seed!(1)
     t_afsp_start = time()
-    sol_afsp = solve(prob, AdaptiveFSP(
+    sol_afsp, diag_afsp = solve(prob, AdaptiveFSP(
         ε_dt=1.0, prob_quantile=0.1, flux_tolerance=1.0,
         expansion_depth=1, save_interval=save_interval_afsp,
     ))
@@ -78,7 +78,7 @@ function run_oregonator_comparison()
     Random.seed!(1)
     t_kfsp_start = time()
     sol_kfsp, diag_kfsp = solve(prob, KrylovFSP(
-        ε=1e-2, τ_init=1e-6, ℓ=5, r=1, save_interval=1000, max_iter=3000,
+        ε=1e-2, τ_init=1e-6, r=1, save_interval=1000, max_iter=3000,
     ))
     t_kfsp = time() - t_kfsp_start
     println("  KrylovFSP: $(diag_kfsp.total_iters) iters, $(diag_kfsp.reject_count) rejections, " *
@@ -91,24 +91,26 @@ function run_oregonator_comparison()
     # ── Panel (a): |S| vs simulated time ──────────────────────────────────
     p1 = plot(title="(a) State space size", xlabel="Simulated time", ylabel="|S|")
     plot!(p1, sol_afsp.t, sol_afsp.state_space_sizes,
-          label="FP-FSP", color=:blue, linestyle=:solid)
+          label="FP-FSP", color=:black, linestyle=:solid, linewidth=2)
     if !isempty(diag_kfsp.time_log)
         plot!(p1, diag_kfsp.time_log, diag_kfsp.size_log,
-              label="Krylov-FSP-SSA", color=:red, linestyle=:dash)
+              label="Krylov-FSP-SSA", color=:black, linestyle=:dash, linewidth=2)
     end
 
     # ── Panel (b): Time step vs simulated time (log scale) ────────────────
-    # FP-FSP dt: average per-step dt estimated from snapshot intervals
+    # FP-FSP dt: per-step values from diagnostics, thinned for plot clarity
     p2 = plot(title="(b) Time step", xlabel="Simulated time",
               ylabel="dt / τ", yscale=:log10)
-    if length(sol_afsp.t) > 1
-        dt_afsp = diff(sol_afsp.t) ./ save_interval_afsp
-        plot!(p2, sol_afsp.t[2:end], dt_afsp,
-              label="FP-FSP dt", color=:blue, linestyle=:solid)
+    if !isempty(diag_afsp.dt_log)
+        # Thin to ≤2000 points so PDF isn't huge
+        stride = max(1, length(diag_afsp.dt_log) ÷ 2000)
+        idx = 1:stride:length(diag_afsp.dt_log)
+        plot!(p2, diag_afsp.t_log[idx], diag_afsp.dt_log[idx],
+              label="FP-FSP dt", color=:black, linestyle=:solid, linewidth=1.5)
     end
     if !isempty(diag_kfsp.τ_log)
         plot!(p2, diag_kfsp.time_log, diag_kfsp.τ_log,
-              label="Krylov-FSP-SSA τ", color=:red, linestyle=:dash)
+              label="Krylov-FSP-SSA τ", color=:black, linestyle=:dash, linewidth=1.5)
     end
 
     fig = plot(p1, p2; layout=(1, 2), size=(900, 350), margin=5Plots.mm)
@@ -189,13 +191,16 @@ function run_bottleneck_comparison()
     # Analytical E[C](t) for reference
     E_C_exact = t -> (k2/k1) * (k1*t - 1 + exp(-k1*t))
 
-    # ── FP-FSP: δt=10, depth=1, flux pruning ─────────────────────────────
-    # Flux protection retains the low-probability B=1 connector state.
-    println("\nRunning FP-FSP (δt=10, tf=$tf)...")
+    # ── FP-FSP: fixed δt=10s step (must use fixed step, not adaptive, because
+    # the adaptive dt = ε_dt/Φ_total = 1/1e-6 = 1e6 >> tf at t=0 when all
+    # probability sits at A=1, B=0 with propensity k₁=10⁻⁶).  Fixed δt
+    # allows the wavefront to discover C states incrementally.
+    println("\nRunning FP-FSP (fixed δt=10, tf=$tf)...")
     t_afsp_start = time()
-    sol_afsp  = _fpfsp_fixed_step(prob; δt=10.0, expand_depth=1,
-                                   prob_quantile=0.9, flux_tolerance=1e-6,
-                                   save_interval=100)
+    sol_afsp = _fpfsp_fixed_step(prob;
+        δt=10.0, expand_depth=1, prob_quantile=0.9,
+        flux_tolerance=1e-6, save_interval=100,
+    )
     t_afsp    = time() - t_afsp_start
     traj_afsp = mean_trajectory(sol_afsp)
     println("  FP-FSP: $(length(sol_afsp)) snapshots, $(round(t_afsp; digits=2))s, " *
@@ -203,42 +208,53 @@ function run_bottleneck_comparison()
     println("  FP-FSP final: ⟨C⟩=$(round(traj_afsp[end,3]; sigdigits=4)), " *
             "analytical=$(round(E_C_exact(tf); sigdigits=4))")
 
-    # ── KrylovFSP: B=1 pruned → ⟨C⟩=0 throughout ────────────────────────
-    # With ε=0.01 and |S|≈4, threshold≈2.5e-3 > p(B=1)≈k1·τ=1e-4.
-    # B=1 is pruned each iteration, severing the C-production pathway.
-    println("\nRunning KrylovFSP (ε=0.01, τ_init=100, max_iter=100)...")
+    # ── KrylovFSP: B=1 retained (droptol=1e-10 >> p(B=1)≈1e-4) but ⟨C⟩ wrong ──
+    # Failure: k₂τ=10 states/step but r=1 adds only 1 → wavefront truncated.
+    # Mass-conservation criterion misses this (truncation via missing rows, not lost mass).
+    println("\nRunning KrylovFSP (ε=0.01, τ_init=100, r=1, max_iter=100)...")
     Random.seed!(1)
     t_kfsp_start = time()
     sol_kfsp, diag_kfsp = solve(prob, KrylovFSP(
-        ε=0.01, τ_init=100.0, ℓ=5, r=1, save_interval=10, max_iter=100,
+        ε=0.01, τ_init=100.0, r=1, save_interval=1, max_iter=100,
     ))
     t_kfsp    = time() - t_kfsp_start
     traj_kfsp = mean_trajectory(sol_kfsp)
     println("  KrylovFSP: $(diag_kfsp.total_iters) iters, $(round(t_kfsp; digits=1))s, " *
             "t_reached=$(round(sol_kfsp.t[end]; sigdigits=3))")
     if size(traj_kfsp, 1) > 0
-        println("  KrylovFSP final: ⟨C⟩=$(round(traj_kfsp[end,3]; sigdigits=4))")
+        println("  KrylovFSP final: ⟨C⟩=$(round(traj_kfsp[end,3]; sigdigits=4)), " *
+                "⟨B⟩=$(round(traj_kfsp[end,2]; sigdigits=4))")
     end
 
-    # ── Panel (a): Mean ⟨C⟩ with analytical reference ────────────────────
-    t_ref = range(0.0, tf; length=300)
-    p1 = plot(title="(a) Mean ⟨C⟩", xlabel="Time", ylabel="⟨C⟩")
+    # ── Panel (a): Mean ⟨C⟩  (SIAM B&W style, stars for analytical) ──────
+    t_ref   = range(0.0, tf; length=400)
+    t_stars = range(0.0, tf; length=10)   # sparse star markers
+    p1 = plot(title="(a) Mean \u27E8C\u27E9",
+              xlabel="Time", ylabel="\u27E8C\u27E9")
+    # Analytical: thin dotted line + large star markers so it shows above FP-FSP
     plot!(p1, t_ref, E_C_exact.(t_ref),
-          label="Analytical", color=:black, linestyle=:dot)
+          label="", color=:black, linestyle=:dot, linewidth=1.2)
+    scatter!(p1, t_stars, E_C_exact.(t_stars),
+             label="Analytical", color=:black,
+             markershape=:star5, markersize=9,
+             markerstrokewidth=0.8, markerstrokecolor=:black)
+    # FP-FSP: solid black
     plot!(p1, sol_afsp.t, traj_afsp[:, 3],
-          label="FP-FSP", color=:blue, linestyle=:solid)
+          label="FP-FSP", color=:black, linestyle=:solid, linewidth=2)
+    # Krylov: dashed black
     if length(sol_kfsp.t) > 1
         plot!(p1, sol_kfsp.t, traj_kfsp[:, 3],
-              label="Krylov-FSP-SSA", color=:red, linestyle=:dash)
+              label="Krylov-FSP-SSA", color=:black, linestyle=:dash, linewidth=2)
     end
 
-    # ── Panel (b): Mean ⟨B⟩ — shows connectivity preservation ───────────
-    p2 = plot(title="(b) Mean ⟨B⟩", xlabel="Time", ylabel="⟨B⟩")
+    # ── Panel (b): Mean ⟨B⟩ — both methods agree (connector retained) ────
+    p2 = plot(title="(b) Mean \u27E8B\u27E9",
+              xlabel="Time", ylabel="\u27E8B\u27E9")
     plot!(p2, sol_afsp.t, traj_afsp[:, 2],
-          label="FP-FSP", color=:blue, linestyle=:solid)
+          label="FP-FSP", color=:black, linestyle=:solid, linewidth=2)
     if length(sol_kfsp.t) > 1
         plot!(p2, sol_kfsp.t, traj_kfsp[:, 2],
-              label="Krylov-FSP-SSA", color=:red, linestyle=:dash)
+              label="Krylov-FSP-SSA", color=:black, linestyle=:dash, linewidth=2)
     end
 
     fig = plot(p1, p2; layout=(1, 2), size=(900, 350), margin=5Plots.mm)
@@ -254,7 +270,7 @@ end
 # ============================================================================
 function run_robertson_comparison()
     println("\n" * "=" ^ 60)
-    println("FIGURE 3: Robertson — τ Halving Cascade")
+    println("FIGURE 3: Robertson — Time Step Comparison")
     println("=" ^ 60)
 
     rn = @reaction_network begin
@@ -265,38 +281,72 @@ function run_robertson_comparison()
 
     rates  = [0.04, 3e6, 1.0]
     bounds = (0, 100_001)
-    tf     = 10.0
+    tf     = 1e4
     prob   = FSPProblem(rn, CartesianIndex(10_000, 0, 0), (0.0, tf), rates;
                         bounds=bounds)
 
-    # KrylovFSP only: shows τ cascade from 0.1 → ~1e-14 then recovery (~0.3 s)
-    println("\nRunning KrylovFSP (max_iter=500, tf=$tf)...")
+    # FP-FSP: flux-adaptive dt, runs to completion.
+    # dt = ε_dt / Φ_total where Φ_total ≈ k₁·A at t=0 gives dt₀ ≈ 1/400 ≈ 0.0025.
+    # As A is consumed (A → C via quasi-steady B), Φ_total decreases and dt
+    # grows monotonically, reaching ~10² near tf=1e4.
+    println("\nRunning FP-FSP (full tf=$tf)...")
+    t_afsp_start = time()
+    sol_afsp, diag_afsp = solve(prob, AdaptiveFSP(
+        ε_dt=1.0, prob_quantile=0.1, flux_tolerance=1e-6,
+        expansion_depth=1, save_interval=500,
+    ))
+    t_afsp = time() - t_afsp_start
+    println("  FP-FSP: $(diag_afsp.total_iters) iters, $(round(t_afsp; digits=1))s, " *
+            "t_reached=$(round(sol_afsp.t[end]; sigdigits=4)) / $tf")
+    if !isempty(diag_afsp.dt_log)
+        println("  dt range: $(minimum(diag_afsp.dt_log)) to $(maximum(diag_afsp.dt_log))")
+    end
+
+    # KrylovFSP: τ doubles each accepted step (0 rejections starting from B=0).
+    # τ grows from 0.1 to ~3000, covering tf=1e4 in just ~17 steps.
+    println("\nRunning KrylovFSP (max_iter=100, tf=$tf)...")
     Random.seed!(1)
     t_kfsp_start = time()
     sol_kfsp, diag_kfsp = solve(prob, KrylovFSP(
-        ε=1e-2, τ_init=0.1, ℓ=5, r=1, save_interval=50, max_iter=500,
+        ε=1e-2, τ_init=0.1, r=1, save_interval=5, max_iter=100,
     ))
     t_kfsp = time() - t_kfsp_start
     println("  KrylovFSP: $(diag_kfsp.total_iters) iters, " *
-            "$(diag_kfsp.reject_count) rejections, $(round(t_kfsp; digits=2))s")
+            "$(diag_kfsp.reject_count) rejections, $(round(t_kfsp; digits=2))s, " *
+            "t_reached=$(round(sol_kfsp.t[end]; sigdigits=4))")
     if !isempty(diag_kfsp.τ_log)
         println("  τ range: $(minimum(diag_kfsp.τ_log)) to $(maximum(diag_kfsp.τ_log))")
     end
 
-    # ── Single panel: τ vs iteration (log scale) ──────────────────────────
-    p1 = plot(title="τ vs. iteration", xlabel="Iteration",
-              ylabel="τ", yscale=:log10)
-    if !isempty(diag_kfsp.τ_log)
-        plot!(p1, 1:length(diag_kfsp.τ_log), diag_kfsp.τ_log,
-              label="Krylov-FSP-SSA τ", color=:red, linestyle=:dash)
+    # ── Panel (a): FP-FSP dt vs iteration ─────────────────────────────────
+    # dt grows monotonically as A is consumed (Φ_total = k₁·A decreases).
+    # Starts at ~0.0025 and grows to ~10² by tf=1e4.
+    p1 = plot(title="(a) FP-FSP time step", xlabel="Iteration",
+              ylabel="dt", yscale=:log10)
+    if !isempty(diag_afsp.dt_log)
+        stride = max(1, length(diag_afsp.dt_log) ÷ 2000)
+        idx = 1:stride:length(diag_afsp.dt_log)
+        plot!(p1, idx, diag_afsp.dt_log[idx],
+              label="FP-FSP dt", color=:black, linestyle=:solid, linewidth=1.5)
     end
 
-    fig = plot(p1; size=(500, 350), margin=5Plots.mm)
+    # ── Panel (b): KrylovFSP τ vs iteration ───────────────────────────────
+    # τ doubles monotonically each accepted step (0 rejections): starting from
+    # B₀=0, FSP mass is conserved at any τ. Covers tf=1e4 in ~17 steps with
+    # τ reaching ~3000.
+    p2 = plot(title="(b) Krylov-FSP-SSA time step", xlabel="Iteration",
+              ylabel="\u03C4", yscale=:log10)
+    if !isempty(diag_kfsp.τ_log)
+        plot!(p2, 1:length(diag_kfsp.τ_log), diag_kfsp.τ_log,
+              label="Krylov-FSP-SSA \u03C4", color=:black, linestyle=:dash, linewidth=1.5)
+    end
+
+    fig = plot(p1, p2; layout=(1, 2), size=(900, 350), margin=5Plots.mm)
     savefig(fig, joinpath(OUTDIR, "robertson_comparison.png"))
     savefig(fig, joinpath(OUTDIR, "robertson_comparison.pdf"))
     println("Saved robertson_comparison.{png,pdf}")
 
-    return (sol_kfsp=sol_kfsp, diag_kfsp=diag_kfsp)
+    return (sol_afsp=sol_afsp, diag_afsp=diag_afsp, sol_kfsp=sol_kfsp, diag_kfsp=diag_kfsp)
 end
 
 # ============================================================================
@@ -331,22 +381,23 @@ function run_corrected_krylov_comparison()
     prob_b   = FSPProblem(rn_b, u0_b, (0.0, tf_b), rates_b; bounds=(0, 1500))
     E_C_b    = t -> (k2_b/k1_b) * (k1_b*t - 1 + exp(-k1_b*t))
 
-    # FP-FSP reference (same as Figure 2)
+    # FP-FSP reference (same as Figure 2 — must use fixed step)
     t0 = time()
-    sol_afsp_b = _fpfsp_fixed_step(prob_b; δt=10.0, expand_depth=1,
-                                    prob_quantile=0.9, flux_tolerance=1e-6,
-                                    save_interval=100)
+    sol_afsp_b = _fpfsp_fixed_step(prob_b;
+        δt=10.0, expand_depth=1, prob_quantile=0.9,
+        flux_tolerance=1e-6, save_interval=100,
+    )
     t_afsp_b   = time() - t0
     traj_afsp_b = mean_trajectory(sol_afsp_b)
     C_afsp_b   = round(traj_afsp_b[end, 3]; sigdigits=4)
-    println("  FP-FSP (ε_flux=1e-6, δt=10): $(round(t_afsp_b; digits=2))s, " *
+    println("  FP-FSP (ε_flux=1e-6, adaptive dt): $(round(t_afsp_b; digits=2))s, " *
             "⟨C⟩=$C_afsp_b, |S|=$(maximum(sol_afsp_b.state_space_sizes))")
 
     # KrylovFSP corrected: ε=1e-4 lowers pruning threshold below p(B=1)
     Random.seed!(1)
     t0 = time()
     sol_kfsp_b, diag_kfsp_b = solve(prob_b, KrylovFSP(
-        ε=1e-4, τ_init=100.0, ℓ=5, r=1, save_interval=10, max_iter=500,
+        ε=1e-4, τ_init=100.0, r=1, save_interval=10, max_iter=500,
     ))
     t_kfsp_b    = time() - t0
     traj_kfsp_b = mean_trajectory(sol_kfsp_b)
@@ -369,7 +420,7 @@ function run_corrected_krylov_comparison()
     Random.seed!(1)
     t0 = time()
     sol_kfsp_b2, diag_kfsp_b2 = solve(prob_b, KrylovFSP(
-        ε=1e-5, τ_init=10.0, ℓ=5, r=3, save_interval=100, max_iter=2000,
+        ε=1e-5, τ_init=10.0, r=3, save_interval=100, max_iter=2000,
     ))
     t_kfsp_b2    = time() - t0
     traj_kfsp_b2 = mean_trajectory(sol_kfsp_b2)
@@ -398,7 +449,7 @@ function run_corrected_krylov_comparison()
     Random.seed!(1)
     t0 = time()
     sol_kfsp_r, diag_kfsp_r = solve(prob_r, KrylovFSP(
-        ε=1e-2, τ_init=0.1, ℓ=5, r=1, save_interval=50, max_iter=500,
+        ε=1e-2, τ_init=0.1, r=1, save_interval=50, max_iter=500,
     ))
     t_kfsp_r = time() - t0
     println("  KrylovFSP: $(diag_kfsp_r.total_iters) iters, $(round(t_kfsp_r; digits=2))s, " *
