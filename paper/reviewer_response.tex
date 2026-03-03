@@ -310,9 +310,9 @@ benchmark systems. Section~5.6 compares both methods under default parameters;
 Section~5.7 reports the best achievable performance of Krylov-FSP-SSA after extensive
 parameter tuning ($\varepsilon$, $\tau$, $r$). The results are:
 \begin{itemize}
-  \item \textbf{Oregonator}: FP-FSP completes $t_f = 0.11$ in 37\,s (max $|\mathcal{S}|{=}1{,}063$);
-        Krylov-FSP-SSA reaches only 2.7\% of the time horizon in 103\,s
-        (max $|\mathcal{S}|{=}13{,}299$). The $\tau$-lock at $\tau \approx 10^{-6}$ is
+  \item \textbf{Oregonator}: FP-FSP completes $t_f = 0.11$ in 33\,s (max $|\mathcal{S}|{=}1{,}003$);
+        Krylov-FSP-SSA reaches only 2.7\% of the time horizon in 74\,s
+        (max $|\mathcal{S}|{=}13{,}294$). The $\tau$-lock at $\tau \approx 10^{-6}$ is
         intrinsic to the mass-conservation criterion and cannot be removed by any
         choice of $\varepsilon$.
   \item \textbf{Bottleneck}: FP-FSP achieves $\langle C \rangle = 4.97$ ($<0.1\%$ error)
@@ -320,12 +320,23 @@ parameter tuning ($\varepsilon$, $\tau$, $r$). The results are:
         $\langle C \rangle \approx 4.72$ ($\sim$5\% error) at comparable wall time,
         because any single $\varepsilon$ creates a fundamental conflict between
         retaining wavefront states and preventing boundary absorption.
-  \item \textbf{Robertson ($t_f{=}10$)}: Krylov-FSP-SSA completes in 0.02\,s (101
-        iterations); FP-FSP requires 877\,s. On a short horizon without bottleneck
-        states the Krylov matrix exponential's large accepted steps are decisive.
-        On the extended horizon $t_f{=}10^4$, however, Krylov-FSP-SSA reaches only
-        $t{=}50$ in 500 iterations (0.5\% complete), while FP-FSP succeeds via
-        flux-adaptive $\Delta t$ spanning six orders of magnitude.
+  \item \textbf{Robertson ($t_f{=}10^4$)}: We corrected two aspects of the Krylov-FSP-SSA
+        implementation since the previous version of this response. \emph{(i) Generator
+        form.} Algorithm~2 of Vo \& Sidje (2016) requires an \emph{absorbing-form}
+        generator in which the diagonal of $A$ includes all outgoing propensities,
+        regardless of whether the destination is in the truncated set $\mathcal{S}$.
+        An earlier version used a closed-form (mass-conserving) generator, which
+        masked probability loss at the projection boundary and caused $\tau$ to double
+        freely. \emph{(ii) Robertson figure.} The previous figure showed
+        $\Delta t$ computed from snapshot-interval spacings; the revised figure shows
+        the actual per-step $\delta t$ and $\tau$ from the diagnostic logs.
+        With the correct absorbing-form generator, Krylov-FSP-SSA is $\tau$-locked
+        at ${\approx}10^{-3}$ by the stiff $k_2 = 3\times10^6$ propensity (via FSP
+        mass-loss violations and numerical overflow in the Krylov exponential at
+        $B{\geq}2$ states) and reaches only $t = 228$ (2.3\% of $t_f$) in 500
+        iterations (1.9\,s). FP-FSP completes $t_f = 10^4$ in 662\,472 steps
+        (1\,117\,s) with per-step $\delta t$ non-monotonic and peaking at
+        ${\approx}0.026$ during the equilibration phase.
 \end{itemize}
 For other methods (Optimal FSP, aggregation-based schemes), a full benchmark would
 require more substantial reimplementation effort; we leave that to future work.
@@ -509,16 +520,21 @@ important. In the revised manuscript we have:
 For the most closely related method, Krylov-FSP-SSA, we have added a direct
 head-to-head comparison in Sections~5.6 and~5.7. Section~5.6 compares both methods
 on the three benchmark systems (Oregonator, Bottleneck, Robertson) and reports
-concrete timings and accuracy metrics. Notably, on the short-horizon Robertson system
-($t_f = 10$), Krylov-FSP-SSA completes in 0.02\,s (101 iterations) while our method
-requires 877\,s --- a case where the Krylov matrix exponential's ability to take large
-steps is decisive. On the Oregonator, our method completes $t_f = 0.11$ in 37\,s
-while Krylov-FSP-SSA reaches only 2.7\% of the horizon in 103\,s. Section~5.7
-additionally shows that even with extensive parameter tuning, Krylov-FSP-SSA cannot
-achieve better than $\sim$5\% error on the bottleneck system (vs.\ $<0.1\%$ for our
-method) or complete the Robertson system at $t_f = 10^4$. For other methods (Optimal
-FSP, aggregation-based schemes), a full benchmark would require additional reimplementation
-effort; we leave that to future work.
+concrete timings and accuracy metrics. On the Oregonator, our method completes $t_f = 0.11$ in 33\,s
+while Krylov-FSP-SSA reaches only 2.7\% of the horizon in 74\,s. On the Robertson
+system ($t_f = 10^4$), Krylov-FSP-SSA with the correct absorbing-form generator
+(Algorithm~2 of Vo \& Sidje 2016) is $\tau$-locked at ${\approx}10^{-3}$ and reaches
+only $t = 228$ (2.3\%) in 500 iterations (1.9\,s); our method completes $t_f$ in
+1\,117\,s. Note: an earlier version of this response reported that Krylov-FSP-SSA
+completed a short-horizon Robertson problem ($t_f = 10$) in 17 steps; that result
+used a closed-form (mass-conserving) generator that masked probability loss at the
+boundary. With the correct absorbing-form generator, the Robertson system cannot be
+completed by Krylov-FSP-SSA at any practically useful efficiency due to the
+$\tau$-lock from $k_2 = 3\times10^6$ stiffness. Section~5.7 additionally shows that
+even with extensive parameter tuning, Krylov-FSP-SSA cannot achieve better than
+$\sim$5\% error on the bottleneck system (vs.\ $<0.1\%$ for our method). For other
+methods (Optimal FSP, aggregation-based schemes), a full benchmark would require
+additional reimplementation effort; we leave that to future work.
 
 \medskip
 

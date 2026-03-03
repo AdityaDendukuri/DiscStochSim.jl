@@ -55,6 +55,8 @@ function solve_oregonator(; tfinal::Float64=0.11,
         flux_tolerance=flux_tolerance,
         expansion_depth=expansion_depth,
         save_interval=save_interval,
+        flux_method=:total,    # dt = ε_dt / Σᵢ pᵢwᵢ
+        expand_method=:ssa,    # SSA-guided expansion (avoids state space inflation)
     ))
 
     t = sol.t

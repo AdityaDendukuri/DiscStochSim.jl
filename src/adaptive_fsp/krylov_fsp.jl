@@ -103,8 +103,11 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
     while t < tf && iter < alg.max_iter
         iter += 1
 
-        # ── Step 1: Build generator for current projection ─────────────────
-        A, _, _ = build_generator(sp, model, rates, t)
+        # ── Step 1: Build absorbing-form generator for current projection ──
+        # absorbing=true: diagonal = total outflow (including to states outside S),
+        # so probability leaks out when the projection boundary is hit.
+        # This is required for the FSP mass-loss criterion to function correctly.
+        A, _, _ = build_generator(sp, model, rates, t; absorbing=true)
 
         # ── Steps 2–3: Find τ satisfying FSP criterion ────────────────────
         iexpand = false
@@ -116,7 +119,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
         while !fsp_ok && n_τ_reduce < 60
             τ_step = min(τ, tf - t)
 
-            p_new = expv(τ_step, A, sp.probs; mode=:error_estimate, tol=alg.Tol)
+            p_new = expv(τ_step, A, sp.probs; tol=alg.Tol)
 
             # Clamp small negatives from numerical noise
             @inbounds for i in eachindex(p_new)
@@ -156,7 +159,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
         if !fsp_ok
             # Fallback: accept tiny step to avoid infinite loop
             τ_step = min(τ, tf - t)
-            p_new = expv(τ_step, A, sp.probs; mode=:error_estimate, tol=alg.Tol)
+            p_new = expv(τ_step, A, sp.probs; tol=alg.Tol)
             @inbounds for i in eachindex(p_new)
                 if p_new[i] < 0; p_new[i] = 0.0; end
             end

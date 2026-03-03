@@ -13,12 +13,14 @@ prob = FSPProblem(rn, CartesianIndex(1, 0, 0), (0.0, 1e6), rates;
 
 # Flux-aware run
 sol_flux, _ = solve(prob, AdaptiveFSP(ε_dt=0.01, prob_quantile=0.9, flux_tolerance=1e-6,
-                                     save_interval=1000))
+                                     save_interval=1000,
+                                     flux_method=:total, expand_method=:stoich))
 traj_flux = mean_trajectory(sol_flux)
 
 # No-flux run (set flux_tolerance=0 to disable flux protection)
 sol_noflux, _ = solve(prob, AdaptiveFSP(ε_dt=0.01, prob_quantile=0.9, flux_tolerance=0.0,
-                                       save_interval=1000))
+                                       save_interval=1000,
+                                       flux_method=:total, expand_method=:stoich))
 traj_noflux = mean_trajectory(sol_noflux)
 
 println("Flux-aware final:  A=$(traj_flux[end,1]), B=$(traj_flux[end,2]), C=$(traj_flux[end,3])")

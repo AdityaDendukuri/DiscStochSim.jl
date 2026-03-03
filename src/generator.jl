@@ -1,20 +1,29 @@
 """
-    build_generator(space, model, rates, t) -> (A, in_flow, out_flow)
+    build_generator(space, model, rates, t; absorbing=false) -> (A, in_flow, out_flow)
 
 Build the CME generator matrix from scratch in CSC-friendly COO format.
 
 For each column j (state x_j), iterate over reactions k with stoich vector ν_k:
   - Off-diagonal: A[i,j] += a_k(x_j) where x_j + ν_k = x_i ∈ active set
-  - Diagonal:     A[j,j]  = -sum of off-diagonal column entries
+  - Diagonal:     A[j,j]  = -col_sum
+
+If `absorbing=false` (default, closed form): col_sum counts only transitions
+whose target is in the active set. Mass is conserved under exp(A·t).
+
+If `absorbing=true` (absorbing/FSP form): col_sum counts ALL outgoing
+propensities, regardless of whether the target is in the active set. Probability
+that would exit S is absorbed into a sink, so sum(exp(A·t)·p) ≤ 1 and decreases
+when states near the boundary have significant outflow. Required for the
+Krylov-FSP-SSA mass-loss criterion (Vo & Sidje 2016).
 
 Returns `(A, in_flow, out_flow)` where `A = in_flow + out_flow`,
 `out_flow = diag(A)` (negative), `in_flow = A - out_flow` (non-negative).
 """
-function build_generator(sp::StateSpace{E,T}, model, rates, t::Real) where {E,T}
+function build_generator(sp::StateSpace{E,T}, model, rates, t::Real;
+                         absorbing::Bool=false) where {E,T}
     n = length(sp)
     n == 0 && return (spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0))
 
-    # Pre-estimate nnz: at most n_reactions off-diagonal entries per column + 1 diagonal
     n_rxn = length(model.stoichvecs)
     sizehint = n * (n_rxn + 1)
     I = Vector{Int}(); J = Vector{Int}(); V = Vector{T}()
@@ -25,14 +34,15 @@ function build_generator(sp::StateSpace{E,T}, model, rates, t::Real) where {E,T}
         col_sum = zero(T)
 
         for k in 1:n_rxn
+            α = convert(T, model.propensities[k](x, rates, t))
+            α > 0 || continue
             y = x + model.stoichvecs[k]
             i = get(sp.index, y, 0)
             if i != 0
-                α = convert(T, model.propensities[k](x, rates, t))
-                if α > 0
-                    push!(I, i); push!(J, j); push!(V, α)
-                    col_sum += α
-                end
+                push!(I, i); push!(J, j); push!(V, α)
+            end
+            if absorbing || i != 0
+                col_sum += α
             end
         end
 

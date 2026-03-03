@@ -21,8 +21,9 @@
 \contentsline {corollary}{{Corollary}{4.7}{Combined flux and probability error control}}{14}{theorem.146}%
 \contentsline {proof}{{Proof}{6}{}}{15}{proof.148}%
 \contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{15}{theorem.151}%
-\contentsline {proof}{{Proof}{7}{}}{15}{proof.153}%
-\contentsline {remark}{{Remark}{4.9}{}}{16}{theorem.157}%
-\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.158}%
-\contentsline {proof}{{Proof}{8}{}}{16}{proof.162}%
-\contentsline {remark}{{Remark}{4.11}{Consistent parameter selection via spatial stiffness}}{16}{theorem.163}%
+\contentsline {proof}{{Proof}{7}{}}{15}{proof.156}%
+\contentsline {remark}{{Remark}{4.9}{Max-propensity cap and depth-one guarantee}}{16}{theorem.160}%
+\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.162}%
+\contentsline {proof}{{Proof}{8}{}}{17}{proof.166}%
+\contentsline {remark}{{Remark}{4.11}{Expansion strategy and the depth-one regime}}{17}{theorem.167}%
+\contentsline {remark}{{Remark}{4.12}{Consistent parameter selection via spatial stiffness}}{17}{theorem.168}%

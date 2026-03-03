@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.2.8)  22 FEB 2026 13:55
+This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.2.8)  3 MAR 2026 10:47
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -833,7 +833,11 @@ Package: algorithmic 2009/08/24 v0.1 Document Style `algorithmic'
 \ALC@tlm=\skip71
 \algorithmicindent=\skip72
 )
-(./ex_shared.tex (/usr/share/texlive/texmf-dist/tex/latex/lipsum/lipsum.sty
+(/usr/share/texlive/texmf-dist/tex/latex/tools/enumerate.sty
+Package: enumerate 2015/07/23 v3.00 enumerate extensions (DPC)
+\@enLab=\toks57
+) (./ex_shared.tex
+(/usr/share/texlive/texmf-dist/tex/latex/lipsum/lipsum.sty
 Package: lipsum 2021-09-20 v2.7 150 paragraphs of Lorem Ipsum dummy text
 \g__lipsum_par_int=\count351
 \l__lipsum_a_int=\count352
@@ -852,30 +856,30 @@ Package: lipsum 2021-09-20 v2.7 150 paragraphs of Lorem Ipsum dummy text
 \c@endexamplectr=\count363
 )
 Package translations Info: No language package found. I am going to use `englis
-h' as default language. on input line 30.
+h' as default language. on input line 31.
 
 (./ex_article.aux)
 \openout1 = `ex_article.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 30.
-LaTeX Font Info:    ... okay on input line 30.
-Package hyperref Info: Link coloring ON on input line 30.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 31.
+LaTeX Font Info:    ... okay on input line 31.
+Package hyperref Info: Link coloring ON on input line 31.
 
 (/usr/share/texlive/texmf-dist/tex/latex/hyperref/nameref.sty
 Package: nameref 2021-04-02 v2.47 Cross-referencing by name of section
@@ -888,9 +892,9 @@ Package: gettitlestring 2019/12/15 v1.6 Cleanup title references (HO)
 )
 \c@section@level=\count364
 )
-LaTeX Info: Redefining \ref on input line 30.
-LaTeX Info: Redefining \pageref on input line 30.
-LaTeX Info: Redefining \nameref on input line 30.
+LaTeX Info: Redefining \ref on input line 31.
+LaTeX Info: Redefining \pageref on input line 31.
+LaTeX Info: Redefining \nameref on input line 31.
 
 (./ex_article.out) (./ex_article.out)
 \@outlinefile=\write4
@@ -904,12 +908,12 @@ LaTeX Info: Redefining \nameref on input line 30.
 \scratchbox=\box77
 \nofMPsegments=\count366
 \nofMParguments=\count367
-\everyMPshowfont=\toks57
+\everyMPshowfont=\toks58
 \MPscratchCnt=\count368
 \MPscratchDim=\dimen296
 \MPnumerator=\count369
 \makeMPintoPDFobject=\count370
-\everyMPtoPDFconversion=\toks58
+\everyMPtoPDFconversion=\toks59
 )
 Package caption Info: Begin \AtBeginDocument code.
 Package caption Info: End \AtBeginDocument code.
@@ -920,379 +924,468 @@ File: translations-basic-dictionary-english.trsl (english translation file `tra
 nslations-basic-dictionary')
 )
 Package translations Info: loading dictionary `translations-basic-dictionary' f
-or `english'. on input line 30.
-LaTeX Font Info:    Trying to load font information for U+msa on input line 32.
+or `english'. on input line 31.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 33.
 
  (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 32.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 33.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-Underfull \hbox (badness 10000) in paragraph at lines 32--32
+Underfull \hbox (badness 10000) in paragraph at lines 33--33
 [][]\OT1/cmr/m/n/8 Department of Com-puter Sci-ence, Uni-ver-sity of Cal-i-for-
 nia, Santa Bar-bara
  []
 
 
-LaTeX Warning: Citation `Gillespie1977' on page 1 undefined on input line 47.
+LaTeX Warning: Citation `Gillespie1977' on page 1 undefined on input line 48.
 
 
-LaTeX Warning: Citation `Wilkinson2006-so' on page 1 undefined on input line 47
+LaTeX Warning: Citation `Wilkinson2006-so' on page 1 undefined on input line 48
 .
 
 
-LaTeX Warning: Citation `Munsky2006' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Munsky2006' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Kazeev2014' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Kazeev2014' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Vo2017' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Vo2017' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Dinh_2020' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Dinh_2020' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Sunkara2012' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Sunkara2012' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Jahnke2010' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Jahnke2010' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Burrage2006AKF' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Burrage2006AKF' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Sidje2015' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Sidje2015' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Dinh2016' on page 1 undefined on input line 51.
+LaTeX Warning: Citation `Dinh2016' on page 1 undefined on input line 52.
 
 
-LaTeX Warning: Citation `Gillespie2001' on page 1 undefined on input line 53.
+LaTeX Warning: Citation `Gillespie2001' on page 1 undefined on input line 54.
 
 
-LaTeX Warning: Citation `CAO20083472' on page 1 undefined on input line 53.
+LaTeX Warning: Citation `CAO20083472' on page 1 undefined on input line 54.
 
 
-LaTeX Warning: Citation `Wilkinson2006-so' on page 1 undefined on input line 53
+LaTeX Warning: Citation `Wilkinson2006-so' on page 1 undefined on input line 54
 .
 
 [1
 
 {/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}]
 
-LaTeX Warning: Citation `Munsky2006' on page 2 undefined on input line 57.
+LaTeX Warning: Citation `Munsky2006' on page 2 undefined on input line 58.
 
 
-LaTeX Warning: Citation `MUNSKY2007818' on page 2 undefined on input line 57.
+LaTeX Warning: Citation `MUNSKY2007818' on page 2 undefined on input line 58.
 
 
-LaTeX Warning: Citation `peles' on page 2 undefined on input line 59.
+LaTeX Warning: Citation `peles' on page 2 undefined on input line 60.
 
 
-LaTeX Warning: Citation `aggregation' on page 2 undefined on input line 59.
+LaTeX Warning: Citation `aggregation' on page 2 undefined on input line 60.
 
 
-LaTeX Warning: Citation `zhang_cao' on page 2 undefined on input line 59.
+LaTeX Warning: Citation `zhang_cao' on page 2 undefined on input line 60.
 
 
-Overfull \hbox (10.44705pt too wide) in paragraph at lines 59--60
+Overfull \hbox (10.44705pt too wide) in paragraph at lines 60--61
 []\OT1/cmr/m/n/10 Peles et al. [[]] com-bined FSP with time scale sep-a-ra-tion
  tech-niques, us-ing eigenvalue-|
  []
 
 
-LaTeX Warning: Citation `shev' on page 2 undefined on input line 61.
+LaTeX Warning: Citation `shev' on page 2 undefined on input line 62.
 
 
-LaTeX Warning: Citation `kuntz2010' on page 2 undefined on input line 61.
+LaTeX Warning: Citation `kuntz2010' on page 2 undefined on input line 62.
 
 
-LaTeX Warning: Citation `slack' on page 2 undefined on input line 61.
+LaTeX Warning: Citation `slack' on page 2 undefined on input line 62.
 
 
-LaTeX Warning: Citation `Sidje2015' on page 2 undefined on input line 63.
+LaTeX Warning: Citation `Sidje2015' on page 2 undefined on input line 64.
 
 Package hyperref Info: bookmark level for unknown definition defaults to 0 on i
-nput line 73.
+nput line 74.
 
-Overfull \hbox (3.73573pt too wide) in paragraph at lines 73--75
+Overfull \hbox (3.73573pt too wide) in paragraph at lines 74--76
 []\OT1/cmr/m/n/10 (Chemical Mas-ter Equa-tion (CME)). []\OT1/cmr/m/it/10 The Ch
 em-i-cal Mas-ter Equa-|
  []
 
 [2]
 Package hyperref Info: bookmark level for unknown remark defaults to 0 on input
- line 97.
+ line 98.
 
 
-LaTeX Warning: Citation `Munsky2006' on page 3 undefined on input line 115.
+LaTeX Warning: Citation `Munsky2006' on page 3 undefined on input line 116.
 
 Package hyperref Info: bookmark level for unknown theorem defaults to 0 on inpu
-t line 115.
-<lv_grid.pdf, id=156, 903.375pt x 401.5pt>
+t line 116.
+<lv_grid.pdf, id=160, 903.375pt x 401.5pt>
 File: lv_grid.pdf Graphic file (type pdf)
 <use lv_grid.pdf>
-Package pdftex.def Info: lv_grid.pdf  used on input line 135.
+Package pdftex.def Info: lv_grid.pdf  used on input line 136.
 (pdftex.def)             Requested size: 370.38374pt x 164.61606pt.
 
-LaTeX Warning: Citation `Wolf2010' on page 3 undefined on input line 140.
+LaTeX Warning: Citation `Wolf2010' on page 3 undefined on input line 141.
 
 
-LaTeX Warning: Citation `Dinh_2020' on page 3 undefined on input line 140.
+LaTeX Warning: Citation `Dinh_2020' on page 3 undefined on input line 141.
 
 Package hyperref Info: bookmark level for unknown algorithm defaults to 0 on in
-put line 144.
+put line 145.
 [3]
 
-LaTeX Warning: Citation `Dinh2016' on page 4 undefined on input line 160.
+LaTeX Warning: Citation `Dinh2016' on page 4 undefined on input line 161.
 
 [4 <./lv_grid.pdf>]
 Package hyperref Info: bookmark level for unknown proposition defaults to 0 on 
-input line 268.
+input line 269.
  [5]
 Package hyperref Info: bookmark level for unknown proof defaults to 0 on input 
-line 278.
+line 279.
 
 
-LaTeX Warning: Citation `Diaconis1991' on page 6 undefined on input line 292.
+LaTeX Warning: Citation `Diaconis1991' on page 6 undefined on input line 293.
 
 
-LaTeX Warning: Citation `63529' on page 6 undefined on input line 292.
+LaTeX Warning: Citation `63529' on page 6 undefined on input line 293.
 
 [6] [7]
 
-LaTeX Warning: Citation `Gillespie2001' on page 8 undefined on input line 342.
+LaTeX Warning: Citation `Gillespie2001' on page 8 undefined on input line 343.
 
 
-LaTeX Warning: Citation `CAO20083472' on page 8 undefined on input line 342.
+LaTeX Warning: Citation `CAO20083472' on page 8 undefined on input line 343.
 
 
 LaTeX Warning: Citation `Soderlind2015-ai' on page 8 undefined on input line 34
-2.
+3.
 
 LaTeX Font Info:    Trying to load font information for OMS+cmr on input line 3
-77.
+78.
 (/usr/share/texlive/texmf-dist/tex/latex/base/omscmr.fd
 File: omscmr.fd 2019/12/16 v2.5j Standard LaTeX font definitions
 )
 LaTeX Font Info:    Font shape `OMS/cmr/m/n' in size <10> not available
-(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 377.
+(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 378.
 
 Underfull \vbox (badness 10000) has occurred while \output is active []
 
  [8]
 [9]
 
-LaTeX Warning: Citation `Sidje1998' on page 10 undefined on input line 418.
+LaTeX Warning: Citation `Sidje1998' on page 10 undefined on input line 419.
 
 [10] [11]
 Package hyperref Info: bookmark level for unknown corollary defaults to 0 on in
-put line 535.
+put line 536.
 
 
-LaTeX Warning: Citation `Ethier1986' on page 12 undefined on input line 550.
+LaTeX Warning: Citation `Ethier1986' on page 12 undefined on input line 551.
 
 
-LaTeX Warning: Citation `pazy_1983' on page 12 undefined on input line 550.
+LaTeX Warning: Citation `pazy_1983' on page 12 undefined on input line 551.
 
 [12]
 
-LaTeX Warning: Citation `Sidje1998' on page 13 undefined on input line 615.
+LaTeX Warning: Citation `Sidje1998' on page 13 undefined on input line 616.
 
-[13] [14] [15] [16]
+[13] [14]
+Overfull \hbox (18.13141pt too wide) in paragraph at lines 683--687
+\OT1/cmr/m/it/10 de-note the \OT1/cmr/m/n/10 spa-tial stiff-ness ra-tio\OT1/cmr
+/m/it/10 , where $\OML/cmm/m/it/10 ^^U[]\OT1/cmr/m/n/10 (\OML/cmm/m/it/10 J[]; 
+t[]\OT1/cmr/m/n/10 ) := [][] \OML/cmm/m/it/10 w\OT1/cmr/m/n/10 (\OML/cmm/b/it/1
+0 x\OT1/cmr/m/n/10 )$ \OT1/cmr/m/it/10 and $\OT1/cmr/m/n/10 ^^H[](\OML/cmm/m/it
+/10 J[]; t[]\OT1/cmr/m/n/10 ) =|
+ []
 
-LaTeX Warning: Citation `catalyst2021' on page 17 undefined on input line 772.
+
+Overfull \hbox (25.84467pt too wide) in paragraph at lines 698--703
+\OML/cmm/m/it/10 ^^Q[] ^^O[]$ \OT1/cmr/m/it/10 where $\OML/cmm/m/it/10 ^^Q[] \O
+T1/cmr/m/n/10 = ^^H[]\OML/cmm/m/it/10 =\OT1/cmr/m/n/10 ^^H[] \OMS/cmsy/m/n/10 ^
+^U \OT1/cmr/m/n/10 1$\OT1/cmr/m/it/10 , and the ex-pan-sion fac-tor is $\OML/cm
+m/m/it/10 ^^V[] \OT1/cmr/m/n/10 = (\OML/cmm/m/it/10 ^^U[]=\OT1/cmr/m/n/10 ^^H[]
+) \OML/cmm/m/it/10 ^^O[]$\OT1/cmr/m/it/10 .|
+ []
 
 
-LaTeX Warning: Citation `expokit2021' on page 17 undefined on input line 772.
+Overfull \hbox (0.94585pt too wide) in paragraph at lines 707--708
+[]\OT1/cmr/m/n/10 By The-o-rem [][]4.4[][], ap-prox-i-mat-ing bound-ary fluxes 
+as con-stant over $[\OML/cmm/m/it/10 t[]; t[]\OT1/cmr/m/n/10 ]$: |
+ []
 
-<flux_vs_naive_comparison.png, id=435, 379.4175pt x 301.125pt>
+[15] [16]
+Overfull \hbox (53.48553pt too wide) in paragraph at lines 801--806
+\OML/cmm/m/it/10 "[]=\OT1/cmr/m/n/10 ^^H[]$ (ex-act er-ror $\OML/cmm/m/it/10 "[
+]$\OT1/cmr/m/n/10 , $\OML/cmm/m/it/10 ^^V \OT1/cmr/m/n/10 = \OML/cmm/m/it/10 ^^
+T "[]$\OT1/cmr/m/n/10 ); max-propensity cap $^^A\OML/cmm/m/it/10 t \OT1/cmr/m/n
+/10 = [](\OML/cmm/m/it/10 "[]=\OT1/cmr/m/n/10 ^^H[]\OML/cmm/m/it/10 ;  \OT1/cmr
+/m/n/10 1\OML/cmm/m/it/10 =^^U[]\OT1/cmr/m/n/10 )$|
+ []
+
+[17]
+
+LaTeX Warning: Citation `catalyst2021' on page 18 undefined on input line 819.
+
+
+LaTeX Warning: Citation `expokit2021' on page 18 undefined on input line 819.
+
+<flux_vs_naive_comparison.png, id=459, 379.4175pt x 301.125pt>
 File: flux_vs_naive_comparison.png Graphic file (type png)
 <use flux_vs_naive_comparison.png>
-Package pdftex.def Info: flux_vs_naive_comparison.png  used on input line 784.
+Package pdftex.def Info: flux_vs_naive_comparison.png  used on input line 831.
 (pdftex.def)             Requested size: 370.38374pt x 293.96097pt.
-[17] [18 <./flux_vs_naive_comparison.png>]
+[18] [19 <./flux_vs_naive_comparison.png>]
 Underfull \vbox (badness 1755) has occurred while \output is active []
 
- [19]
-<error_accumulation_analysis.png, id=461, 379.4175pt x 286.06876pt>
+ [20]
+<error_accumulation_analysis.png, id=484, 379.4175pt x 286.06876pt>
 File: error_accumulation_analysis.png Graphic file (type png)
 <use error_accumulation_analysis.png>
-Package pdftex.def Info: error_accumulation_analysis.png  used on input line 85
-1.
+Package pdftex.def Info: error_accumulation_analysis.png  used on input line 89
+8.
 (pdftex.def)             Requested size: 370.38374pt x 279.26292pt.
 
-[20 <./error_accumulation_analysis.png>]
+[21 <./error_accumulation_analysis.png>]
 
 pdfTeX warning: pdflatex (file ./toggle_switch_grid.pdf): PDF inclusion: found 
 PDF version <1.7>, but at most version <1.5> allowed
-<toggle_switch_grid.pdf, id=472, 470.75874pt x 451.6875pt>
+<toggle_switch_grid.pdf, id=495, 470.75874pt x 451.6875pt>
 File: toggle_switch_grid.pdf Graphic file (type pdf)
 <use toggle_switch_grid.pdf>
-Package pdftex.def Info: toggle_switch_grid.pdf  used on input line 885.
+Package pdftex.def Info: toggle_switch_grid.pdf  used on input line 932.
 (pdftex.def)             Requested size: 370.38374pt x 355.38185pt.
 
-LaTeX Warning: Citation `tian_stochastic_2006' on page 21 undefined on input li
-ne 898.
+LaTeX Warning: Citation `tian_stochastic_2006' on page 22 undefined on input li
+ne 945.
 
 
-LaTeX Warning: Citation `tian_stochastic_2006' on page 21 undefined on input li
-ne 913.
+LaTeX Warning: Citation `tian_stochastic_2006' on page 22 undefined on input li
+ne 960.
 
 
-LaTeX Warning: Citation `Dinh_2020' on page 21 undefined on input line 913.
+LaTeX Warning: Citation `Dinh_2020' on page 22 undefined on input line 960.
 
 
-LaTeX Warning: Citation `tian_stochastic_2006' on page 21 undefined on input li
-ne 913.
+LaTeX Warning: Citation `tian_stochastic_2006' on page 22 undefined on input li
+ne 960.
 
 
-LaTeX Warning: Citation `Dinh_2020' on page 21 undefined on input line 913.
+LaTeX Warning: Citation `Dinh_2020' on page 22 undefined on input line 960.
 
-[21]
+[22]
 
-LaTeX Warning: Citation `Dinh_2020' on page 22 undefined on input line 920.
+LaTeX Warning: Citation `Dinh_2020' on page 23 undefined on input line 967.
 
-[22 <./toggle_switch_grid.pdf>]
+[23 <./toggle_switch_grid.pdf>]
 
-LaTeX Warning: Citation `field_noyes' on page 23 undefined on input line 942.
-
-
-LaTeX Warning: Citation `Gillespie1977' on page 23 undefined on input line 944.
+LaTeX Warning: Citation `field_noyes' on page 24 undefined on input line 989.
 
 
+LaTeX Warning: Citation `Gillespie1977' on page 24 undefined on input line 991.
 
-Overfull \hbox (6.40694pt too wide) in paragraph at lines 949--951
+
+
+Overfull \hbox (6.40694pt too wide) in paragraph at lines 996--998
 \OT1/cmr/m/n/10 We spec-ify the steady-state pop-u-la-tions as $(\OML/cmm/m/it/
 10 N[]; N[]; N[]\OT1/cmr/m/n/10 ) = (500\OML/cmm/m/it/10 ; \OT1/cmr/m/n/10 1000
 \OML/cmm/m/it/10 ; \OT1/cmr/m/n/10 2000)$ molecules,|
  []
 
-[23]
-Overfull \hbox (9.11954pt too wide) in paragraph at lines 978--979
+[24]
+Overfull \hbox (9.11954pt too wide) in paragraph at lines 1025--1026
 []\OT1/cmr/m/n/10 The mean tra-jec-to-ries (panel c) ex-hibit char-ac-ter-is-ti
 c re-lax-ation os-cil-la-tions. Species|
  []
 
-<orag.pdf, id=533, 379.4175pt x 271.0125pt>
+<orag.pdf, id=556, 379.4175pt x 271.0125pt>
 File: orag.pdf Graphic file (type pdf)
 <use orag.pdf>
-Package pdftex.def Info: orag.pdf  used on input line 983.
+Package pdftex.def Info: orag.pdf  used on input line 1030.
 (pdftex.def)             Requested size: 370.38374pt x 264.56487pt.
-[24]
+[25]
 
-LaTeX Warning: Citation `Robertson1967' on page 25 undefined on input line 990.
+LaTeX Warning: Citation `Robertson1967' on page 26 undefined on input line 1037
+.
 
 
-
-Overfull \hbox (0.83217pt too wide) in paragraph at lines 990--991
+Overfull \hbox (0.83217pt too wide) in paragraph at lines 1037--1038
  \OT1/cmr/bx/n/10 5.4. Stiff Dy-nam-ics in the Robert-son Au-to-cat-alytic Sys-
 tem.[][] \OT1/cmr/m/n/10 The Robert-|
  []
 
-<simulation_results.pdf, id=540, 505.89pt x 361.35pt>
+<simulation_results.pdf, id=564, 505.89pt x 361.35pt>
 File: simulation_results.pdf Graphic file (type pdf)
 <use simulation_results.pdf>
-Package pdftex.def Info: simulation_results.pdf  used on input line 1009.
+Package pdftex.def Info: simulation_results.pdf  used on input line 1056.
 (pdftex.def)             Requested size: 370.38374pt x 264.56625pt.
-[25 <./orag.pdf>] [26 <./simulation_results.pdf>]
+[26 <./orag.pdf>] [27 <./simulation_results.pdf>]
 
-LaTeX Warning: Citation `BenchmarkTools.jl-2016' on page 27 undefined on input 
-line 1031.
+LaTeX Warning: Citation `BenchmarkTools.jl-2016' on page 28 undefined on input 
+line 1078.
 
-<benchmark_comparison.pdf, id=580, 505.89pt x 252.945pt>
+<benchmark_comparison.pdf, id=603, 505.89pt x 252.945pt>
 File: benchmark_comparison.pdf Graphic file (type pdf)
 <use benchmark_comparison.pdf>
-Package pdftex.def Info: benchmark_comparison.pdf  used on input line 1035.
+Package pdftex.def Info: benchmark_comparison.pdf  used on input line 1082.
 (pdftex.def)             Requested size: 370.38374pt x 185.19638pt.
 
 
 pdfTeX warning: pdflatex (file ./speed.pdf): PDF inclusion: found PDF version <
 1.7>, but at most version <1.5> allowed
-<speed.pdf, id=582, 752.8125pt x 301.125pt>
+<speed.pdf, id=605, 752.8125pt x 301.125pt>
 File: speed.pdf Graphic file (type pdf)
 <use speed.pdf>
-Package pdftex.def Info: speed.pdf  used on input line 1059.
+Package pdftex.def Info: speed.pdf  used on input line 1106.
 (pdftex.def)             Requested size: 370.38374pt x 148.15904pt.
-[27]
+[28]
 
 LaTeX Warning: `h' float specifier changed to `ht'.
 
 
-LaTeX Warning: Citation `Sidje2015' on page 28 undefined on input line 1084.
+LaTeX Warning: Citation `Sidje2015' on page 29 undefined on input line 1131.
 
 
-LaTeX Warning: Citation `Dinh2016' on page 28 undefined on input line 1084.
+LaTeX Warning: Citation `Dinh2016' on page 29 undefined on input line 1131.
 
-[28 <./benchmark_comparison.pdf> <./speed.pdf
+
+Underfull \vbox (badness 10000) has occurred while \output is active []
+
+ [29 <./benchmark_comparison.pdf> <./speed.pdf
 
 pdfTeX warning: pdflatex (file ./speed.pdf): PDF inclusion: multiple pdfs with 
 page group included in a single page
 >]
-<oregonator_comparison.pdf, id=662, 903.375pt x 351.3125pt>
+<oregonator_comparison.pdf, id=685, 903.375pt x 351.3125pt>
 File: oregonator_comparison.pdf Graphic file (type pdf)
 <use oregonator_comparison.pdf>
-Package pdftex.def Info: oregonator_comparison.pdf  used on input line 1110.
+Package pdftex.def Info: oregonator_comparison.pdf  used on input line 1157.
 (pdftex.def)             Requested size: 370.38374pt x 144.03905pt.
- [29]
-<bottleneck_comparison.pdf, id=675, 903.375pt x 351.3125pt>
+
+
+LaTeX Warning: Citation `VoSidje2016' on page 30 undefined on input line 1163.
+
+[30]
+Overfull \hbox (17.05724pt too wide) in paragraph at lines 1165--1166
+[]\OT1/cmr/m/n/10 The fail-ure mech-a-nism is \OT1/cmr/m/it/10 wave-front trun-
+ca-tion\OT1/cmr/m/n/10 , not con-nec-tiv-ity loss. With $[] =|
+ []
+
+
+LaTeX Warning: Citation `VoSidje2016' on page 31 undefined on input line 1169.
+
+
+LaTeX Warning: Citation `VoSidje2016' on page 31 undefined on input line 1169.
+
+<bottleneck_comparison.pdf, id=698, 903.375pt x 351.3125pt>
 File: bottleneck_comparison.pdf Graphic file (type pdf)
 <use bottleneck_comparison.pdf>
-Package pdftex.def Info: bottleneck_comparison.pdf  used on input line 1140.
+Package pdftex.def Info: bottleneck_comparison.pdf  used on input line 1188.
 (pdftex.def)             Requested size: 370.38374pt x 144.03905pt.
- [30 <./oregonator_comparison.pdf>]
-<robertson_comparison.pdf, id=687, 501.875pt x 351.3125pt>
+[31 <./oregonator_comparison.pdf>]
+
+LaTeX Warning: Citation `VoSidje2016' on page 32 undefined on input line 1198.
+
+
+LaTeX Warning: Citation `VoSidje2016' on page 32 undefined on input line 1202.
+
+
+LaTeX Warning: Citation `VoSidje2016' on page 32 undefined on input line 1202.
+
+
+Overfull \hbox (33.74498pt too wide) in paragraph at lines 1204--1217
+ [][] |
+ []
+
+<robertson_comparison.pdf, id=708, 903.375pt x 351.3125pt>
 File: robertson_comparison.pdf Graphic file (type pdf)
 <use robertson_comparison.pdf>
-Package pdftex.def Info: robertson_comparison.pdf  used on input line 1168.
-(pdftex.def)             Requested size: 370.38374pt x 259.281pt.
- [31 <./bottleneck_comparison.pdf>]
+Package pdftex.def Info: robertson_comparison.pdf  used on input line 1221.
+(pdftex.def)             Requested size: 370.38374pt x 144.03905pt.
 
-LaTeX Warning: Citation `Dinh2016' on page 32 undefined on input line 1181.
+Underfull \vbox (badness 6300) has occurred while \output is active []
 
+ [32 <./bottleneck_comparison.pdf>]
+Underfull \vbox (badness 1946) has occurred while \output is active []
 
-LaTeX Warning: Citation `aggregation' on page 32 undefined on input line 1183.
+ [33 <./robertson_comparison.pdf>]
 
-
-LaTeX Warning: Citation `peles' on page 32 undefined on input line 1183.
-
-
-LaTeX Warning: Citation `zhang_cao' on page 32 undefined on input line 1183.
+LaTeX Warning: Citation `VoSidje2016' on page 34 undefined on input line 1238.
 
 
-LaTeX Warning: Citation `Cao2016' on page 32 undefined on input line 1183.
+LaTeX Warning: Citation `VoSidje2016' on page 34 undefined on input line 1242.
 
 
-LaTeX Warning: Citation `slack' on page 32 undefined on input line 1183.
-
-[32 <./robertson_comparison.pdf>]
-
-LaTeX Warning: Citation `Sidje1998' on page 33 undefined on input line 1186.
+Overfull \hbox (204.84695pt too wide) in paragraph at lines 1248--1257
+ [][] |
+ []
 
 
-LaTeX Warning: Citation `Kazeev2014' on page 33 undefined on input line 1186.
+LaTeX Warning: Citation `VoSidje2016' on page 34 undefined on input line 1259.
 
 
-LaTeX Warning: Citation `Dinh_2020' on page 33 undefined on input line 1186.
+Underfull \vbox (badness 2626) has occurred while \output is active []
+
+ [34]
+
+LaTeX Warning: Citation `Dinh2016' on page 35 undefined on input line 1266.
 
 
-LaTeX Warning: Citation `rhodius_1993' on page 33 undefined on input line 1188.
+LaTeX Warning: Citation `aggregation' on page 35 undefined on input line 1268.
+
+
+LaTeX Warning: Citation `peles' on page 35 undefined on input line 1268.
+
+
+LaTeX Warning: Citation `zhang_cao' on page 35 undefined on input line 1268.
+
+
+LaTeX Warning: Citation `Cao2016' on page 35 undefined on input line 1268.
+
+
+LaTeX Warning: Citation `slack' on page 35 undefined on input line 1268.
+
+[35]
+
+LaTeX Warning: Citation `Sidje1998' on page 36 undefined on input line 1271.
+
+
+LaTeX Warning: Citation `Kazeev2014' on page 36 undefined on input line 1271.
+
+
+LaTeX Warning: Citation `Dinh_2020' on page 36 undefined on input line 1271.
+
+
+LaTeX Warning: Citation `rhodius_1993' on page 36 undefined on input line 1273.
 
 
 
-LaTeX Warning: Citation `rhodius_1996' on page 33 undefined on input line 1188.
+LaTeX Warning: Citation `rhodius_1996' on page 36 undefined on input line 1273.
 
 
 
-LaTeX Warning: Citation `pazy_1983' on page 33 undefined on input line 1188.
+LaTeX Warning: Citation `pazy_1983' on page 36 undefined on input line 1273.
 
 
-Overfull \hbox (7.36958pt too wide) in paragraph at lines 1193--1194
+Overfull \hbox (7.36958pt too wide) in paragraph at lines 1278--1279
 []\OT1/cmr/m/n/10 Finally, we have fo-cused on time-homogeneous gen-er-a-tors. 
 Time-dependent propen-|
  []
@@ -1300,55 +1393,56 @@ Time-dependent propen-|
 
 Underfull \vbox (badness 2626) has occurred while \output is active []
 
- [33]
+ [36]
 No file ex_article.bbl.
 \tf@thm=\write5
 \openout5 = `ex_article.thm'.
 
-[34] (./ex_article.aux)
+[37] (./ex_article.aux)
 
 LaTeX Warning: There were undefined references.
 
 Package rerunfilecheck Info: File `ex_article.out' has not changed.
-(rerunfilecheck)             Checksum: CD974F7C10393317FF48B11856B87678;5452.
+(rerunfilecheck)             Checksum: 9C4C63C515919AF27EFA86827917C1A1;5784.
  ) 
 Here is how much of TeX's memory you used:
- 29692 strings out of 478287
- 598766 string characters out of 5849290
- 929113 words of memory out of 5000000
- 47193 multiletter control sequences out of 15000+600000
- 482979 words of font info for 79 fonts, out of 8000000 for 9000
+ 29755 strings out of 478287
+ 600024 string characters out of 5849290
+ 935766 words of memory out of 5000000
+ 47243 multiletter control sequences out of 15000+600000
+ 483338 words of font info for 80 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  84i,20n,80p,1732b,1224s stack positions out of 5000i,500n,10000p,200000b,80000s
 </usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx7.pfb></usr/share
 /texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx8.pfb></usr/share/texliv
-e/texmf-dist/fonts/type1/public/amsfonts/cm/cmcsc10.pfb></usr/share/texlive/tex
-mf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/share/texlive/texmf-dis
-t/fonts/type1/public/amsfonts/cmextra/cmex7.pfb></usr/share/texlive/texmf-dist/
-fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texlive/texmf-dist/fonts/
-type1/public/amsfonts/cm/cmmi5.pfb></usr/share/texlive/texmf-dist/fonts/type1/p
-ublic/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/a
-msfonts/cm/cmmi9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts
-/cm/cmmib10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cmex
-tra/cmmib7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cm
-r10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr5.pfb>
-</usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6.pfb></usr/sh
-are/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/share/texl
-ive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></usr/share/texlive/texm
-f-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb></usr/share/texlive/texmf-dist/f
-onts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texlive/texmf-dist/fonts/t
-ype1/public/amsfonts/cm/cmsy5.pfb></usr/share/texlive/texmf-dist/fonts/type1/pu
-blic/amsfonts/cm/cmsy6.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/am
-sfonts/cm/cmsy7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/
-cm/cmti10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmt
-t10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msam
-10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm1
-0.pfb>
-Output written on ex_article.pdf (34 pages, 1296987 bytes).
+e/texmf-dist/fonts/type1/public/amsfonts/cm/cmbxti10.pfb></usr/share/texlive/te
+xmf-dist/fonts/type1/public/amsfonts/cm/cmcsc10.pfb></usr/share/texlive/texmf-d
+ist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/share/texlive/texmf-dist/fo
+nts/type1/public/amsfonts/cmextra/cmex7.pfb></usr/share/texlive/texmf-dist/font
+s/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texlive/texmf-dist/fonts/type
+1/public/amsfonts/cm/cmmi5.pfb></usr/share/texlive/texmf-dist/fonts/type1/publi
+c/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfo
+nts/cm/cmmi9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/
+cmmib10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cmextra/
+cmmib7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.
+pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr5.pfb></us
+r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6.pfb></usr/share/
+texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/share/texlive/
+texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></usr/share/texlive/texmf-di
+st/fonts/type1/public/amsfonts/cm/cmr9.pfb></usr/share/texlive/texmf-dist/fonts
+/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texlive/texmf-dist/fonts/type1
+/public/amsfonts/cm/cmsy5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public
+/amsfonts/cm/cmsy6.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfon
+ts/cm/cmsy7.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/c
+mti10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.
+pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msam10.p
+fb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pf
+b>
+Output written on ex_article.pdf (37 pages, 1410292 bytes).
 PDF statistics:
- 872 PDF objects out of 1000 (max. 8388607)
- 715 compressed objects within 8 object streams
- 238 named destinations out of 1000 (max. 500000)
- 292 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 925 PDF objects out of 1000 (max. 8388607)
+ 759 compressed objects within 8 object streams
+ 248 named destinations out of 1000 (max. 500000)
+ 300 words of extra memory for PDF output out of 10000 (max. 10000000)
 
