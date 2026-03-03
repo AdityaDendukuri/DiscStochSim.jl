@@ -84,24 +84,32 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     t = Float64(t0)
     iter = 0
 
+    # Track previous generator for incremental rebuilds
+    A_old = spzeros(Float64, 0, 0)
+    gids_old = Int[]
+
     while t < tf && iter < alg.max_iter
         iter += 1
 
-        # 1) Expand state space (legacy SSA-style expansion)
-        expand_ssa!(sp, model, rates, t, bc; depth=alg.expansion_depth)
+        # 1) Expand state space
+        expand!(sp, model, bc; depth=alg.expansion_depth)
 
-        # 2) Build generator from scratch (legacy behavior)
-        A, in_flow, out_flow = build_generator(sp, model, rates, t)
+        # 2) Build generator (incremental rebuild reusing previous matrix)
+        A, in_flow, out_flow = reconstruct_generator(sp, model, rates, t, A_old, gids_old)
+
+        # Cache generator state for next iteration's incremental rebuild
+        A_old = A
+        gids_old = get_global_ids(sp)
 
         # 3) Adaptive time step
         # Probability-weighted total outflux Φ = Σ pᵢ wᵢ
         out_flux = Vector(-out_flow * sp.probs)
-        total_flux = sum(out_flux)
+        total_flux = maximum(out_flux)
         dt = total_flux > 0 ? alg.ε_dt / total_flux : (tf - t)
         dt = min(dt, tf - t)
 
-        # 4) Propagate probability
-        sp.probs = expmv(dt, A, sp.probs)
+        # 4) Propagate probability (subcycle if dt*||A||_1 is too large)
+            sp.probs = expv(dt, A, sp.probs)
 
         # 5) Flux-aware pruning + renormalization
         compress!(sp, model, rates, t, alg.prob_quantile;

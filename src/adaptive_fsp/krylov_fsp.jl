@@ -116,7 +116,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
         while !fsp_ok && n_τ_reduce < 60
             τ_step = min(τ, tf - t)
 
-            p_new = expmv(τ_step, A, sp.probs; tol=alg.Tol)
+            p_new = expv(τ_step, A, sp.probs; mode=:error_estimate, tol=alg.Tol)
 
             # Clamp small negatives from numerical noise
             @inbounds for i in eachindex(p_new)
@@ -156,7 +156,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
         if !fsp_ok
             # Fallback: accept tiny step to avoid infinite loop
             τ_step = min(τ, tf - t)
-            p_new = expmv(τ_step, A, sp.probs; tol=alg.Tol)
+            p_new = expv(τ_step, A, sp.probs; mode=:error_estimate, tol=alg.Tol)
             @inbounds for i in eachindex(p_new)
                 if p_new[i] < 0; p_new[i] = 0.0; end
             end

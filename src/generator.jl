@@ -62,28 +62,11 @@ function reconstruct_generator(sp::StateSpace{E,T}, model, rates, t::Real,
 
     gids_new = get_global_ids(sp)
 
-    # Map old global ID → old column index
-    old_gid_to_col = Dict{Int,Int}()
-    for (col, gid) in enumerate(gids_old)
-        old_gid_to_col[gid] = col
-    end
-
-    # Count retained columns
-    n_retained = count(gid -> haskey(old_gid_to_col, gid), gids_new)
+    # Check overlap; fall back to full build if too few states are retained
+    old_gid_set = Set{Int}(gids_old)
+    n_retained = count(gid -> gid in old_gid_set, gids_new)
     if n_retained < 0.3 * n_new
         return build_generator(sp, model, rates, t)
-    end
-
-    # Build new-row-index lookup for all active states (by global ID)
-    gid_to_new_row = Dict{Int,Int}()
-    for (row, gid) in enumerate(gids_new)
-        gid_to_new_row[gid] = row
-    end
-
-    # Old global ID → old row index
-    old_gid_to_row = Dict{Int,Int}()
-    for (row, gid) in enumerate(gids_old)
-        old_gid_to_row[gid] = row
     end
 
     n_rxn = length(model.stoichvecs)
@@ -91,64 +74,24 @@ function reconstruct_generator(sp::StateSpace{E,T}, model, rates, t::Real,
     I = Vector{Int}(); J = Vector{Int}(); V = Vector{T}()
     sizehint!(I, sizehint_n); sizehint!(J, sizehint_n); sizehint!(V, sizehint_n)
 
-    @inbounds for (j_new, gid) in enumerate(gids_new)
-        old_col = get(old_gid_to_col, gid, 0)
+    @inbounds for j_new in 1:n_new
+        x = sp.states[j_new]
+        col_sum = zero(T)
 
-        if old_col != 0
-            # Retained column: copy old off-diagonal entries + add new neighbors
-            x = sp.states[j_new]
-            col_sum = zero(T)
-
-            # Collect old off-diagonal targets (by new row index) for dedup
-            old_targets = Set{Int}()
-            for idx in nzrange(A_old, old_col)
-                old_row = A_old.rowval[idx]
-                old_row == old_col && continue  # skip diagonal
-                val = A_old.nzval[idx]
-                old_row_gid = gids_old[old_row]
-                new_row = get(gid_to_new_row, old_row_gid, 0)
-                if new_row != 0
-                    push!(I, new_row); push!(J, j_new); push!(V, val)
-                    col_sum += val
-                    push!(old_targets, new_row)
+        for k in 1:n_rxn
+            y = x + model.stoichvecs[k]
+            i_new = get(sp.index, y, 0)
+            if i_new != 0
+                α = convert(T, model.propensities[k](x, rates, t))
+                if α > 0
+                    push!(I, i_new); push!(J, j_new); push!(V, α)
+                    col_sum += α
                 end
             end
+        end
 
-            # Check for NEW neighbors not in old state space
-            for k in 1:n_rxn
-                y = x + model.stoichvecs[k]
-                i_new = get(sp.index, y, 0)
-                if i_new != 0 && i_new != j_new && !(i_new in old_targets)
-                    # This neighbor is new — compute propensity
-                    α = convert(T, model.propensities[k](x, rates, t))
-                    if α > 0
-                        push!(I, i_new); push!(J, j_new); push!(V, α)
-                        col_sum += α
-                    end
-                end
-            end
-
-            if col_sum > 0
-                push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
-            end
-        else
-            # New column: build from scratch
-            x = sp.states[j_new]
-            col_sum = zero(T)
-            for k in 1:n_rxn
-                y = x + model.stoichvecs[k]
-                i_new = get(sp.index, y, 0)
-                if i_new != 0
-                    α = convert(T, model.propensities[k](x, rates, t))
-                    if α > 0
-                        push!(I, i_new); push!(J, j_new); push!(V, α)
-                        col_sum += α
-                    end
-                end
-            end
-            if col_sum > 0
-                push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
-            end
+        if col_sum > 0
+            push!(I, j_new); push!(J, j_new); push!(V, -col_sum)
         end
     end
 

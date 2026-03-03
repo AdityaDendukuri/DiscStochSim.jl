@@ -3,6 +3,7 @@ module DiscStochSim
 using Catalyst
 using SparseArrays
 using LinearAlgebra
+using ExponentialUtilities
 using Expokit
 import CommonSolve
 
