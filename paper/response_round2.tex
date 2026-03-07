@@ -47,8 +47,22 @@ algorithm is to avoid loss of states that move to other metastable regions,
 would it make more sense to limit the flux to propensities of moving outside
 the reduced state space?}
 
-\textbf{Response:}
-% TODO: Draft response about boundary-only flux vs total flux in pruning
+\textbf{Response:} The referee's question is well taken.
+One could protect states based on their \emph{boundary outflux}
+$\Phi_{\partial}(\boldsymbol{x},t):=p(\boldsymbol{x},t)\sum_{\boldsymbol{y}\in J'}\mathbf{A}_{\boldsymbol{y}\boldsymbol{x}}$---the rate at which probability leaves $\boldsymbol{x}$ to states outside the current active set $J$---rather than total flux $\Phi(\boldsymbol{x},t)=p(\boldsymbol{x},t)\,w(\boldsymbol{x})$.
+However, total flux is preferable for two reasons that are most clearly illustrated by the bottleneck example.
+
+\textbf{Bottleneck states have near-zero boundary outflux.}
+The defining feature of a bottleneck state $s_b$ connecting metastable regions $A$ and $B$ is that its transitions lead to states \emph{inside} those regions, which are already in $J$ (they have high probability and survive the quantile filter).
+Consequently $\Phi_{\partial}(s_b,t)\approx 0$, and boundary-outflux protection would \emph{not} retain $s_b$ despite its structural importance.
+Total flux $p(s_b)\,w(s_b)$, by contrast, is large because $w(s_b)$ is large: it measures the rate at which probability \emph{cycles through} $s_b$ regardless of where those transitions lead.
+A large exit rate combined with small occupancy is precisely the hallmark of a fast-transit connector---and exactly the signature that boundary outflux misses once both endpoints are already in~$J$.
+
+\textbf{Circular dependency.}
+Computing $\Phi_{\partial}(\boldsymbol{x},t)$ requires knowing $J'$, which is determined by the pruning decision itself.
+Total flux $p(\boldsymbol{x})\cdot(-\mathbf{A}_{\boldsymbol{x}\boldsymbol{x}})$ is a byproduct of the generator diagonal and requires no knowledge of the pruning outcome.
+
+We have added Remark~3.1 to the revised manuscript making this distinction explicit.
 
 \medskip
 
@@ -171,26 +185,29 @@ time-varying variants.}
 provides a head-to-head comparison of the flux-based adaptive FSP against the
 Krylov-FSP-SSA method of Vo and Sidje~[Sidje2015], reviewed by Dinh and
 Sidje~[Dinh2016]. This baseline shares the same expand--evolve--prune skeleton
-and Krylov matrix exponential integrator, differing in pruning (probability
-threshold without flux protection), time stepping (mass-conservation
-accept/reject rather than flux-adaptive), and expansion (SSA-driven with
-reachability enumeration). The comparison isolates the effect of our two main
-contributions---flux-aware pruning and flux-adaptive time stepping---on three
-benchmark systems.
+and Krylov matrix exponential integrator, differing in pruning (joint
+probability-and-derivative threshold per Algorithm~2 of~[VoSidje2016], without
+flux-based protection), time stepping (mass-conservation accept/reject rather
+than flux-adaptive), and expansion (SSA-driven with reachability enumeration).
+The comparison isolates the effect of flux-aware pruning and flux-adaptive time
+stepping on three benchmark systems.
 
 On the Oregonator, the flux-adaptive time stepping provides a decisive
-advantage: the adaptive FSP completes the simulation in 41\,s using 28
-snapshots with $|S| \leq 1{,}058$, while the Krylov-FSP-SSA method reaches only
-9\% of the time horizon after 10{,}000 iterations and 438\,s, with the state
-space growing to 15{,}850 states. On the bottleneck system, the flux-based
-pruning preserves the essential $B = 1$ bottleneck state (which carries
-probability $\sim 10^{-6}$, below the Krylov-FSP-SSA threshold) and correctly
-tracks $\langle C \rangle = 357$, while the baseline produces
-$\langle C \rangle = 18.7$ after severing the bottleneck pathway. On the
-Robertson system over $[0, 10]$, both methods complete, with the Krylov-FSP-SSA
-method faster due to the matrix exponential's ability to take large steps on
-short horizons; however, the flux-adaptive method provides greater robustness on
-longer horizons where the accept/reject mechanism degrades.
+advantage: the adaptive FSP completes the simulation in 33\,s using 26
+snapshots with $|S| \leq 1{,}003$, while the Krylov-FSP-SSA method reaches only
+$t = 0.003$ (2.7\% of the time horizon) after 3{,}000 iterations and 74\,s,
+with the state space growing to 13{,}294 states. On the bottleneck system, both
+methods correctly retain the connector state $B{=}1$ (the joint
+probability-and-derivative filter keeps it since $p(B{=}1) \gg \texttt{droptol}
+= 10^{-10}$), but Krylov-FSP-SSA produces $\langle C \rangle = 0.12$ (40$\times$
+below the reference $\langle C \rangle = 4.978$) because its step size grows
+exponentially ($\tau : 100 \to 3{,}700$\,s) and the depth-$r{=}1$ expansion
+cannot track the probability wavefront spreading over $C \in [0, k_2 t_f]$;
+FP-FSP avoids this by using a fixed step $\delta t = 1/k_2 = 10$\,s. On the
+Robertson system over $[0, 10^4]$, only FP-FSP completes the horizon: the
+stiffness of $k_2 = 3\times10^6$ locks Krylov-FSP-SSA's step size in
+$[3\times10^{-4},\, 3\times10^{-3}]$, reaching only $t = 228$ (2.3\%) in 500
+iterations.
 
 These results are presented in Tables~7--9 and Figures~7--8 of the revised
 manuscript
@@ -203,18 +220,24 @@ pure probability pruning, and of $\Phi_{\max}$-based stepping versus other
 activity indicators.}
 
 \textbf{Response:} The comparison in the new Section~5.6 directly demonstrates
-these benefits. The bottleneck system provides the clearest illustration of
-flux-based protection: the flux-preserving method retains the $B = 1$ state
-(probability $\sim 10^{-6}$, below any reasonable probability threshold) because
-its outgoing flux is significant relative to the total system flux, producing
-$\langle C \rangle = 357$ versus $\langle C \rangle = 18.7$ under
-probability-only pruning. The Oregonator comparison demonstrates the benefit of
-$\Phi_{\mathrm{total}}$-based stepping versus fixed or accept/reject stepping:
-the flux-adaptive rule adjusts $\Delta t$ over two orders of magnitude
-($10^{-6}$ to $10^{-4}$) to match instantaneous system activity, while the
-accept/reject mechanism is unable to increase $\tau$ beyond $10^{-6}$ without
-violating mass conservation, resulting in a 10$\times$ slowdown and incomplete
-coverage. Quantitative metrics are reported in Tables~7--9
+these benefits. The Oregonator provides two complementary illustrations. First,
+flux-based pruning keeps the active set compact ($|S| \leq 1{,}003$) because
+the flux criterion identifies and discards dynamically irrelevant states; the
+joint probability-and-derivative filter used by Krylov-FSP-SSA conservatively
+retains all states with significant positive derivative (expanding boundary
+states), causing the projection to grow to 13{,}294 states without bound.
+Second, $\Phi_{\mathrm{total}}$-based stepping adjusts $\Delta t$ from
+$1.4\times10^{-6}$ to $1.9\times10^{-5}$ to match instantaneous system
+activity, while the accept/reject mechanism is locked at $\tau \approx10^{-6}$
+because the large propensities cause mass loss for any larger step.
+The bottleneck system demonstrates the step-size control advantage: both methods
+retain $B{=}1$ (the joint filter keeps it since $p(B{=}1) \gg \texttt{droptol}$),
+but FP-FSP's fixed step $\delta t = 1/k_2$ keeps expansion pace-matched with
+the physical probability wavefront, yielding $\langle C \rangle = 4.978$
+($<0.1\%$ error), while Krylov-FSP-SSA's exponentially growing $\tau$ produces
+a 14-state projection that misses the wavefront, yielding $\langle C \rangle =
+0.12$ (40$\times$ error). Quantitative metrics are reported in
+Tables~7--9
 
 \medskip
 
@@ -222,14 +245,37 @@ coverage. Quantitative metrics are reported in Tables~7--9
 tolerances $(\alpha, \varepsilon_{\mathrm{flux}}, \varepsilon_{\Delta t})$
 across different types of models would be very valuable.}
 
-\textbf{Response:}
-% TODO: Parameter guidance table
+\textbf{Response:} We have added a parameter guidance table (Table~9 in the revised manuscript) and Remark~4.9 providing concrete parameter guidance.
+The table covers four qualitatively different system types (connectivity-critical, oscillatory, stiff autocatalytic, and bimodal/metastable), with the parameters used in the corresponding numerical experiments shown in parentheses for direct reference.
+Three practical rules emerge from the benchmark experience and the theoretical framework of Remark~4.8.
+
+\begin{itemize}
+  \item \textbf{$\varepsilon_{\Delta t}$:} Choose $\varepsilon_{\Delta t}\leq 1/\kappa$ so that depth-one expansion suffices (Corollary~4.7); for $\kappa\approx 1$ this permits $\varepsilon_{\Delta t}$ up to~$1$.
+  Reduce $\varepsilon_{\Delta t}$ to $0.01$--$0.1$ when a long integration horizon demands high accuracy, since local errors accumulate additively (Corollary~4.4).
+
+  \item \textbf{$\alpha$:} For connectivity-critical systems, $\alpha$ can be set aggressively ($0.7$--$0.9$) because the flux criterion rescues any misclassified connector states; the quantile filter then removes only the genuinely irrelevant tail.
+  Without bottlenecks, moderate values ($0.1$--$0.3$) avoid over-pruning.
+
+  \item \textbf{$\varepsilon_{\mathrm{flux}}$:} Set to zero for oscillatory or well-mixed systems where the active set is simply connected (a positive value would retain unnecessary states near the expanding boundary).
+  For bottleneck systems, match $\varepsilon_{\mathrm{flux}}$ to the expected relative flux of the connector state: $\varepsilon_{\mathrm{flux}}\sim p(s_b)\,w(s_b)/\Phi_{\mathrm{total}}$; in practice $10^{-12}$--$10^{-6}$ covers most cases.
+\end{itemize}
 
 %======================================================================
 \section*{Summary}
 %======================================================================
 
-% TODO: Write summary once all responses are complete
+We thank both referees for their continued careful reading. All outstanding concerns have been addressed.
+
+On the theoretical side, Referee~2's notational error in Eq.~(4.4) and the unjustified time-step inequality have been corrected, the relationship between the implemented renormalization and the compressed generator has been made explicit (Remark~3.3 / Section~3.2), and the availability of $w_{\max}$ at pruning time has been clarified (Corollary~4.5).
+
+On the empirical side, the new Section~5.6 provides a head-to-head comparison of the flux-adaptive FSP against the Krylov-FSP-SSA method on three benchmark systems, directly demonstrating the benefits of flux-based pruning (bottleneck system) and flux-adaptive time stepping (Oregonator). The corrected-parameter analysis of Section~5.7 confirms these advantages are not an artifact of parameter choice.
+
+In response to Referee~1's conceptual question, Remark~3.1 explains why total flux is the correct protection criterion: boundary outflux is approximately zero for genuine bottleneck states (because their transitions lead into the already-retained high-probability regions) and is in any case circular to compute during the pruning step.
+
+Finally, the new parameter guidance table and Remark~4.9 address Referee~2's request for parameter guidance, giving concrete recommended ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ across four qualitatively different model types, grounded in both theory and the benchmark experiments.
+
+\vspace{1em}
+\noindent Sincerely,\\[0.5em]
 
 \vspace{1em}
 \noindent Sincerely,\\[0.5em]

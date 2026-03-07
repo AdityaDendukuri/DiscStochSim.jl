@@ -7,23 +7,25 @@
 \contentsline {definition}{{Definition}{3.2}{Total system flux}}{5}{theorem.36}%
 \contentsline {proposition}{{Proposition}{3.3}{Total flux properties}}{6}{theorem.38}%
 \contentsline {proof}{{Proof}{1}{}}{6}{proof.40}%
-\contentsline {remark}{{Remark}{3.4}{}}{9}{theorem.91}%
-\contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{11}{theorem.112}%
-\contentsline {proof}{{Proof}{2}{}}{11}{proof.117}%
-\contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{12}{theorem.119}%
-\contentsline {proof}{{Proof}{3}{}}{12}{proof.120}%
-\contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{12}{theorem.122}%
-\contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{13}{theorem.127}%
-\contentsline {proof}{{Proof}{4}{}}{13}{proof.129}%
-\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{14}{theorem.137}%
-\contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{14}{theorem.140}%
-\contentsline {proof}{{Proof}{5}{}}{14}{proof.142}%
-\contentsline {corollary}{{Corollary}{4.7}{Combined flux and probability error control}}{14}{theorem.146}%
-\contentsline {proof}{{Proof}{6}{}}{15}{proof.148}%
-\contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{15}{theorem.151}%
-\contentsline {proof}{{Proof}{7}{}}{15}{proof.156}%
-\contentsline {remark}{{Remark}{4.9}{Max-propensity cap and depth-one guarantee}}{16}{theorem.160}%
-\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.162}%
-\contentsline {proof}{{Proof}{8}{}}{17}{proof.166}%
-\contentsline {remark}{{Remark}{4.11}{Expansion strategy and the depth-one regime}}{17}{theorem.167}%
-\contentsline {remark}{{Remark}{4.12}{Consistent parameter selection via spatial stiffness}}{17}{theorem.168}%
+\contentsline {remark}{{Remark}{3.4}{Total flux versus boundary outflux}}{8}{theorem.66}%
+\contentsline {remark}{{Remark}{3.5}{}}{9}{theorem.92}%
+\contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{11}{theorem.113}%
+\contentsline {proof}{{Proof}{2}{}}{11}{proof.118}%
+\contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{12}{theorem.120}%
+\contentsline {proof}{{Proof}{3}{}}{12}{proof.121}%
+\contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{12}{theorem.123}%
+\contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{13}{theorem.128}%
+\contentsline {proof}{{Proof}{4}{}}{13}{proof.130}%
+\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{14}{theorem.138}%
+\contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{14}{theorem.141}%
+\contentsline {proof}{{Proof}{5}{}}{14}{proof.143}%
+\contentsline {corollary}{{Corollary}{4.7}{Combined flux and probability error control}}{14}{theorem.147}%
+\contentsline {proof}{{Proof}{6}{}}{15}{proof.149}%
+\contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{15}{theorem.152}%
+\contentsline {proof}{{Proof}{7}{}}{16}{proof.157}%
+\contentsline {remark}{{Remark}{4.9}{Max-propensity cap and depth-one guarantee}}{16}{theorem.161}%
+\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.163}%
+\contentsline {proof}{{Proof}{8}{}}{17}{proof.167}%
+\contentsline {remark}{{Remark}{4.11}{Expansion strategy and the depth-one regime}}{17}{theorem.168}%
+\contentsline {remark}{{Remark}{4.12}{Consistent parameter selection via spatial stiffness}}{18}{theorem.169}%
+\contentsline {remark}{{Remark}{4.13}{Practical parameter selection}}{18}{theorem.171}%

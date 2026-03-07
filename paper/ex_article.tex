@@ -338,6 +338,17 @@ We propose a two-stage pruning approach that combines probability-based candidat
 
 Stage 1 identifies low-probability candidate states for removal based on the quantile threshold $\alpha$. Without this candidate selection, the method would need to evaluate flux for every state at every pruning step, incurring unnecessary computational cost when most high-probability states are never at risk of removal. The quantile filter focuses computational effort on the tail of the distribution where pruning decisions are nontrivial. Stage 2 protects states in $\mathcal{C}$ that carry significant flux relative to total system flux. Consider a bottleneck state $s_b$ connecting metastable regions as seen in Figure~\ref{fig:bottleneck}. Such states transmit substantial probability flow between regions despite low occupancy. Removing them degrades conductance, shrinks the spectral gap, and harms mixing. The flux tolerance $\epsilon_{\mathrm{flux}}$ controls the trade-off between compression and connectivity preservation. Stage 3 removes unprotected candidates and renormalizes the probability distribution to maintain unit total mass.
 
+\begin{remark}[Total flux versus boundary outflux]
+\label{rem:total-vs-boundary-flux}
+One might consider protecting states based on their \emph{boundary outflux}
+$\Phi_{\partial}(\boldsymbol{x},t):=p(\boldsymbol{x},t)\sum_{\boldsymbol{y}\in J'}\mathbf{A}_{\boldsymbol{y}\boldsymbol{x}}$
+---the rate at which probability leaves $\boldsymbol{x}$ to states outside the current active set---rather than total flux $\Phi(\boldsymbol{x},t)=p(\boldsymbol{x},t)w(\boldsymbol{x})$.
+Total flux is preferable for two reasons.
+First, genuine bottleneck states send their transitions primarily to high-probability metastable states already in $J$, so their boundary outflux is approximately zero; using boundary flux would \emph{fail} to protect them.
+Total flux $p(s_b)w(s_b)$ remains large because $w(s_b)$ is large: it measures the rate at which probability \emph{cycles through} $s_b$ regardless of where those transitions lead, which is precisely the signature of a fast-transit connector.
+Second, computing $\Phi_{\partial}$ requires knowing $J'$, which is determined by the pruning decision itself, creating a circular dependency. Total flux $p(\boldsymbol{x})\cdot(-\mathbf{A}_{\boldsymbol{x}\boldsymbol{x}})$ is a byproduct of the generator diagonal, available without any knowledge of the pruning outcome.
+\end{remark}
+
 
 \subsection{Adaptive Time Stepping}
 We now address the temporal aspect of stiffness discussed in Remark~\ref{rem:stiffness-challenges}. The time step must adapt to the system's instantaneous activity level to maintain both stability and efficiency. Our approach is inspired by tau-leaping methods for stochastic simulation \cite{Gillespie2001, CAO20083472}, which choose time steps based on propensity bounds to limit the expected number of events per step. The total system flux $\Phi_{\mathrm{total}}(\mathcal{S}_n, t_n)$ plays a role analogous to stiffness indicators in stiff ODE theory: quantities based on logarithmic norms of the Jacobian define a natural timescale for the fastest active processes \cite{Soderlind2015-ai}, and the total flux plays the same role for the truncated CME system. Since the rate of probability leaving the truncated domain is bounded above by $\Phi_{\mathrm{total}}$ (Corollary~\ref{cor:flux-timestep}), we choose the time step as
@@ -658,9 +669,9 @@ Having established the local error bound in Theorem~\ref{thm:local-model-error},
 
 \begin{corollary}[Combined flux and probability error control]
 \label{cor:local-error-pruning}
-Under flux-based pruning with probability tolerance $\alpha$ and flux tolerance $\epsilon_{\mathrm{flux}}$, the local error over $[t_n, t_{n+1}]$ satisfies
+Under flux-based pruning with probability tolerance $\alpha$ and flux tolerance $\epsilon_{\mathrm{flux}}$, the local error over $[t_n, t_{n+1}]$ satisfies, to leading order in $\Delta t_n$,
 \begin{equation}
-\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq (\epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}(t_n) + \alpha \cdot w_{\max}) \cdot \Delta t_n,
+\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim (\epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}(t_n) + \alpha \cdot w_{\max}) \cdot \Delta t_n,
 \end{equation}
 where $w_{\max} = \max_{x \in \mathcal{S}_{\mathrm{prune}}} w(x)$ is the maximum exit rate among pruned states. Crucially, $w_{\max}$ is computable at pruning time: Algorithm~\ref{alg:flux-prune} evaluates $w(\boldsymbol{x})$ for every state in the active set $\mathcal{S}$ (Step~7) \emph{before} any states are removed, so $w_{\max}$ is obtained as a byproduct by recording $\max_{\boldsymbol{x} \in \mathcal{C}} w(\boldsymbol{x})$ over the candidate set $\mathcal{C} \supseteq \mathcal{S}_{\mathrm{prune}}$.
 \end{corollary}
@@ -685,21 +696,24 @@ This bound separates the two error sources controlled by the algorithm. The firs
 Let $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n) \geq 1$ denote the \emph{spatial stiffness ratio}, where $\lambda_{\max}(J_n,t_n) := \max_{\boldsymbol{x}\in J_n} w(\boldsymbol{x})$ and $\Phi_{\mathrm{total}}(J_n,t_n) = \sum_{\boldsymbol{x}\in J_n}p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})$.
 Two time-step rules control the local model error within tolerance $\epsilon_{\Delta t}>0$:
 \begin{enumerate}[(i)]
-\item \textbf{Total-flux rule:}
+\item \textbf{Total-flux rule (recommended):}
 \begin{equation}
 \label{eq:dt-total}
 \Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n, t_n)}.
 \end{equation}
-This guarantees $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \epsilon_{\Delta t}$, with expansion factor $\mu_n := \lambda_{\max}\,\Delta t_n = \kappa_n\,\epsilon_{\Delta t}$.
-\item \textbf{Maximum-flux rule:} Let $\Phi_{\max}(J_n,t_n) := \max_{\boldsymbol{x}\in J_n}\{p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})\}$.
+This guarantees $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \epsilon_{\Delta t}$ to leading order in $\Delta t_n$, with expansion factor $\mu_n := \lambda_{\max}\,\Delta t_n = \kappa_n\,\epsilon_{\Delta t}$.
+\item \textbf{Maximum-flux rule (concentrated distributions only):} Let $\Phi_{\max}(J_n,t_n) := \max_{\boldsymbol{x}\in J_n}\{p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})\}$ and define the \emph{concentration ratio} $\eta_n := \Phi_{\mathrm{total}}/\Phi_{\max} \geq 1$.
 \begin{equation}
 \label{eq:dt-max}
 \Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\max}(J_n, t_n)}.
 \end{equation}
-Since $\Phi_{\max} \leq \Phi_{\mathrm{total}}$, this gives $\Delta t_n \geq \Delta t_n^{\mathrm{tot}}$.
-The error satisfies $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \eta_n\,\epsilon_{\Delta t}$ where $\eta_n = \Phi_{\mathrm{total}}/\Phi_{\max} \geq 1$, and the expansion factor is $\mu_n = (\lambda_{\max}/\Phi_{\max})\,\epsilon_{\Delta t}$.
+Since $\Phi_{\max} \leq \Phi_{\mathrm{total}}$, this step is larger than rule~(i) by factor $\eta_n$.
+The error satisfies $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \eta_n\,\epsilon_{\Delta t}$ to leading order in $\Delta t_n$, and the expansion factor is $\mu_n = (\lambda_{\max}/\Phi_{\max})\,\epsilon_{\Delta t}$.
 The condition $\mu_n \leq 1$ (depth-one sufficiency, Corollary~\ref{cor:expansion-depth}) holds if and only if $\epsilon_{\Delta t} \leq \Phi_{\max}/\lambda_{\max}$.
-When the distribution is concentrated ($\eta_n \approx 1$), both rules yield comparable steps and the error overhead of the maximum-flux rule is negligible.
+When the distribution is concentrated ($\eta_n \approx 1$, e.g., systems with conservation laws that confine probability to a narrow stoichiometric manifold), both rules yield comparable steps and the error overhead is negligible.
+\textbf{Caution:} When $\eta_n \gg 1$ (spread distributions), the max-flux step $\Delta t_n^{\max} = \eta_n\,\Delta t_n^{\mathrm{tot}}$ is much larger than the total-flux step, and the leading-order bound grows as $\eta_n\,\epsilon_{\Delta t}$.
+For oscillatory systems (e.g., the Oregonator), the distribution spreads widely during autocatalytic bursts---probability is distributed across $O(|\mathcal{S}|)$ states, so $\eta_n \gg 1$---and the max-flux rule takes steps that the depth-one boundary expansion cannot track, causing the wavefront to escape the active set and the solution to collapse.
+The total-flux rule~(i) is free of this failure mode and is the recommended default.
 \end{enumerate}
 \end{corollary}
 
@@ -799,9 +813,9 @@ In systems where $\kappa_n$ varies across the state space---one dominant channel
 Corollaries~\ref{cor:local-error-pruning}, \ref{cor:flux-timestep}, and~\ref{cor:expansion-depth} and Remarks~\ref{rem:max-propensity-cap} and~\ref{rem:expansion-strategy} provide a self-consistent framework for parameter selection, governed by the spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$:
 \begin{itemize}
   \item \textbf{Time step} (three options in increasing aggressiveness):
-    total-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (exact error $\varepsilon_{\Delta t}$, $\mu=\kappa\,\varepsilon_{\Delta t}$);
-    max-propensity cap $\Delta t = \min(\varepsilon_{\Delta t}/\Phi_{\mathrm{total}},\,1/\lambda_{\max})$ (error $\leq\min(\varepsilon_{\Delta t},1/\kappa)$, always $\mu\leq 1$);
-    maximum-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\max}$ (error $\leq\eta\,\varepsilon_{\Delta t}$, $\mu\leq 1$ when $\varepsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$)
+    total-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (leading-order error $\lesssim\varepsilon_{\Delta t}$, $\mu=\kappa\,\varepsilon_{\Delta t}$; \textbf{recommended});
+    max-propensity cap $\Delta t = \min(\varepsilon_{\Delta t}/\Phi_{\mathrm{total}},\,1/\lambda_{\max})$ (error $\lesssim\min(\varepsilon_{\Delta t},1/\kappa)$, always $\mu\leq 1$);
+    maximum-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\max}$ (error $\lesssim\eta\,\varepsilon_{\Delta t}$, $\mu\leq 1$ when $\varepsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$; valid only when $\eta_n\approx 1$, otherwise risks solution collapse for spread distributions)
     \hfill (Corollary~\ref{cor:flux-timestep}, Remark~\ref{rem:max-propensity-cap}),
   \item \textbf{Expansion depth and strategy:} use $d_{\min}=\lceil\kappa\,\varepsilon_{\Delta t}\rceil$ with stoichiometric expansion under the total-flux rule; reduce to $d_{\min}=1$ via the cap or maximum-flux rule, choosing SSA expansion when $\kappa\approx 1$ (one dominant channel) and stoichiometric expansion when $\kappa>1$ \hfill (Corollary~\ref{cor:expansion-depth}, Remark~\ref{rem:expansion-strategy}),
   \item \textbf{Flux tolerance:} $\varepsilon_{\mathrm{flux}} \ll \varepsilon_{\Delta t}$, e.g., $\varepsilon_{\mathrm{flux}} = \varepsilon_{\Delta t}/w_{\max}$ \hfill (Corollary~\ref{cor:local-error-pruning}).
@@ -809,6 +823,37 @@ Corollaries~\ref{cor:local-error-pruning}, \ref{cor:flux-timestep}, and~\ref{cor
 In the bottleneck example of Section~\ref{sec:results}, $\kappa\approx k_2/k_1=10^5$ early in the simulation: the total-flux rule alone would require $d_{\min}\approx 10^5$, but the max-propensity cap enforces $\Delta t\leq 1/\lambda_{\max}=1/k_2$, reducing $d_{\min}$ to 1 while delivering local error $1/\kappa\ll\varepsilon_{\Delta t}$.
 The maximum-flux rule is advantageous for spatially stiff systems with concentrated distributions ($\kappa\gg 1$, $\eta\approx 1$): it takes larger steps than the total-flux rule while automatically maintaining $d=1$ when $\varepsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$.
 
+\end{remark}
+
+\begin{table}[!htbp]
+\centering
+\caption{Recommended parameter ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ by system type. Values in parentheses are the parameters used in the corresponding numerical experiment of Section~\ref{sec:results}. The spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$ is computable at each step.}
+\label{tab:param_guidance}
+\begin{tabular}{lcccp{4.2cm}}
+\hline
+\textbf{System type} & $\alpha$ & $\varepsilon_{\mathrm{flux}}$ & $\varepsilon_{\Delta t}$ & \textbf{Key driver} \\
+\hline
+Connectivity-critical (bottleneck) & $0.7$--$0.9$ ($0.9$) & $10^{-12}$--$10^{-6}$ ($10^{-12}$) & cap: $1/\lambda_{\max}$ & Flux protection essential; aggressive $\alpha$ safe \\
+Oscillatory / limit cycle (Oregonator) & $0.1$--$0.3$ ($0.1$) & $0$ ($0$) & $0.5$--$2$ ($1$) & No bottlenecks; zero flux tolerance prevents over-protection \\
+Stiff autocatalytic (Robertson) & $0.3$--$0.5$ ($0.4$) & $10^{-9}$ ($10^{-9}$) & $0.01$--$0.1$ ($0.01$) & Long horizon; small $\varepsilon_{\Delta t}$ limits error accumulation \\
+Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $10^{-8}$--$10^{-6}$ ($10^{-7}$) & $0.1$--$0.5$ & Protect transition-path connectors \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{remark}[Practical parameter selection]
+\label{rem:param-guidance}
+Table~\ref{tab:param_guidance} summarises concrete recommendations complementing the theoretical framework of Remark~\ref{rem:consistent-params}.
+Three rules of thumb emerge.
+
+\textbf{$\varepsilon_{\Delta t}$:} Choose $\varepsilon_{\Delta t}\leq 1/\kappa$ so that depth-one expansion suffices (Corollary~\ref{cor:expansion-depth}); for $\kappa\approx 1$ this permits $\varepsilon_{\Delta t}$ up to~1.
+Reduce $\varepsilon_{\Delta t}$ (to $0.01$--$0.1$) when a long integration horizon demands high accuracy, since local errors accumulate additively (Corollary~\ref{cor:global-error}).
+
+\textbf{$\alpha$:} For systems with connectivity bottlenecks, $\alpha$ can be set aggressively ($0.7$--$0.9$) because the flux criterion rescues any misclassified connector states; the quantile filter then removes only the genuinely irrelevant probability tail.
+Without bottlenecks, moderate values ($0.1$--$0.3$) avoid over-pruning.
+
+\textbf{$\varepsilon_{\mathrm{flux}}$:} Set to zero for oscillatory or well-mixed systems where the active set is simply connected and no low-probability connector states need protection (a positive value would retain unnecessary states near the expanding boundary).
+For bottleneck systems, match $\varepsilon_{\mathrm{flux}}$ to the expected relative flux of the connector state, $\varepsilon_{\mathrm{flux}}\sim p(s_b)\,w(s_b)/\Phi_{\mathrm{total}}$; in practice $10^{-12}$--$10^{-6}$ covers most cases.
 \end{remark}
 
 
@@ -1128,11 +1173,11 @@ Toggle switch & 364 & 37 & 9.8$\times$ \\
 \subsection{Comparison with Krylov-FSP-SSA}
 \label{sec:comparison}
 
-To contextualize the flux-based adaptive FSP against existing methods, we compare with the Krylov-FSP-SSA algorithm of Vo and Sidje~\cite{Sidje2015}, reviewed in detail by Dinh and Sidje~\cite{Dinh2016}. This baseline shares the same expand--evolve--prune skeleton and Krylov matrix exponential integrator but differs in three key respects: (i) pruning uses a hard probability threshold with no flux protection, (ii) time stepping uses a mass-conservation accept/reject criterion (halving $\tau$ when the retained probability mass falls below $1 - \varepsilon$) rather than the flux-adaptive rule $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$, and (iii) expansion is SSA-driven with $r$-step reachability enumeration. These differences isolate the effect of flux-aware pruning and flux-adaptive time stepping on the three benchmark systems.
+To contextualize the flux-based adaptive FSP against existing methods, we compare with the Krylov-FSP-SSA algorithm of Vo and Sidje~\cite{Sidje2015}, reviewed in detail by Dinh and Sidje~\cite{Dinh2016}. This baseline shares the same expand--evolve--prune skeleton and Krylov matrix exponential integrator but differs in three key respects: (i) pruning uses a joint probability-and-derivative threshold (Algorithm~2, Step~7 of~\cite{VoSidje2016}: state $i$ is dropped only if $p_i < \texttt{droptol}$ \emph{and} $(\mathbf{A}\boldsymbol{p})_i < \texttt{droptol}'$, without any flux-based protection), (ii) time stepping uses a mass-conservation accept/reject criterion (halving $\tau$ when the retained probability mass falls below $1 - \varepsilon_{\mathrm{FSP}}(t+\tau)/t_f$) rather than the flux-adaptive rule $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$, and (iii) expansion is SSA-driven with $r$-step reachability enumeration. These differences isolate the effect of flux-aware pruning and flux-adaptive time stepping on the three benchmark systems.
 
 \paragraph{Oregonator.}
 Table~\ref{tab:comparison_oregonator} and Figure~\ref{fig:oregonator_comparison} compare the two methods on the Oregonator system over $[0, 0.11]$.
-The flux-based adaptive FSP completes the simulation in 33\,s using 26 snapshots with a maximum active set of 1{,}003 states, while the Krylov-FSP-SSA method, using a fixed step $\tau = 10^{-6}$ (the largest step that avoids numerical overflow in the Krylov exponential), reaches only $t = 0.003$ (2.7\% of the time horizon) after 3{,}000 iterations and 74\,s of wall time, with an active set that grows to 13{,}294 states. The state space explosion (panel~(a)) arises because the probability-only pruning threshold ($\varepsilon = 10^{-2}$) retains many states with small probability that the flux-based rule would prune, while failing to identify the dynamically essential boundary states. The time step comparison (panel~(b)) illustrates the core advantage of flux-adaptive stepping: the adaptive FSP adjusts $\Delta t$ from $1.4\times10^{-6}$ to $1.9\times10^{-5}$ in response to the instantaneous total flux, whereas the Krylov-FSP-SSA method is locked at $\tau = 10^{-6}$ because larger steps cause mass loss exceeding the tolerance.
+The flux-based adaptive FSP completes the simulation in 33\,s using 26 snapshots with a maximum active set of 1{,}003 states, while the Krylov-FSP-SSA method, using a fixed step $\tau = 10^{-6}$ (the largest step that avoids numerical overflow in the Krylov exponential), reaches only $t = 0.003$ (2.7\% of the time horizon) after 3{,}000 iterations and 74\,s of wall time, with an active set that grows to 13{,}294 states. The state space explosion (panel~(a)) arises because each of the 3{,}000 small-$\tau$ SSA expansions adds new states, and the joint probability-and-derivative filter conservatively retains states with significant positive derivative $(\mathbf{A}\boldsymbol{p})_i \geq \texttt{droptol}'$ even when $p_i$ is small---these are precisely the expanding boundary states that accumulate at each expansion step. Without a flux-based criterion to identify and discard dynamically irrelevant regions, the active set grows monotonically. The time step comparison (panel~(b)) illustrates the core advantage of flux-adaptive stepping: the adaptive FSP adjusts $\Delta t$ from $1.4\times10^{-6}$ to $1.9\times10^{-5}$ in response to the instantaneous total flux, whereas the Krylov-FSP-SSA method is locked at $\tau = 10^{-6}$ because larger steps cause mass loss exceeding the tolerance.
 
 \begin{table}[!htbp]
 \centering
@@ -1193,7 +1238,7 @@ $B{=}1$ retained & Yes & Yes \\
 \paragraph{Robertson.}
 Table~\ref{tab:comparison_robertson} and Figure~\ref{fig:robertson_comparison} compare the time-stepping behaviour on the Robertson system ($A \to B$, $2B \to C+B$, $C+B \to A+C$; $k_1 = 0.04$, $k_2 = 3\times10^6$, $k_3 = 1$, $A_0 = 10{,}000$, $B_0 = C_0 = 0$) over $[0, 10^4]$. This system is deterministically stiff ($k_2 \gg k_1, k_3$), and the stochastic dynamics proceed through repeated discrete autocatalytic burst events.
 
-For FP-FSP, the maximum-flux time step $\delta t = \varepsilon_{\Delta t}/\max_i \Phi_i$ tracks the most active state in the truncated system. The resulting $\delta t$ profile is non-monotonic and reflects the stochastic burst-and-relax structure: within each burst cycle, $\delta t$ drops sharply as probability concentrates onto high-flux states during an autocatalytic event, then rises as the burst dissipates and $A$ continues to deplete. The peak $\delta t \approx 0.026$ is reached during the long equilibration phase ($t \gtrsim 3{,}000$), when the dominant flux $k_1 A(t)$ has fallen to a few tens (Figure~\ref{fig:robertson_comparison}a). FP-FSP completes $t_f = 10^4$ in $662{,}472$ steps ($1{,}117$\,s) with a state space of $50$--$2{,}400$ states, reaching $\langle A \rangle = 507$, $\langle C \rangle = 9{,}493$, $|\mathcal{S}| = 442$ at $t_f$.
+For FP-FSP, the total-flux time step $\delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ tracks the instantaneous mean system activity. Robertson's conservation law ($A+B+C=10{,}000$) confines the distribution to a narrow stoichiometric manifold, keeping the concentration ratio $\eta_n = \Phi_{\mathrm{total}}/\Phi_{\max} \approx 1$ throughout: the total-flux and maximum-flux rules give comparable steps in this system. The resulting $\delta t$ profile is non-monotonic and reflects the stochastic burst-and-relax structure: within each burst cycle, $\delta t$ drops sharply as probability concentrates onto high-flux states during an autocatalytic event, then rises as the burst dissipates and $A$ continues to deplete. The peak $\delta t \approx 0.026$ is reached during the long equilibration phase ($t \gtrsim 3{,}000$), when the dominant flux $k_1 A(t)$ has fallen to a few tens (Figure~\ref{fig:robertson_comparison}a). FP-FSP completes $t_f = 10^4$ in $662{,}472$ steps ($1{,}117$\,s) with a state space of $50$--$2{,}400$ states, reaching $\langle A \rangle = 507$, $\langle C \rangle = 9{,}493$, $|\mathcal{S}| = 442$ at $t_f$.
 
 For Krylov-FSP-SSA, we use the absorbing-form generator required by Algorithm~2 of~\cite{VoSidje2016}: the diagonal includes all outgoing propensities, so probability that would exit the truncated set $\mathcal{S}$ is absorbed into a sink and $\sum w < 1$ whenever the boundary is active. The extreme stiffness of $k_2 = 3\times10^6$ locks $\tau$ through two coupled mechanisms. First, any step large enough to expose the projection boundary at high-$k_2$ states triggers the FSP mass-loss criterion, forcing $\tau$ to halve. Second, the large negative diagonal entries ($\approx -k_2$ at $B{=}2$ states) cause numerical overflow in the Krylov matrix exponential for steps beyond $\tau \approx k_2^{-1} = 3\times10^{-7}$, which is caught by the NaN/Inf guard and also results in $\tau$ halving. Together these mechanisms lock $\tau$ in the range $[3\times10^{-4},\, 3\times10^{-3}]$, producing a $67\%$ rejection rate. In $500$ iterations ($1.92$\,s), Krylov-FSP-SSA advances only to $t = 227.8$ ($2.3\%$ of $t_f$) and does not complete the horizon.
 
@@ -1224,7 +1269,7 @@ $|\mathcal{S}|$ at $t_f$ & $442$ & $\sim\!1{,}000$ (at $t{=}228$) \\
 \end{figure}
 
 \paragraph{Summary.}
-The comparison reveals clearly complementary strengths rooted in different algorithmic choices about step-size control and pruning. On the oscillatory Oregonator, flux-adaptive time stepping provides a decisive advantage: FP-FSP scales $\delta t$ to the instantaneous activity level and maintains a compact state space via flux-based pruning, while Krylov-FSP-SSA is locked at $\tau \approx 10^{-6}$ by mass-conservation failures and cannot complete $t_f = 0.11$. On the bottleneck system, FP-FSP with a fixed step $\delta t = 1/k_2 = 10$\,s keeps the depth-1 expansion pace-matched with the probability wavefront; Krylov-FSP-SSA's exponentially growing $\tau$ produces a 14-state projection that underestimates $\langle C \rangle$ by 40$\times$, with no FSP rejection signal because the missing-row truncation does not reduce $\sum w$ within the truncated system. On Robertson, the stiffness of $k_2 = 3\times10^6$ affects the methods differently. FP-FSP's maximum-flux time step tracks the most active state through repeated autocatalytic burst cycles, with $\delta t$ non-monotonic and peaking at ${\approx}0.026$ during equilibration; FP-FSP completes $t_f = 10^4$ in $662{,}472$ steps ($1{,}117$\,s). Krylov-FSP-SSA with the correct absorbing-form generator is $\tau$-locked by the stiff $k_2$ propensity, reaching only $t = 228$ ($2.3\%$ of $t_f$) in $500$ iterations.
+The comparison reveals clearly complementary strengths rooted in different algorithmic choices about step-size control and pruning. On the oscillatory Oregonator, flux-adaptive time stepping provides a decisive advantage: FP-FSP scales $\delta t$ to the instantaneous activity level and maintains a compact state space via flux-based pruning, while Krylov-FSP-SSA is locked at $\tau \approx 10^{-6}$ by mass-conservation failures and cannot complete $t_f = 0.11$. On the bottleneck system, FP-FSP with a fixed step $\delta t = 1/k_2 = 10$\,s keeps the depth-1 expansion pace-matched with the probability wavefront; Krylov-FSP-SSA's exponentially growing $\tau$ produces a 14-state projection that underestimates $\langle C \rangle$ by 40$\times$, with no FSP rejection signal because the missing-row truncation does not reduce $\sum w$ within the truncated system. On Robertson, the stiffness of $k_2 = 3\times10^6$ affects the methods differently. FP-FSP's total-flux time step tracks the instantaneous mean system activity through repeated autocatalytic burst cycles (with $\eta_n\approx 1$ throughout due to the conservation law, so the total-flux and maximum-flux rules give comparable steps), with $\delta t$ non-monotonic and peaking at ${\approx}0.026$ during equilibration; FP-FSP completes $t_f = 10^4$ in $662{,}472$ steps ($1{,}117$\,s). Krylov-FSP-SSA with the correct absorbing-form generator is $\tau$-locked by the stiff $k_2$ propensity, reaching only $t = 228$ ($2.3\%$ of $t_f$) in $500$ iterations.
 
 \subsection{Efficiency Under Corrected Krylov-FSP-SSA Parameters}
 \label{subsec:corrected_efficiency}
@@ -1239,7 +1284,7 @@ The faithful implementation (Algorithm~2 of~\cite{VoSidje2016}) correctly retain
 
 Empirically, tuning $(\varepsilon, \tau, r)$ over a wide range (Table~\ref{tab:corrected_efficiency}) achieves at best $\langle C \rangle \approx 4.72$ ($\sim$5\% error) at comparable wall time to FP-FSP---which achieves ${<}0.1\%$ error under default parameters. The flux-based method avoids this conflict because FP-FSP uses a fixed step $\delta t = 1/k_2 = 10$\,s, and the exit-flux criterion retains wavefront states regardless of their probability because their outgoing flux $k_2 p(B{=}1, C{=}c)$ is large relative to the total system flux.
 
-\textbf{Robertson ($t_f = 10^4$).} With the correct absorbing-form generator (Algorithm~2 of~\cite{VoSidje2016}), Krylov-FSP-SSA does not complete $t_f = 10^4$. The stiffness of $k_2 = 3\times10^6$ locks $\tau$ in $[3\times10^{-4},\, 3\times10^{-3}]$ via FSP mass-loss violations and numerical overflow in the Krylov matrix exponential at $B{\geq}2$ states; the method reaches only $t = 227.8$ ($2.3\%$) in $500$ iterations ($1.9$\,s). FP-FSP completes $t_f$ in $662{,}472$ steps ($1{,}117$\,s); the maximum-flux time step tracks stochastic burst events, peaking at $\delta t \approx 0.026$. On Robertson, FP-FSP is the only method that completes the simulation.
+\textbf{Robertson ($t_f = 10^4$).} With the correct absorbing-form generator (Algorithm~2 of~\cite{VoSidje2016}), Krylov-FSP-SSA does not complete $t_f = 10^4$. The stiffness of $k_2 = 3\times10^6$ locks $\tau$ in $[3\times10^{-4},\, 3\times10^{-3}]$ via FSP mass-loss violations and numerical overflow in the Krylov matrix exponential at $B{\geq}2$ states; the method reaches only $t = 227.8$ ($2.3\%$) in $500$ iterations ($1.9$\,s). FP-FSP completes $t_f$ in $662{,}472$ steps ($1{,}117$\,s); the total-flux time step tracks stochastic burst events, peaking at $\delta t \approx 0.026$. On Robertson, FP-FSP is the only method that completes the simulation.
 
 \begin{table}[!htbp]
 \centering
