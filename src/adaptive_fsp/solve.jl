@@ -14,10 +14,15 @@ Algorithm parameters for the adaptive Finite State Projection method.
   `:stoich` adds all stoichiometric neighbors (`expand!`); `:ssa` adds one
   SSA-sampled successor per state (`expand_ssa!`). Use `:ssa` for oscillatory
   systems (e.g. Oregonator) where `:stoich` inflates the state space.
+- `dt_max::Float64 = Inf`: Hard upper bound on the time step. Required for
+  slow-start systems where `Φ_total → 0` at `t=0` (e.g. the Bottleneck system
+  with tiny initial flux), which would otherwise produce a single giant step
+  that the depth-1 expansion cannot contain. Set `dt_max ≈ 1/λ_downstream`
+  where `λ_downstream` is the rate of the fast downstream reaction.
 
 ## Time-step formula
 
-    dt = min(ε_dt / Φ_total,  tf - t)
+    dt = min(ε_dt / Φ_total,  dt_max,  tf - t)
 
 where `Φ_total = Σᵢ pᵢ·wᵢ` is the total probability-weighted outflux.
 With `ε_dt = 1.0` (the default), this gives approximately one expected
@@ -31,6 +36,11 @@ Base.@kwdef struct AdaptiveFSP
     save_interval::Int = 1000
     max_iter::Int = typemax(Int)
     expand_method::Symbol = :stoich
+    dt_max::Float64 = Inf
+    # Optional progress callback: called every save_interval steps with
+    # (t_current, t_log, mean_trajectory_matrix).  Use terminal_progress()
+    # to get a live UnicodePlots display in the terminal.
+    progress_callback = nothing
     # Deprecated: flux_method no longer used; dt = ε_dt/Φ_total always.
     # Retained for backward compatibility with existing call sites.
     flux_method::Symbol = :total
@@ -112,11 +122,11 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         A_old = A
         gids_old = get_global_ids(sp)
 
-        # 3) Adaptive time step: dt = ε_dt / Φ_total  (~1 reaction per step at ε_dt=1)
+        # 3) Adaptive time step: dt = min(ε_dt/Φ_total, dt_max)
         out_flux = Vector(-out_flow * sp.probs)
         Φ_total  = sum(out_flux)
-        dt = Φ_total > 0 ? alg.ε_dt / Φ_total : (tf - t)
-        dt = min(dt, tf - t)
+        dt_flux  = Φ_total > 0 ? alg.ε_dt / Φ_total : (tf - t)
+        dt = min(dt_flux, alg.dt_max, tf - t)
 
         # 4) Propagate probability (subcycle if dt*||A||_1 is too large)
             sp.probs = expv(dt, A, sp.probs)
@@ -140,6 +150,10 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
             push!(sol_snaps, (copy(sp.states), copy(sp.probs)))
             push!(sol_sizes, length(sp))
             @info "t = $(round(t; sigdigits=4)), |S| = $(length(sp)), dt = $(round(dt; sigdigits=3))"
+            if !isnothing(alg.progress_callback)
+                partial = FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
+                alg.progress_callback(t, sol_t, mean_trajectory(partial))
+            end
         end
     end
 

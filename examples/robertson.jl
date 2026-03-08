@@ -12,10 +12,13 @@ rates = [0.04, 3e6, 1.0]
 prob = FSPProblem(rn, CartesianIndex(10_000, 0, 0), (0.0, 1e4), rates;
                   bounds=(0, 100_001))
 
+cb = terminal_progress(["A", "1000×B", "C"]; tf=1e4, xscale=:log10,
+                       transform = m -> (m2 = copy(m); m2[:,2] .*= 10000; m2))
 t_wall_start = time()
 sol, diag = solve(prob, AdaptiveFSP(ε_dt=1.0, prob_quantile=0.4, flux_tolerance=1e-9,
                                     save_interval=1000,
-                                    expand_method=:stoich))
+                                    expand_method=:stoich,
+                                    progress_callback=cb))
 t_wall = time() - t_wall_start
 
 traj = mean_trajectory(sol)

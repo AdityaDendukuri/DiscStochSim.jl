@@ -5,6 +5,7 @@ using SparseArrays
 using LinearAlgebra
 using ExponentialUtilities
 using Expokit
+using UnicodePlots
 import CommonSolve
 
 # Core types
@@ -18,6 +19,7 @@ include("adaptive_fsp/problem.jl")
 include("adaptive_fsp/solution.jl")
 include("adaptive_fsp/solve.jl")
 include("adaptive_fsp/krylov_fsp.jl")
+include("adaptive_fsp/terminal_progress.jl")
 
 # Exports
 export DiscreteStochasticSystem
@@ -27,6 +29,6 @@ export build_generator, reconstruct_generator
 export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, KrylovFSPDiagnostics, prune_threshold!
 using CommonSolve: solve
 export solve
-export mean_trajectory, marginal
+export mean_trajectory, marginal, terminal_progress
 
 end
