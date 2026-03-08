@@ -1,0 +1,50 @@
+This is BibTeX, Version 0.99d (TeX Live 2022/dev/Debian)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: ex_article.aux
+The style file: siamplain.bst
+Database file #1: references.bib
+Warning--I didn't find a database entry for "VoSidje2016"
+Warning--empty booktitle in Burrage2006AKF
+Warning--empty booktitle in Sidje2015
+You've used 36 entries,
+            2244 wiz_defined-function locations,
+            838 strings with 11453 characters,
+and the built_in function-call counts, 14031 in all, are:
+= -- 1302
+> -- 475
+< -- 0
++ -- 194
+- -- 151
+* -- 1021
+:= -- 1909
+add.period$ -- 42
+call.type$ -- 36
+change.case$ -- 180
+chr.to.int$ -- 0
+cite$ -- 38
+duplicate$ -- 818
+empty$ -- 1288
+format.name$ -- 151
+if$ -- 3215
+int.to.chr$ -- 0
+int.to.str$ -- 36
+missing$ -- 37
+newline$ -- 117
+num.names$ -- 74
+pop$ -- 265
+preamble$ -- 1
+purify$ -- 147
+quote$ -- 0
+skip$ -- 638
+stack$ -- 0
+substring$ -- 880
+swap$ -- 338
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 138
+warning$ -- 2
+while$ -- 128
+width$ -- 38
+write$ -- 372
+(There were 3 warnings)
