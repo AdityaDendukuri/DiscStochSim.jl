@@ -1,49 +1,63 @@
-"""
-    terminal_progress(species_names; tf=nothing, height=15, width=70, title="FSP progress",
-                      xscale=:linear, transform=identity)
+# Helper: render two plot strings side by side in the terminal.
+function _side_by_side(str1::String, str2::String, sep::String="  ")
+    lines1 = split(str1, '\n')
+    lines2 = split(str2, '\n')
+    # Drop trailing blank lines
+    while !isempty(lines1) && isempty(strip(last(lines1))); pop!(lines1); end
+    while !isempty(lines2) && isempty(strip(last(lines2))); pop!(lines2); end
+    n  = max(length(lines1), length(lines2))
+    w1 = isempty(lines1) ? 0 : maximum(length.(lines1))
+    while length(lines1) < n; push!(lines1, ""); end
+    while length(lines2) < n; push!(lines2, ""); end
+    join([rpad(l1, w1) * sep * l2 for (l1, l2) in zip(lines1, lines2)], '\n')
+end
 
-Return a progress callback for `AdaptiveFSP` that renders a live
-`UnicodePlots` line plot of mean species trajectories in the terminal,
-refreshing in-place on every snapshot.
+"""
+    terminal_progress(species_names; tf=nothing, height=7, width=70,
+                      title="FSP progress", xscale=:linear, transform=identity)
+
+Return a progress callback for `AdaptiveFSP` that renders a live 2×2 grid of plots:
+
+- **Top-left**: mean species trajectories E[X]
+- **Top-right**: state space size |S|
+- **Bottom-left**: time step dt
+- **Bottom-right**: total flux Φ_total
+
+All panels share the same x-axis (simulation time, optionally log-scaled).
 
 # Usage
 ```julia
-cb = terminal_progress(["A", "B", "C"]; tf=1e4)
+cb = terminal_progress(["A", "B", "C"]; tf=1e4, xscale=:log10)
 sol, diag = solve(prob, AdaptiveFSP(save_interval=500, progress_callback=cb))
 ```
 
-Set `xscale=:log10` for systems with large time horizons (e.g. Robertson, Bottleneck)
-where dynamics span many orders of magnitude.
+Set `xscale=:log10` for systems with large time horizons (Robertson, Bottleneck).
 
-Use `transform` to pre-process the trajectory matrix (n_snaps × n_species) before
-plotting — useful for rescaling species with very different magnitudes:
+Use `transform` to pre-process the trajectory matrix before plotting — useful for
+rescaling species with very different magnitudes:
 
 ```julia
-# Show 1000×B so the transient spike is visible alongside A and C
 cb = terminal_progress(["A", "1000×B", "C"]; tf=1e4, xscale=:log10,
                        transform = m -> (m2 = copy(m); m2[:,2] .*= 1000; m2))
 ```
-
-The plot is updated every `save_interval` iterations.  Press Ctrl-C to
-abort early; the partial solution is not returned in that case.
 """
 function terminal_progress(species_names::AbstractVector{<:AbstractString};
-                            tf=nothing, height::Int=15, width::Int=70,
+                            tf=nothing, height::Int=7, width::Int=70,
                             title::String="FSP progress",
                             xscale::Symbol=:linear,
                             transform=identity)
     prev_nlines = Ref(0)
 
-    function callback(t_now, t_log, traj)
-        # Erase the previous plot by moving cursor up and clearing to end
+    function callback(t_now, t_log, traj, extra=nothing)
+        # Erase the previous frame
         if prev_nlines[] > 0
             print(stdout, "\e[$(prev_nlines[])A\e[0J")
         end
 
-        n = length(t_log)
+        n    = length(t_log)
         n_sp = length(species_names)
+
         if n < 2
-            # Not enough data yet — print a placeholder
             msg = "  Waiting for first snapshot…  (t=$(round(t_now; sigdigits=3)))\n"
             print(stdout, msg)
             prev_nlines[] = 1
@@ -51,23 +65,30 @@ function terminal_progress(species_names::AbstractVector{<:AbstractString};
             return
         end
 
-        # Optionally transform x-axis to log10, filtering t=0
+        # --- x-axis transform (shared by all panels) ---
+        pct_str = tf !== nothing ? "  $(round(100*t_now/tf; digits=1))% of tf=$(round(tf; sigdigits=3))" : ""
         if xscale === :log10
-            mask = t_log .> 0
-            xs   = log10.(t_log[mask])
-            ys   = traj[mask, :]
-            xlbl_base = tf !== nothing ?
-                "log₁₀(t)  ($(round(100*t_now/tf; digits=1))% of tf=$(round(tf; sigdigits=3)))" :
-                "log₁₀(t)"
+            # Snapshot x (for traj panel)
+            smask = t_log .> 0
+            xs_snap = log10.(t_log[smask])
+            ys_snap = traj[smask, :]
+            xlbl    = "log₁₀(t)$pct_str"
+            # Per-step x (for dt / size / flux panels)
+            if extra !== nothing
+                pmask   = extra.step_t .> 0
+                xs_step = log10.(extra.step_t[pmask])
+            end
         else
-            xs   = t_log
-            ys   = traj
-            xlbl_base = tf !== nothing ?
-                "t  ($(round(100*t_now/tf; digits=1))% of tf=$(round(tf; sigdigits=3)))" :
-                "t"
+            xs_snap = t_log
+            ys_snap = traj
+            xlbl    = "t$pct_str"
+            if extra !== nothing
+                xs_step = extra.step_t
+                pmask   = trues(length(xs_step))
+            end
         end
 
-        if length(xs) < 2
+        if length(xs_snap) < 2
             msg = "  Waiting for first snapshot…  (t=$(round(t_now; sigdigits=3)))\n"
             print(stdout, msg)
             prev_nlines[] = 1
@@ -75,44 +96,77 @@ function terminal_progress(species_names::AbstractVector{<:AbstractString};
             return
         end
 
-        # Apply optional user transform (e.g. rescale one species)
-        ys = transform(ys)
+        # Apply user transform to trajectory
+        ys_snap = transform(ys_snap)
 
-        # Compute y-range across all species so no curve is clipped.
-        # Clamp lower bound to 0 — populations are non-negative.
-        y_min = minimum(ys)
-        y_max = maximum(ys)
-        y_pad = max((y_max - y_min) * 0.05, 1.0)
-        ylims = (max(0.0, y_min - y_pad), y_max + y_pad)
-
-        # Auto-size plot width to fit terminal so lines don't wrap.
-        # A UnicodePlots line occupies: ~14 (y-label/tick) + 1 (│) + w + 1 (│) + legend ≈ w+20
+        # --- auto-size plot width to avoid terminal line-wrapping ---
         term_cols = displaysize(stdout)[2]
-        w = min(width, max(30, term_cols - 22))
+        # Two plots side by side: each gets roughly half the terminal
+        w = min(width, max(20, term_cols ÷ 2 - 24))
 
-        # First species initialises the plot
-        plt = UnicodePlots.lineplot(
-            xs, ys[:, 1];
-            name    = n_sp > 1 ? species_names[1] : "",
-            xlabel  = xlbl_base,
-            ylabel  = "E[X]",
-            title   = title * "  t=$(round(t_now; sigdigits=4))",
-            height  = height,
-            width   = w,
-            ylim    = ylims,
+        # --- y-range for trajectory panel ---
+        y_min = minimum(ys_snap)
+        y_max = maximum(ys_snap)
+        y_pad = max((y_max - y_min) * 0.05, 1.0)
+        ylims_traj = (max(0.0, y_min - y_pad), y_max + y_pad)
+
+        # ── Panel 1: mean trajectories ────────────────────────────────────────
+        plt1 = UnicodePlots.lineplot(
+            xs_snap, ys_snap[:, 1];
+            name   = n_sp > 1 ? species_names[1] : "",
+            xlabel = xlbl, ylabel = "E[X]",
+            title  = title * "  t=$(round(t_now; sigdigits=4))",
+            height = height, width = w,
+            ylim   = ylims_traj,
         )
-        for i in 2:min(n_sp, size(ys, 2))
-            UnicodePlots.lineplot!(plt, xs, ys[:, i]; name=species_names[i])
+        for i in 2:min(n_sp, size(ys_snap, 2))
+            UnicodePlots.lineplot!(plt1, xs_snap, ys_snap[:, i]; name=species_names[i])
         end
 
-        # Render to string so we can count lines.
-        # Split on \n to get actual line count (accounts for trailing newline).
-        buf = IOBuffer()
-        show(buf, plt)
-        plot_str = String(take!(buf))
-        lines = split(plot_str, '\n')
-        # println adds one more \n after plot_str
-        nlines = length(lines) + (isempty(last(lines)) ? 0 : 1)
+        buf1 = IOBuffer(); show(buf1, plt1); str1 = String(take!(buf1))
+
+        if extra !== nothing && length(xs_step) >= 2
+            # ── Panel 2: state space size |S| ────────────────────────────────
+            ys_sz = Float64.(extra.size_log[pmask])
+            plt2  = UnicodePlots.lineplot(
+                xs_step, ys_sz;
+                xlabel = xlbl, ylabel = "|S|",
+                title  = "State space size",
+                height = height, width = w,
+            )
+            buf2 = IOBuffer(); show(buf2, plt2); str2 = String(take!(buf2))
+
+            # ── Panel 3: time step dt ─────────────────────────────────────────
+            ys_dt = extra.dt_log[pmask]
+            plt3  = UnicodePlots.lineplot(
+                xs_step, ys_dt;
+                xlabel = xlbl, ylabel = "dt",
+                title  = "Time step",
+                height = height, width = w,
+            )
+            buf3 = IOBuffer(); show(buf3, plt3); str3 = String(take!(buf3))
+
+            # ── Panel 4: total flux Φ_total ───────────────────────────────────
+            ys_fl = extra.flux_log[pmask]
+            plt4  = UnicodePlots.lineplot(
+                xs_step, ys_fl;
+                xlabel = xlbl, ylabel = "Φ",
+                title  = "Total flux Φ_total",
+                height = height, width = w,
+            )
+            buf4 = IOBuffer(); show(buf4, plt4); str4 = String(take!(buf4))
+
+            # ── Combine into 2×2 grid ─────────────────────────────────────────
+            top = _side_by_side(str1, str2)
+            bot = _side_by_side(str3, str4)
+            plot_str = top * "\n" * bot
+        else
+            plot_str = str1
+        end
+
+        # Count lines for next erase (split is more reliable than counting \n)
+        lines    = split(plot_str, '\n')
+        nlines   = length(lines) + (isempty(last(lines)) ? 0 : 1)
 
         println(stdout, plot_str)
         flush(stdout)

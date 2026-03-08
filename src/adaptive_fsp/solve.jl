@@ -54,12 +54,14 @@ Per-step diagnostic data from an AdaptiveFSP solve.
 - `dt_log`: time step taken at each iteration.
 - `t_log`: simulated time after each iteration.
 - `size_log`: projection size `|S|` after each iteration.
+- `flux_log`: total probability-weighted outflux `Φ_total` at each iteration.
 - `total_iters`: total number of iterations executed.
 """
 struct AdaptiveFSPDiagnostics
     dt_log::Vector{Float64}
     t_log::Vector{Float64}
     size_log::Vector{Int}
+    flux_log::Vector{Float64}
     total_iters::Int
 end
 
@@ -94,9 +96,10 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     sol_sizes = [length(sp)]
 
     # Per-step diagnostics (lightweight: no state copies)
-    dt_log   = Float64[]
-    t_log    = Float64[]
+    dt_log        = Float64[]
+    t_log         = Float64[]
     size_log_diag = Int[]
+    flux_log      = Float64[]
 
     t = Float64(t0)
     iter = 0
@@ -143,6 +146,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         push!(dt_log, dt)
         push!(t_log, t)
         push!(size_log_diag, length(sp))
+        push!(flux_log, Φ_total)
 
         # 8) Save snapshot
         if iter % alg.save_interval == 0 || t >= tf
@@ -152,7 +156,8 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
             @info "t = $(round(t; sigdigits=4)), |S| = $(length(sp)), dt = $(round(dt; sigdigits=3))"
             if !isnothing(alg.progress_callback)
                 partial = FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
-                alg.progress_callback(t, sol_t, mean_trajectory(partial))
+                extra = (step_t=t_log, dt_log=dt_log, size_log=size_log_diag, flux_log=flux_log)
+                alg.progress_callback(t, sol_t, mean_trajectory(partial), extra)
             end
         end
     end
@@ -165,6 +170,6 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     end
 
     sol  = FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
-    diag = AdaptiveFSPDiagnostics(dt_log, t_log, size_log_diag, iter)
+    diag = AdaptiveFSPDiagnostics(dt_log, t_log, size_log_diag, flux_log, iter)
     (sol, diag)
 end
