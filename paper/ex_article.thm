@@ -23,9 +23,10 @@
 \contentsline {proof}{{Proof}{6}{}}{15}{proof.149}%
 \contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{15}{theorem.152}%
 \contentsline {proof}{{Proof}{7}{}}{16}{proof.157}%
-\contentsline {remark}{{Remark}{4.9}{Max-propensity cap and depth-one guarantee}}{16}{theorem.161}%
-\contentsline {corollary}{{Corollary}{4.10}{Expansion depth for boundary control}}{16}{theorem.163}%
-\contentsline {proof}{{Proof}{8}{}}{17}{proof.167}%
-\contentsline {remark}{{Remark}{4.11}{Expansion strategy and the depth-one regime}}{17}{theorem.168}%
-\contentsline {remark}{{Remark}{4.12}{Consistent parameter selection via spatial stiffness}}{18}{theorem.169}%
-\contentsline {remark}{{Remark}{4.13}{Practical parameter selection}}{18}{theorem.171}%
+\contentsline {remark}{{Remark}{4.9}{Maximum-flux rule as a practical speedup}}{16}{theorem.161}%
+\contentsline {remark}{{Remark}{4.10}{Max-propensity cap and depth-one guarantee}}{16}{theorem.162}%
+\contentsline {corollary}{{Corollary}{4.11}{Expansion depth for boundary control}}{17}{theorem.164}%
+\contentsline {proof}{{Proof}{8}{}}{17}{proof.168}%
+\contentsline {remark}{{Remark}{4.12}{Expansion strategy and the depth-one regime}}{17}{theorem.169}%
+\contentsline {remark}{{Remark}{4.13}{Consistent parameter selection via spatial stiffness}}{18}{theorem.170}%
+\contentsline {remark}{{Remark}{4.14}{Practical parameter selection}}{18}{theorem.172}%

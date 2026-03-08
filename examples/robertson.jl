@@ -13,10 +13,9 @@ prob = FSPProblem(rn, CartesianIndex(10_000, 0, 0), (0.0, 1e4), rates;
                   bounds=(0, 100_001))
 
 t_wall_start = time()
-sol, diag = solve(prob, AdaptiveFSP(ε_dt=0.01, prob_quantile=0.4, flux_tolerance=1e-9,
+sol, diag = solve(prob, AdaptiveFSP(ε_dt=1.0, prob_quantile=0.4, flux_tolerance=1e-9,
                                     save_interval=1000,
-                                    flux_method=:maximum,  # dt = ε_dt / maxᵢ pᵢwᵢ (stiff)
-                                    expand_method=:stoich)) # stoichiometric expansion
+                                    expand_method=:stoich))
 t_wall = time() - t_wall_start
 
 traj = mean_trajectory(sol)

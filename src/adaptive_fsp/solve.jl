@@ -10,10 +10,6 @@ Algorithm parameters for the adaptive Finite State Projection method.
 - `expansion_depth::Int = 1`: Number of neighbor shells added per step.
 - `save_interval::Int = 1000`: Save a snapshot every N iterations.
 - `max_iter::Int = typemax(Int)`: Maximum number of iterations.
-- `flux_method::Symbol = :total`: Time-step denominator: `:total` uses
-  `Φ_total = Σᵢ pᵢ·wᵢ` (probability-weighted sum); `:maximum` uses
-  `max_i(pᵢ·wᵢ)` (most active state). Use `:maximum` for stiff systems
-  where a single high-rate state would otherwise dominate the sum.
 - `expand_method::Symbol = :stoich`: State space expansion strategy per step.
   `:stoich` adds all stoichiometric neighbors (`expand!`); `:ssa` adds one
   SSA-sampled successor per state (`expand_ssa!`). Use `:ssa` for oscillatory
@@ -21,9 +17,11 @@ Algorithm parameters for the adaptive Finite State Projection method.
 
 ## Time-step formula
 
-    dt = min(ε_dt / Φ,  tf - t)
+    dt = min(ε_dt / Φ_total,  tf - t)
 
-where `Φ = Σᵢ pᵢ·wᵢ` (`:total`) or `Φ = maxᵢ pᵢ·wᵢ` (`:maximum`).
+where `Φ_total = Σᵢ pᵢ·wᵢ` is the total probability-weighted outflux.
+With `ε_dt = 1.0` (the default), this gives approximately one expected
+reaction per step — the natural unit for CME integration.
 """
 Base.@kwdef struct AdaptiveFSP
     ε_dt::Float64 = 1.0
@@ -32,8 +30,10 @@ Base.@kwdef struct AdaptiveFSP
     expansion_depth::Int = 1
     save_interval::Int = 1000
     max_iter::Int = typemax(Int)
-    flux_method::Symbol = :total
     expand_method::Symbol = :stoich
+    # Deprecated: flux_method no longer used; dt = ε_dt/Φ_total always.
+    # Retained for backward compatibility with existing call sites.
+    flux_method::Symbol = :total
 end
 
 """
@@ -59,8 +59,7 @@ end
 Run the adaptive FSP algorithm:
 1. Expand state space (via `alg.expand_method`: `:stoich` = all neighbors, `:ssa` = SSA-sampled).
 2. Build the CME generator (incremental).
-3. Compute adaptive time step: `dt = ε_dt / Φ` where `Φ` is total or maximum outflux
-   depending on `alg.flux_method`.
+3. Compute adaptive time step: `dt = ε_dt / Φ_total`.
 4. Propagate probability via matrix exponential (`expv`).
 5. Flux-aware pruning + renormalization.
 6. Repeat until `t >= tf` or `alg.max_iter` iterations reached.
@@ -113,10 +112,10 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         A_old = A
         gids_old = get_global_ids(sp)
 
-        # 3) Adaptive time step
+        # 3) Adaptive time step: dt = ε_dt / Φ_total  (~1 reaction per step at ε_dt=1)
         out_flux = Vector(-out_flow * sp.probs)
-        Φ = alg.flux_method === :maximum ? maximum(out_flux) : sum(out_flux)
-        dt = Φ > 0 ? alg.ε_dt / Φ : (tf - t)
+        Φ_total  = sum(out_flux)
+        dt = Φ_total > 0 ? alg.ε_dt / Φ_total : (tf - t)
         dt = min(dt, tf - t)
 
         # 4) Propagate probability (subcycle if dt*||A||_1 is too large)

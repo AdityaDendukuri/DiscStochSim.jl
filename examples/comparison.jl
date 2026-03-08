@@ -68,7 +68,6 @@ function run_oregonator_comparison()
     sol_afsp, diag_afsp = solve(prob, AdaptiveFSP(
         ε_dt=1.0, prob_quantile=0.1, flux_tolerance=1.0,
         expansion_depth=1, save_interval=save_interval_afsp,
-        flux_method=:total,    # dt = ε_dt / Σᵢ pᵢwᵢ
         expand_method=:ssa,    # SSA-guided expansion (avoids state space inflation)
     ))
     t_afsp = time() - t_afsp_start
@@ -287,17 +286,15 @@ function run_robertson_comparison()
     prob   = FSPProblem(rn, CartesianIndex(10_000, 0, 0), (0.0, tf), rates;
                         bounds=bounds)
 
-    # FP-FSP: flux-adaptive dt, runs to completion.
-    # dt = ε_dt / Φ_total where Φ_total ≈ k₁·A at t=0 gives dt₀ ≈ 1/400 ≈ 0.0025.
-    # As A is consumed (A → C via quasi-steady B), Φ_total decreases and dt
-    # grows monotonically, reaching ~10² near tf=1e4.
+    # FP-FSP: flux-adaptive dt = ε_dt / Φ_total (~1 reaction/step at ε_dt=1).
+    # Φ_total ≈ k₁·A at t=0 gives dt₀ ≈ 1/400 ≈ 0.0025; during stiff bursts
+    # Φ_total spikes (k₂ states enter J) and dt contracts automatically.
     println("\nRunning FP-FSP (full tf=$tf)...")
     t_afsp_start = time()
     sol_afsp, diag_afsp = solve(prob, AdaptiveFSP(
         ε_dt=1.0, prob_quantile=0.1, flux_tolerance=1e-6,
         expansion_depth=1, save_interval=500,
-        flux_method=:maximum,  # dt = ε_dt / maxᵢ pᵢwᵢ (stiff system)
-        expand_method=:stoich, # stoichiometric expansion
+        expand_method=:stoich,
     ))
     t_afsp = time() - t_afsp_start
     println("  FP-FSP: $(diag_afsp.total_iters) iters, $(round(t_afsp; digits=1))s, " *
