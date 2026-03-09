@@ -182,19 +182,22 @@ Adaptive FSP methods must grapple with stiffness that arises when the generator 
   \node[state] (C1) at (6,1) {$s_3$};
   \node[state] (C2) at (6,-1) {$s_4$};
 
-  \path[<->, thick] (A1) edge[bend left] (A2);
-  \path[<->, thick] (C1) edge[bend left] (C2);
-  \path[<->, thick] (A1) edge (B);
-  \path[<->, thick] (A2) edge (B);
-  \path[<->, thick] (C1) edge (B);
-  \path[<->, thick] (C2) edge (B);
+  % Internal metastable transitions (low flux: small w)
+  \path[<->, thin] (A1) edge[bend left] (A2);
+  \path[<->, thin] (C1) edge[bend left] (C2);
+  % Bottleneck transitions (high flux: w(s_b) large despite p(s_b) small)
+  \path[<->, line width=1.8pt] (A1) edge
+    node[above, sloped, font=\scriptsize] {$\Phi(s_b)=p(s_b)w(s_b)$} (B);
+  \path[<->, line width=1.8pt] (A2) edge (B);
+  \path[<->, line width=1.8pt] (C1) edge (B);
+  \path[<->, line width=1.8pt] (C2) edge (B);
 
   \draw[dashed, rounded corners] (-1.2,-2) rectangle (1.2,2);
   \draw[dashed, rounded corners] (4.8,-2) rectangle (7.2,2);
 
   \node at (0, -2.5) {Metastable Region A};
   \node at (6, -2.5) {Metastable Region B};
-  \node at (3, -1.1) {Bottleneck $s_b$};
+  \node[font=\scriptsize] at (3, -0.85) {$p(s_b)\!\ll\!1,\;w(s_b)\!\gg\!0$};
 \end{tikzpicture}%
 }
 \caption{}
@@ -397,7 +400,8 @@ The generator matrix $\mathbf{A}(t)$ must be constructed at each adaptive time s
 
 The computational complexity is $O(|\mathcal{S}| \cdot R)$ for iterating through states and reactions. This exploits the sparse structure of the reaction graph as each state connects to at most $R$ other states through direct chemical transformations, avoiding the $O(|\mathcal{S}|^2)$ cost of checking all possible state pairs. For typical chemical reaction networks with $R \ll |\mathcal{S}|$, this forward enumeration approach yields substantial performance improvements over standard backward expansion methods.
 
-\begin{remark}
+\begin{remark}[Compressed generator vs.\ renormalization]
+\label{rem:compressed-renorm}
 Algorithm~\ref{alg:matrix_construction} directly constructs the compressed generator $\widetilde{\mathbf{A}}_{JJ}$ of~\eqref{eq:compressed-generator}, not the truncated generator $\mathbf{A}_{JJ}$. For each source state $x \in J$ and reaction $k$, a propensity $\alpha_k(x)$ contributes to the off-diagonal entry at row $y = x + \boldsymbol{\nu}_k$ only if $y \in J$; the diagonal is then set to the negative of this partial column sum. Transitions whose destination falls outside $J$ are excluded from both the off-diagonal and the diagonal, so the column sums are exactly zero by construction. This is precisely the defining property of $\widetilde{\mathbf{A}}_{JJ}$ (Proposition~\ref{prop:compressed-generator}, property~1), and consequently the evolution step $\boldsymbol{p} \gets e^{\widetilde{\mathbf{A}}_{JJ}\Delta t}\boldsymbol{p}$ conserves probability: $\boldsymbol{1}^\top\boldsymbol{p}$ is invariant under time evolution.
 
 The renormalization $\boldsymbol{p} \gets \boldsymbol{p}/\|\boldsymbol{p}\|_1$ that appears in Algorithm~\ref{alg:flux-prune} (Stage~3) serves a different purpose: it compensates for the probability mass discarded when states are removed during pruning, not for any leakage from the generator. This pruned mass is at most $\alpha$ by the quantile selection in Stage~1. Thus the theoretical error analysis, which is formulated in terms of the compressed generator $\widetilde{\mathbf{A}}_{JJ}$, applies directly to the implemented algorithm without any additional approximation gap.
@@ -850,14 +854,14 @@ The maximum-flux rule is advantageous for spatially stiff systems with concentra
 \centering
 \caption{Recommended parameter ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ by system type. Values in parentheses are the parameters used in the corresponding numerical experiment of Section~\ref{sec:results}. The spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$ is computable at each step.}
 \label{tab:param_guidance}
-\begin{tabular}{lcccp{4.2cm}}
+\begin{tabular}{lccc}
 \hline
-\textbf{System type} & $\alpha$ & $\varepsilon_{\mathrm{flux}}$ & $\varepsilon_{\Delta t}$ & \textbf{Key driver} \\
+\textbf{System type} & $\alpha$ & $\varepsilon_{\mathrm{flux}}$ & $\varepsilon_{\Delta t}$ \\
 \hline
-Connectivity-critical (bottleneck) & $0.7$--$0.9$ ($0.9$) & $10^{-12}$--$10^{-6}$ ($10^{-12}$) & cap: $1/\lambda_{\max}$ & Flux protection essential; aggressive $\alpha$ safe \\
-Oscillatory / limit cycle (Oregonator) & $0.1$--$0.3$ ($0.1$) & $0$ ($0$) & $0.5$--$2$ ($1$) & No bottlenecks; zero flux tolerance prevents over-protection \\
-Stiff autocatalytic (Robertson) & $0.3$--$0.5$ ($0.4$) & $10^{-9}$ ($10^{-9}$) & $0.01$--$0.1$ ($0.01$) & Long horizon; small $\varepsilon_{\Delta t}$ limits error accumulation \\
-Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $10^{-8}$--$10^{-6}$ ($10^{-7}$) & $0.1$--$0.5$ & Protect transition-path connectors \\
+Connectivity-critical (bottleneck) & $0.7$--$0.9$ ($0.9$) & $10^{-12}$--$10^{-6}$ ($10^{-12}$) & cap: $1/\lambda_{\max}$ \\
+Oscillatory / limit cycle (Oregonator) & $0.1$--$0.3$ ($0.1$) & $0$ ($0$) & $0.5$--$2$ ($1$) \\
+Stiff autocatalytic (Robertson) & $0.3$--$0.5$ ($0.4$) & $10^{-9}$ ($10^{-9}$) & $0.5$--$1$ ($1$) \\
+Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $10^{-8}$--$10^{-6}$ ($10^{-7}$) & $0.1$--$0.5$ \\
 \hline
 \end{tabular}
 \end{table}

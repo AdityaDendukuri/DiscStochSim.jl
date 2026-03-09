@@ -80,7 +80,10 @@ to your paper, it would be helpful to visualize it for the readers. A natural
 place would be in Fig.\ 2A, where the fluxes can be illustrated on the arrows.}
 
 \textbf{Response:}
-% TODO: Add flux labels to Fig 2 TikZ diagram and describe here
+We have updated Figure~2A to visualize probability flux on the arrows.
+Transitions incident on the bottleneck state $s_b$ are now drawn with thicker lines to indicate that they carry high flux $\Phi(s_b,t)=p(s_b,t)\,w(s_b)$, while the internal metastable transitions (within regions $A$ and $B$) are drawn thin to reflect their comparatively low flux.
+The label $\Phi(s_b)=p(s_b)w(s_b)$ appears on the representative $s_1\leftrightarrow s_b$ arrow, and the annotation $p(s_b)\!\ll\!1$, $w(s_b)\!\gg\!0$ below $s_b$ makes explicit the key property: $s_b$ is rarely occupied yet transitions through it at a high rate, so its flux is non-negligible despite its low probability.
+This directly illustrates why probability-only pruning fails while flux-based pruning retains $s_b$.
 
 %======================================================================
 \section*{Response to Referee 2}
@@ -266,13 +269,13 @@ Three practical rules emerge from the benchmark experience and the theoretical f
 
 We thank both referees for their continued careful reading. All outstanding concerns have been addressed.
 
-On the theoretical side, Referee~2's notational error in Eq.~(4.4) and the unjustified time-step inequality have been corrected, the relationship between the implemented renormalization and the compressed generator has been made explicit (Remark~3.3 / Section~3.2), and the availability of $w_{\max}$ at pruning time has been clarified (Corollary~4.5).
+On the theoretical side, Referee~2's notational error in Eq.~(4.4) and the unjustified time-step inequality have been corrected, the relationship between the implemented renormalization and the compressed generator has been made explicit (Remark~\ref{rem:compressed-renorm}, Section~3.3), and the availability of $w_{\max}$ at pruning time has been clarified (Corollary~\ref{cor:local-error-pruning}).
 
-On the empirical side, the new Section~5.6 provides a head-to-head comparison of the flux-adaptive FSP against the Krylov-FSP-SSA method on three benchmark systems, directly demonstrating the benefits of flux-based pruning (bottleneck system) and flux-adaptive time stepping (Oregonator). The corrected-parameter analysis of Section~5.7 confirms these advantages are not an artifact of parameter choice.
+On the empirical side, the new Section~\ref{sec:comparison} provides a head-to-head comparison of the flux-adaptive FSP against the Krylov-FSP-SSA method on three benchmark systems, directly demonstrating the benefits of flux-based pruning (bottleneck system) and flux-adaptive time stepping (Oregonator).
 
 In response to Referee~1's conceptual question, Remark~3.1 explains why total flux is the correct protection criterion: boundary outflux is approximately zero for genuine bottleneck states (because their transitions lead into the already-retained high-probability regions) and is in any case circular to compute during the pruning step.
 
-Finally, the new parameter guidance table and Remark~4.9 address Referee~2's request for parameter guidance, giving concrete recommended ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ across four qualitatively different model types, grounded in both theory and the benchmark experiments.
+Finally, the new parameter guidance table (Table~\ref{tab:param_guidance}) and Remark~\ref{rem:param-guidance} address Referee~2's request for parameter guidance, giving concrete recommended ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ across four qualitatively different model types, grounded in both theory and the benchmark experiments.
 
 \vspace{1em}
 \noindent Sincerely,\\[0.5em]
