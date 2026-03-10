@@ -14,19 +14,22 @@ Algorithm parameters for the adaptive Finite State Projection method.
   `:stoich` adds all stoichiometric neighbors (`expand!`); `:ssa` adds one
   SSA-sampled successor per state (`expand_ssa!`). Use `:ssa` for oscillatory
   systems (e.g. Oregonator) where `:stoich` inflates the state space.
-- `dt_max::Float64 = Inf`: Hard upper bound on the time step. Required for
-  slow-start systems where `Φ_total → 0` at `t=0` (e.g. the Bottleneck system
-  with tiny initial flux), which would otherwise produce a single giant step
-  that the depth-1 expansion cannot contain. Set `dt_max ≈ 1/λ_downstream`
-  where `λ_downstream` is the rate of the fast downstream reaction.
+- `dt_max::Float64 = Inf`: Per-depth-unit time step cap: `1/λ_downstream`,
+  where `λ_downstream` is the exit rate of the fast downstream states first
+  reached by expansion. The actual cap applied is `expansion_depth * dt_max`,
+  so increasing expansion depth automatically relaxes the cap proportionally.
+  Required for slow-start systems where `Φ_total → 0` at `t=0` (e.g. the
+  Bottleneck system), which would otherwise produce a single giant step.
+  Set `dt_max = 1/λ_downstream`; leave as `Inf` if the flux step is
+  already sufficient (κ = λ_max/Φ_total ≤ 1/ε_dt throughout).
 
 ## Time-step formula
 
-    dt = min(ε_dt / Φ_total,  dt_max,  tf - t)
+    dt = min(ε_dt / Φ_total,  expansion_depth * dt_max,  tf - t)
 
 where `Φ_total = Σᵢ pᵢ·wᵢ` is the total probability-weighted outflux.
-With `ε_dt = 1.0` (the default), this gives approximately one expected
-reaction per step — the natural unit for CME integration.
+`dt_max = 1/λ_downstream` is the per-depth cap; multiplying by
+`expansion_depth` gives `d/λ_downstream` automatically.
 """
 Base.@kwdef struct AdaptiveFSP
     ε_dt::Float64 = 1.0
@@ -125,11 +128,13 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         A_old = A
         gids_old = get_global_ids(sp)
 
-        # 3) Adaptive time step: dt = min(ε_dt/Φ_total, dt_max)
+        # 3) Adaptive time step: dt = min(ε_dt/Φ_total, d·dt_max, tf-t)
+        # dt_max = 1/λ_downstream (user-set for slow-start systems); multiplying
+        # by expansion_depth gives the correct d/λ_downstream cap automatically.
         out_flux = Vector(-out_flow * sp.probs)
         Φ_total  = sum(out_flux)
         dt_flux  = Φ_total > 0 ? alg.ε_dt / Φ_total : (tf - t)
-        dt = min(dt_flux, alg.dt_max, tf - t)
+        dt = min(dt_flux, alg.expansion_depth * alg.dt_max, tf - t)
 
         # 4) Propagate probability (subcycle if dt*||A||_1 is too large)
             sp.probs = expv(dt, A, sp.probs)

@@ -764,8 +764,8 @@ After expanding $J_n$ by depth $d$, the expansion-induced boundary outflux satis
 \;\leq\;
 \mu_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\mu_n) \geq d\bigr).
 \end{equation}
-For $d=1$, using $\mathrm{P}(\mathrm{Poisson}(\mu_n)\geq 1) = 1-e^{-\mu_n} \leq \mu_n$, the bound reduces to $\mu_n^2$.
-Depth $d=1$ is therefore sufficient whenever $\mu_n \leq 1$; under the total-flux rule~\eqref{eq:dt-total} this condition reads $\kappa_n\,\varepsilon_{\Delta t} \leq 1$, where $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n)$ is the spatial stiffness ratio.
+For $d=1$: $\mathrm{P}(\mathrm{Poisson}(\mu_n)\geq 1) = 1-e^{-\mu_n} \leq \mu_n$, so the bound reduces to $\mu_n^2$.
+The condition $\mu_n \le d$ is equivalent to $\Delta t_n \le d/\lambda_{\max}$; for systems with $\kappa_n = \lambda_{\max}/\Phi_{\mathrm{total}} \le d/\varepsilon_{\Delta t}$, the flux step $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ already satisfies this, so depth $d$ is guaranteed without any additional cap. For slow-start systems where $\Phi_{\mathrm{total}} \to 0$, an explicit cap is required (Remark~\ref{rem:max-propensity-cap}).
 \end{corollary}
 
 \begin{proof}
@@ -1086,16 +1086,14 @@ The system then enters explosive transient phase ($10^{-2}$ s $< t < 10^2$ s) dr
 
 Following the transient ($t > 10^2$ s), reaction R3 slowly regenerates $A$ from $B$ and $C$, driving toward quasi-equilibrium near $(N_A, N_B, N_C) \approx (10000, 0, 0)$. Time steps increase progressively to $\Delta t \approx 10^2$ s by $t = 10^5$ s, spanning six orders of magnitude and the state space contracts to 500-1000 states as the distribution concentrates near quasi-equilibrium. The flux threshold decreases to approximately 100 s$^{-1}$ by $t = 10^4$ s, confirming approach to steady state.
 
-\begin{remark}[Max-propensity cap for depth-one guarantee]
+\begin{remark}[Depth-aware cap for slow-start systems]
 \label{rem:max-propensity-cap}
-Under the total-flux rule, $\mu_n = \kappa_n\,\epsilon_{\Delta t}$ exceeds one when $\kappa_n > 1/\epsilon_{\Delta t}$ (high spatial stiffness), which would require expansion depth $d > 1$.  For highly stiff systems, depth-one sufficiency can be enforced unconditionally by applying the \emph{max-propensity cap}:
+The condition $\mu_n \le d$ is automatically satisfied whenever $\kappa_n\,\varepsilon_{\Delta t} \le d$. For \emph{slow-start} systems where $\Phi_{\mathrm{total}} \to 0$ at $t=0$ (e.g.\ the Bottleneck system with $k_1 \ll k_2$), the flux step diverges and depth-$d$ containment must be enforced explicitly. The implemented time step is
 \begin{equation}
 \label{eq:dt-cap}
-\Delta t_n = \min\!\left(\frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)},\;\frac{1}{\lambda_{\max}(J_n,t_n)}\right).
+\Delta t_n = \min\!\left(\frac{\varepsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)},\;\frac{d}{\lambda_{\mathrm{downstream}}},\;t_f - t_n\right),
 \end{equation}
-This ensures $\mu_n = \lambda_{\max}\,\Delta t_n \leq 1$ unconditionally.
-When the cap activates ($\kappa_n\,\epsilon_{\Delta t}>1$), the step is $\Delta t_n = 1/\lambda_{\max}$, giving local error $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim 1/\kappa_n \leq \epsilon_{\Delta t}$ --- actually smaller than the prescribed tolerance while expansion depth remains one.
-The cap therefore trades more frequent steps for cheaper per-step cost: depth-$d$ expansion requires $O(d\,|\mathcal{S}|\,R)$ work, so reducing $d$ from $\lceil\kappa\,\varepsilon_{\Delta t}\rceil$ to $1$ can yield a net simulation speedup when $\kappa$ is large.
+where $\lambda_{\mathrm{downstream}}$ is the exit rate of the fast downstream states first reached by expansion. In the implementation, the user supplies $\Delta t_{\max} = 1/\lambda_{\mathrm{downstream}}$ and the code applies the cap $d\cdot\Delta t_{\max}$, so increasing expansion depth automatically relaxes the cap proportionally without requiring any parameter change.
 \end{remark}
 
 

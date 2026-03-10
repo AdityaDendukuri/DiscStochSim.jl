@@ -27,5 +27,5 @@
 \contentsline {proof}{{Proof}{8}{}}{17}{proof.163}%
 \contentsline {remark}{{Remark}{4.10}{Expansion strategy and the depth-one regime}}{17}{theorem.164}%
 \contentsline {remark}{{Remark}{4.11}{Consistent parameter selection via spatial stiffness}}{17}{theorem.165}%
-\contentsline {remark}{{Remark}{4.12}{Practical parameter selection}}{17}{theorem.167}%
-\contentsline {remark}{{Remark}{5.1}{Max-propensity cap for depth-one guarantee}}{28}{theorem.189}%
+\contentsline {remark}{{Remark}{4.12}{Practical parameter selection}}{18}{theorem.167}%
+\contentsline {remark}{{Remark}{5.1}{Depth-aware cap for slow-start systems}}{28}{theorem.189}%
