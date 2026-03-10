@@ -1,18 +1,18 @@
 # Fdb version 3
-["bibtex ex_article"] 1773014288 "ex_article.aux" "ex_article.bbl" "ex_article" 1773014289
+["bibtex ex_article"] 1773028575 "ex_article.aux" "ex_article.bbl" "ex_article" 1773028576
   "./siamplain.bst" 1771727762 20530 3b70bf0c2e3ff2b6ef486581c42b8ff9 ""
-  "ex_article.aux" 1773014289 42537 789b6556ba6bc03078eff3057636c9ac "cusdep tex aux ex_article"
+  "ex_article.aux" 1773028575 43656 503f4ed3cb66d92918a128f981dd7bf7 "cusdep tex aux ex_article"
   "references.bib" 1771727762 41501 5801da97c8d66036efddc71e665a24ea ""
   (generated)
   "ex_article.bbl"
   "ex_article.blg"
-["cusdep tex aux ex_article"] 1773014287 "ex_article.tex" "ex_article.aux" "ex_article" 1773014289
-  "ex_article.tex" 1773014190 124348 0ad631b619c6d66a4e799bbe5e4419cf ""
+["cusdep tex aux ex_article"] 1773028574 "ex_article.tex" "ex_article.aux" "ex_article" 1773028576
+  "ex_article.tex" 1773028573 120209 79358cc1cce90499670227798f43a81e ""
   (generated)
   "ex_article.aux"
-["pdflatex"] 1773014288 "/home/adiden/DiscStochSim.jl/paper/ex_article.tex" "ex_article.pdf" "ex_article" 1773014289
+["pdflatex"] 1773028575 "/home/adiden/DiscStochSim.jl/paper/ex_article.tex" "ex_article.pdf" "ex_article" 1773028576
   "/etc/texmf/web2c/texmf.cnf" 1747512525 475 c0e671620eb5563b2130f56340a5fde8 ""
-  "/home/adiden/DiscStochSim.jl/paper/ex_article.tex" 1773014190 124348 0ad631b619c6d66a4e799bbe5e4419cf ""
+  "/home/adiden/DiscStochSim.jl/paper/ex_article.tex" 1773028573 120209 79358cc1cce90499670227798f43a81e ""
   "/usr/share/texlive/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy5.tfm" 1246382020 1120 1e8878807317373affa7f7bba4cf2f6a ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy6.tfm" 1246382020 1124 14ccf5552bc7f77ca02a8a402bea8bfb ""
@@ -40,7 +40,6 @@
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbx7.tfm" 1136768653 1336 3125ccb448c1a09074e3aa4a9832f130 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbx8.tfm" 1136768653 1332 1fde11373e221473104d6cc5993f046e ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbx9.tfm" 1136768653 1328 5442e22a7072966dbaf88ca900acf3f0 ""
-  "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmbxti10.tfm" 1136768653 1532 9162035f4e7176612125649e348e2195 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmcsc10.tfm" 1136768653 1300 63a6111ee6274895728663cf4b4e7e81 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmmi6.tfm" 1136768653 1512 f21f83efb36853c0b70002322c1ab3ad ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmmi8.tfm" 1136768653 1520 eccf95517727cb11801f4f1aee3a21b4 ""
@@ -60,7 +59,6 @@
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb" 1248133631 34811 78b52f49e893bcba91bd7581cdc144c0 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx7.pfb" 1248133631 32007 e8fa0078355f39467039935974716569 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx8.pfb" 1248133631 32166 b0c356b15f19587482a9217ce1d8fa67 ""
-  "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbxti10.pfb" 1248133631 36554 b67dc2cfa451409e100b3fcf5f506509 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmcsc10.pfb" 1248133631 32001 6aeea3afe875097b1eb0da29acd61e28 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb" 1248133631 30251 6afa5cb1d0204815a708a080681d4674 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb" 1248133631 36299 5f9df58c2139e7edcf37c8fca4bd384d ""
@@ -237,12 +235,13 @@
   "/var/lib/texmf/web2c/pdftex/pdflatex.fmt" 1770572858 2799190 60fd3271f695d3bdcb87a9035244a91f ""
   "benchmark_comparison.pdf" 1771727762 27569 dc201d16e58cd93303faf7589ff412e8 ""
   "error_accumulation_analysis.png" 1771727762 127352 f1299619f7b07e2a1f983eb7291c46c7 ""
-  "ex_article.aux" 1773014289 42537 789b6556ba6bc03078eff3057636c9ac "cusdep tex aux ex_article"
-  "ex_article.bbl" 1773014288 9656 f6462fcffdb4642efac851610525bb50 "bibtex ex_article"
-  "ex_article.out" 1773014289 5548 b861124ee022e7eeac3eddc1526279a6 "pdflatex"
-  "ex_article.tex" 1773014190 124348 0ad631b619c6d66a4e799bbe5e4419cf ""
+  "ex_article.aux" 1773028575 43656 503f4ed3cb66d92918a128f981dd7bf7 "cusdep tex aux ex_article"
+  "ex_article.bbl" 1773028575 9656 f6462fcffdb4642efac851610525bb50 "bibtex ex_article"
+  "ex_article.out" 1773028575 6280 992c92c2c10e83289e0b382d27f34f98 "pdflatex"
+  "ex_article.tex" 1773028573 120209 79358cc1cce90499670227798f43a81e ""
   "ex_shared.tex" 1771727762 2524 7da1546eae3fd0c040e5d9155027a307 ""
   "flux_vs_naive_comparison.png" 1771727762 132489 d5bb79c5053a04d13c79280479b68cfa ""
+  "generator_sparsity.pdf" 1773015908 21957 367f549f006f6bcfff548612f965a976 ""
   "lv_grid.pdf" 1771727762 48429 d993dbee6cd783cb722191b7d9ca1724 ""
   "orag.pdf" 1771727762 30902 a5e8c53f480876dee63964fb4afeb0cf ""
   "siamart171218.cls" 1771727762 52331 b32aa71e4e25bade2a450f7f07711781 ""

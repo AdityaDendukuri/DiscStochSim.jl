@@ -107,28 +107,39 @@ The generator $\mathbf{A}$ satisfies:
 
 \subsection{Finite State Projection Method}
 
-\begin{definition}[Finite State Projection]
-The \textit{Finite State Projection (FSP)} method approximates the CME by restricting dynamics to a finite subset $\mathbf{X}_J\subset\mathbf{X}$. If $\mathbf{A}_J$ is the sub-generator on $\mathbf{X}_J$ and $\boldsymbol{p}_J(0)$ is the initial distribution restricted to $\mathbf{X}_J$, then
+The Finite State Projection (FSP) method \cite{Munsky2006} approximates the CME by restricting dynamics to a finite subset $J \subset \mathbf{X}$. The complement $J' = \mathbf{X} \setminus J$ is aggregated into a single absorbing point (a sink state). Writing the full generator in block form with respect to $(J, J')$, the evolution of the projected distribution satisfies
 \begin{equation}
-    \boldsymbol{p}(\mathbf{X}_J, t) \approx e^{\mathbf{A}_J t}\, \boldsymbol{p}_J(0).
+    \dot{\boldsymbol{p}}_J(t) = \mathbf{A}_J\,\boldsymbol{p}_J(t) + \mathbf{A}_{JJ'}\,\boldsymbol{p}_{J'}(t),
+    \label{eq:fsp-exact}
 \end{equation}
-\end{definition}
-
-\begin{theorem}[Classical FSP bounds \cite{Munsky2006}]
-\label{thm:classical_fsp}
-Let $A$ be a CME generator (\,$A_{ij}\ge 0$ for $i\neq j$, $A_{ii}\le 0$, and $\mathbf{1}^\top A=0^\top$\,), and let $A_J$ be the principal submatrix on a finite set $J\subset \mathbf{X}$. Denote by $p_J(t)$ the full CME solution restricted to $J$ and by $e^{A_J t}p_J(0)$ the truncated solution that ignores transitions to $J'$.
-
-If for some $t_f\ge 0$ and $\varepsilon>0$,
+where $\mathbf{A}_J$ is the principal submatrix of $\mathbf{A}$ on $J$ (transitions within $J$, exact), and $\mathbf{A}_{JJ'}$ couples $J'$ back into $J$. If all initial probability is placed inside $J$, then $\boldsymbol{p}_{J'}(0) = \mathbf{0}$ and the coupling term is initially zero. The FSP approximation drops this term entirely, yielding the closed finite-dimensional system
 \begin{equation}
-\mathbf{1}^\top e^{A_J t_f}\,p_J(0) \;\ge\; 1-\varepsilon,
+    \boldsymbol{p}(\mathbf{X}_J, t) \;\approx\; e^{\mathbf{A}_J t}\, \boldsymbol{p}_J(0).
+    \label{eq:fsp-approx}
+\end{equation}
+Because $\mathbf{A}_J$ is a principal submatrix of a conservative generator, its column sums are nonpositive (transitions to $J'$ are missing from the off-diagonal, so probability leaks out at the boundary). Consequently $\Gamma_J(t_f) := \mathbf{1}^\top e^{\mathbf{A}_J t_f}\boldsymbol{p}_J(0) \le 1$ measures the probability mass retained in $J$ under the approximation. The following two theorems \cite{Munsky2006} give the theoretical guarantees.
+
+\begin{theorem}[Monotonicity \cite{Munsky2006}]
+\label{thm:fsp-monotone}
+If $J \subseteq J'$, then $e^{\mathbf{A}_J t}\boldsymbol{p}_J(0) \le e^{\mathbf{A}_{J'} t}\boldsymbol{p}_{J'}(0)$ componentwise for all $t \ge 0$. That is, enlarging the projection set can only increase (or leave unchanged) the probability assigned to each state.
+\end{theorem}
+
+\begin{theorem}[FSP error bound \cite{Munsky2006}]
+\label{thm:classical_fsp}
+Let $\mathbf{A}_J$ be the principal submatrix of a CME generator on a finite set $J \subset \mathbf{X}$, and let $p_J(t)$ denote the true CME solution restricted to $J$. If
+\begin{equation}
+\Gamma_J(t_f) := \mathbf{1}^\top e^{\mathbf{A}_J t_f}\,\boldsymbol{p}_J(0) \;\ge\; 1-\varepsilon,
 \label{eq:fsp-mass-cond}
 \end{equation}
-then the following elementwise bounds hold:
+then the elementwise bounds
 \begin{equation}
-e^{A_J t_f}\,p_J(0) \;\le\; p_J(t_f) \;\le\; e^{A_J t_f}\,p_J(0) + \varepsilon\,\mathbf{1}.
+e^{\mathbf{A}_J t_f}\,\boldsymbol{p}_J(0) \;\le\; p_J(t_f) \;\le\; e^{\mathbf{A}_J t_f}\,\boldsymbol{p}_J(0) + \varepsilon\,\mathbf{1}
 \label{eq:fsp-elementwise}
 \end{equation}
+hold for all $t_f \ge 0$.
 \end{theorem}
+
+The lower bound follows from monotonicity (Theorem~\ref{thm:fsp-monotone}): truncation can only reduce probability at each state. The upper bound says the pointwise error is at most $\varepsilon$, the total leakage through the boundary. Crucially, $\varepsilon = 1 - \Gamma_J(t_f)$ is computable without access to the true solution, so the FSP algorithm proceeds by iteratively enlarging $J$ until $\Gamma_J \ge 1-\varepsilon$ is verified.
 
 \subsubsection{Time-stepping and sliding window approaches}
 
@@ -299,12 +310,28 @@ governs exponential convergence to stationarity (e.g., in $\pi$-weighted norms),
 \Psi(S) := \frac{\sum_{\boldsymbol{x} \in S}\sum_{\boldsymbol{y} \in J \setminus S} \pi(\boldsymbol{x}) \mathbf{A}_{\boldsymbol{y},\boldsymbol{x}}}{\min\{\pi(S), \pi(J\setminus S)\}},
 \label{eq:cheeger}
 \end{equation}
-where $\pi(S) := \sum_{\boldsymbol{x} \in S} \pi(\boldsymbol{x})$. Let $\Psi_* := \min_{S: 0 < \pi(S) \leq 1/2} \Psi(S)$ denote the minimum conductance, which quantifies the flux across the most restrictive bottleneck in the state-space graph. The numerator of the conductance $\Psi(S)$ is precisely the stationary flux across the cut $S$. Our flux-based pruning rule protects states with high instantaneous flux $\Phi(x,t) = p(x,t) w(x)$, which at stationarity coincides with the contributions to this numerator. Thus, removing high-flux states risks collapsing the conductance of critical cuts, degrading $\Psi_*$ and hence the spectral gap $\lambda$ via \eqref{eq:cheeger}. Cheeger's inequality establishes the two-sided bound
+where $\pi(S) := \sum_{\boldsymbol{x} \in S} \pi(\boldsymbol{x})$. Let $\Psi_* := \min_{S: 0 < \pi(S) \leq 1/2} \Psi(S)$ denote the minimum conductance, which quantifies the flux across the most restrictive bottleneck. Cheeger's inequality establishes the two-sided bound
 \begin{equation}
 \label{eq:cheeger1}
 \frac{\Psi_*^2}{2} \leq \lambda \leq 2\Psi_*,
 \end{equation}
-linking the spectral gap to the minimum conductance. Removing high-flux bridge states reduces $\Psi_*$, which by \eqref{eq:cheeger1} degrades $\lambda$ and slows convergence. In the extreme case where all paths between two regions are severed, $\Psi_*=0$ and irreducibility is lost entirely. The key insight is that a bridge state can have $p(\boldsymbol{x}_b,t)\ll 1$ yet large flux $\Phi(\boldsymbol{x}_b,t)=p(\boldsymbol{x}_b,t)\,w(\boldsymbol{x}_b)$ when its exit rate $w(\boldsymbol{x}_b)=-A_{\boldsymbol{x}_b,\boldsymbol{x}_b}$ is large. In an adaptive FSP approach we replace one very large sparse generator by a sequence of smaller truncated generators. To keep long-time behavior stable across this sequence, we want the spectral gap to remain nearly invariant under truncation. This means we must avoid pruning states whose removal collapses the gap. Flux provides a concrete measure for identifying high-flux bridge states that should not be truncated.
+linking the spectral gap to the minimum conductance.
+
+Our pruning rule protects states with large instantaneous exit activity $\Phi(\boldsymbol{x},t)=p(\boldsymbol{x},t)\,w(\boldsymbol{x})$. The connection to cut conductance is through the bound: for any $S\subset J$ and $\boldsymbol{x}\in S$,
+\begin{equation}
+\label{eq:flux-cut-bound}
+\sum_{\boldsymbol{y}\notin S}\pi(\boldsymbol{x})\,\mathbf{A}_{\boldsymbol{y},\boldsymbol{x}} \;\le\; \pi(\boldsymbol{x})\,w(\boldsymbol{x}),
+\end{equation}
+so the stationary exit activity $\pi(\boldsymbol{x})w(\boldsymbol{x})$ upper-bounds the contribution of $\boldsymbol{x}$ to any cut flux. Thus, states with small probability but large $w(\boldsymbol{x})$ may contribute disproportionately to cut numerators. Pruning such states can reduce the flux across critical cuts and thereby degrade conductance, particularly when they act as bridges between metastable regions. In the extreme case where all cross-region paths are severed, $\Psi_*=0$ and irreducibility is lost entirely. This is the mechanism illustrated in Figure~\ref{fig:generator-sparsity}: $s_b$ has small occupancy yet large $w(s_b)$, so removing it collapses the cut flux to zero and disconnects the generator.
+
+These observations motivate the flux metric as a proxy for conductance-relevant activity. States with small $p(\boldsymbol{x},t)$ but large $w(\boldsymbol{x})$ have the capacity to sustain large cut flux, and protecting them is expected to reduce spectral degradation under truncation.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.72\linewidth]{generator_sparsity.pdf}
+\caption{Sparsity pattern of the generator $\mathbf{A}$ for the bottleneck network (Figure~\ref{fig:bottleneck}), ordered as $[s_1,s_2,s_b,s_3,s_4]$. Black cells are nonzero entries; white cells are zero. Dashed boxes mark the two metastable regions. \textbf{(a)} With $s_b$: the $s_b$ row and column (index 3) bridge both regions, making $\mathbf{A}$ irreducible. \textbf{(b)} Without $s_b$: the generator is exactly block-diagonal — the two metastable regions are disconnected and probability cannot flow between them.}
+\label{fig:generator-sparsity}
+\end{figure}
 
 \subsubsection{Flux-Aware Truncation Algorithm}
 
@@ -699,27 +726,12 @@ This bound separates the two error sources controlled by the algorithm. The firs
 \begin{corollary}[Adaptive time step]
 \label{cor:flux-timestep}
 Let $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n) \geq 1$ denote the \emph{spatial stiffness ratio}, where $\lambda_{\max}(J_n,t_n) := \max_{\boldsymbol{x}\in J_n} w(\boldsymbol{x})$ and $\Phi_{\mathrm{total}}(J_n,t_n) = \sum_{\boldsymbol{x}\in J_n}p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})$.
-Two time-step rules control the local model error within tolerance $\epsilon_{\Delta t}>0$:
-\begin{enumerate}[(i)]
-\item \textbf{Total-flux rule (recommended):}
+The \emph{total-flux rule}
 \begin{equation}
 \label{eq:dt-total}
-\Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n, t_n)}.
+\Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n, t_n)}
 \end{equation}
-This guarantees $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \epsilon_{\Delta t}$ to leading order in $\Delta t_n$, with expansion factor $\mu_n := \lambda_{\max}\,\Delta t_n = \kappa_n\,\epsilon_{\Delta t}$.
-\item \textbf{Maximum-flux rule (concentrated distributions only):} Let $\Phi_{\max}(J_n,t_n) := \max_{\boldsymbol{x}\in J_n}\{p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})\}$ and define the \emph{concentration ratio} $\eta_n := \Phi_{\mathrm{total}}/\Phi_{\max} \geq 1$.
-\begin{equation}
-\label{eq:dt-max}
-\Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\max}(J_n, t_n)}.
-\end{equation}
-Since $\Phi_{\max} \leq \Phi_{\mathrm{total}}$, this step is larger than rule~(i) by factor $\eta_n$.
-The error satisfies $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \eta_n\,\epsilon_{\Delta t}$ to leading order in $\Delta t_n$, and the expansion factor is $\mu_n = (\lambda_{\max}/\Phi_{\max})\,\epsilon_{\Delta t}$.
-The condition $\mu_n \leq 1$ (depth-one sufficiency, Corollary~\ref{cor:expansion-depth}) holds if and only if $\epsilon_{\Delta t} \leq \Phi_{\max}/\lambda_{\max}$.
-When the distribution is concentrated ($\eta_n \approx 1$, e.g., systems with conservation laws that confine probability to a narrow stoichiometric manifold), both rules yield comparable steps and the error overhead is negligible.
-\textbf{Caution:} When $\eta_n \gg 1$ (spread distributions), the max-flux step $\Delta t_n^{\max} = \eta_n\,\Delta t_n^{\mathrm{tot}}$ is much larger than the total-flux step, and the leading-order bound grows as $\eta_n\,\epsilon_{\Delta t}$.
-For oscillatory systems (e.g., the Oregonator), the distribution spreads widely during autocatalytic bursts---probability is distributed across $O(|\mathcal{S}|)$ states, so $\eta_n \gg 1$---and the max-flux rule takes steps that the depth-one boundary expansion cannot track, causing the wavefront to escape the active set and the solution to collapse.
-The total-flux rule~(i) is free of this failure mode and is the recommended default.
-\end{enumerate}
+guarantees $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \epsilon_{\Delta t}$ to leading order in $\Delta t_n$, with expansion factor $\mu_n := \lambda_{\max}\,\Delta t_n = \kappa_n\,\epsilon_{\Delta t}$.
 \end{corollary}
 
 \begin{proof}
@@ -737,95 +749,36 @@ For the inflow, all states in $J'\setminus\mathcal{S}_{\mathrm{prune}}$ carry $p
 \|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \Phi_{\mathrm{total}}(J_n,t_n)\,\Delta t_n.
 \end{equation}
 
-\textit{Case~(i):} Substituting $\Delta t_n = \epsilon_{\Delta t}/\Phi_{\mathrm{total}}$ into~\eqref{eq:key-flux-bound} yields $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \epsilon_{\Delta t}$.  The expansion factor is $\mu_n = \lambda_{\max}\,\Delta t_n = \lambda_{\max}\,\epsilon_{\Delta t}/\Phi_{\mathrm{total}} = \kappa_n\,\epsilon_{\Delta t}$.
-
-\textit{Case~(ii):} Since $\Phi_{\max}\leq\Phi_{\mathrm{total}}$, substituting $\Delta t_n = \epsilon_{\Delta t}/\Phi_{\max}$ into~\eqref{eq:key-flux-bound} gives
-\[
-\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \Phi_{\mathrm{total}}\cdot\frac{\epsilon_{\Delta t}}{\Phi_{\max}} = \eta_n\,\epsilon_{\Delta t}.
-\]
-The expansion factor is $\mu_n = \lambda_{\max}\,\epsilon_{\Delta t}/\Phi_{\max}$, and $\mu_n\leq 1$ is equivalent to $\epsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$.
+Substituting $\Delta t_n = \epsilon_{\Delta t}/\Phi_{\mathrm{total}}$ into~\eqref{eq:key-flux-bound} yields $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \epsilon_{\Delta t}$.  The expansion factor is $\mu_n = \lambda_{\max}\,\Delta t_n = \lambda_{\max}\,\epsilon_{\Delta t}/\Phi_{\mathrm{total}} = \kappa_n\,\epsilon_{\Delta t}$.
 \end{proof}
-
-\begin{remark}[Maximum-flux rule as a practical speedup]
-\label{rem:max-flux-speedup}
-The maximum-flux rule~(ii) can serve as an efficient alternative to the total-flux
-rule~(i) for stiff systems.  Because $\Delta t_n^{\max} = \eta_n\,\Delta t_n^{\mathrm{tot}}$
-and the iteration count scales as $N \sim t_f/\Delta t$, using the max-flux rule with
-tolerance $\epsilon_{\Delta t}^{\max}$ is equivalent in step count to the total-flux rule
-with $\epsilon_{\Delta t}^{\mathrm{tot}} = \epsilon_{\Delta t}^{\max}\cdot\eta_n$.
-Choosing $\epsilon_{\Delta t}^{\max} = \epsilon_{\Delta t}^{\mathrm{tot}}/\eta_n$ therefore
-recovers the same iteration count while preserving the per-step error bound $\eta_n\,\epsilon_{\Delta t}^{\max} = \epsilon_{\Delta t}^{\mathrm{tot}}$.
-In practice, the concentration ratio $\eta_n$ is not known in advance; however, for
-the Robertson benchmark the empirical median $\eta_n \approx 107$, so setting
-$\epsilon_{\Delta t}^{\max} = 0.01$ with the max-flux rule and
-$\epsilon_{\Delta t}^{\mathrm{tot}} = 1.0$ with the total-flux rule produce
-virtually identical step counts (41\,799 vs.\ 58\,543 for $t\in[0,100]$) and identical
-accuracy ($\langle A\rangle = 6146$ in both cases).
-The total-flux rule with $\epsilon_{\Delta t}=1$ (approximately one reaction per step)
-is therefore the recommended universal default, as it requires no system-dependent
-tuning of $\epsilon_{\Delta t}$.
-\end{remark}
-
-\begin{remark}[Max-propensity cap and depth-one guarantee]
-\label{rem:max-propensity-cap}
-The expansion factor $\mu_n$ governs the expansion depth required by Corollary~\ref{cor:expansion-depth}: under the total-flux rule, $\mu_n = \kappa_n\,\epsilon_{\Delta t}$ exceeds one when $\kappa_n > 1/\epsilon_{\Delta t}$ (high spatial stiffness).  To guarantee depth-one sufficiency ($\mu_n\leq 1$) for arbitrary stiffness, apply the \emph{max-propensity cap}:
-\begin{equation}
-\label{eq:dt-cap}
-\Delta t_n = \min\!\left(\frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)},\;\frac{1}{\lambda_{\max}(J_n,t_n)}\right).
-\end{equation}
-This ensures $\mu_n = \lambda_{\max}\,\Delta t_n \leq 1$ unconditionally.
-When $\kappa_n\,\epsilon_{\Delta t}\leq 1$ the cap is inactive and rule~(i) applies with error $\leq\epsilon_{\Delta t}$.
-When $\kappa_n\,\epsilon_{\Delta t}>1$ the cap activates with $\Delta t_n = 1/\lambda_{\max}$, giving
-\[
-\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \Phi_{\mathrm{total}}/\lambda_{\max} = 1/\kappa_n \leq \epsilon_{\Delta t}:
-\]
-the local error is actually \emph{smaller} than the prescribed tolerance while expansion depth remains one.  The cap is most valuable for highly stiff systems (large $\kappa_n$) where maintaining $d=1$ is critical for computational tractability.
-\end{remark}
 
 \begin{corollary}[Expansion depth for boundary control]
 \label{cor:expansion-depth}
-Let $\lambda_{\max}(J_n, t_n) := \max_{\boldsymbol{x} \in J_n,\, k} \alpha_k(\boldsymbol{x})$ denote the maximum propensity in the active set at step $n$.
-After expanding $J_n$ by graph depth $d$ (so that every state in the complement $J'$ requires at least $d+1$ consecutive reaction steps to reach from any state in $J_n$), the expansion-induced boundary outflux satisfies
+Let $\lambda_{\max}(J_n, t_n) := \max_{\boldsymbol{x} \in J_n} w(\boldsymbol{x})$ denote the maximum total exit rate in the active set, and set $\mu_n := \lambda_{\max}(J_n,t_n)\,\Delta t_n$.
+In a CTMC with all exit rates bounded above by $\lambda_{\max}$, the holding time at each state is at least $\mathrm{Exp}(\lambda_{\max})$, so the number of reactions along any trajectory in time $s$ is stochastically dominated by $\mathrm{Poisson}(\lambda_{\max}\,s)$.
+A state at graph distance $d$ from $J_n$ therefore requires at least $d$ such events to be reached.
+After expanding $J_n$ by depth $d$, the expansion-induced boundary outflux satisfies
 \begin{equation}
 \label{eq:expansion-outflux-bound}
 \int_{t_n}^{t_{n+1}} \Phi_{\mathrm{out}}(s)\, ds
 \;\leq\;
-\lambda_{\max} \,\Delta t_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\lambda_{\max}\,\Delta t_n) \geq d\bigr).
+\mu_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\mu_n) \geq d\bigr).
 \end{equation}
-To ensure this contribution to the local model error (Theorem~\ref{thm:local-model-error}) is at most $\varepsilon_{\mathrm{exp}} > 0$, choose
-\begin{equation}
-\label{eq:expansion-depth}
-d_{\min} = \Bigl\lceil \mu + z_\varepsilon\,\sqrt{\mu} \Bigr\rceil,
-\qquad \mu := \lambda_{\max}\,\Delta t_n,
-\end{equation}
-where $z_\varepsilon = \Phi^{-1}(1 - \varepsilon_{\mathrm{exp}}/\mu)$ and $\Phi$ is the standard normal CDF.
-Substituting the adaptive step $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ gives the depth in terms of the \emph{spatial stiffness ratio} $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n) \geq 1$:
-\begin{equation}
-\label{eq:expansion-depth-stiffness}
-d_{\min} = \Bigl\lceil \kappa_n\,\varepsilon_{\Delta t} + z_\varepsilon\,\sqrt{\kappa_n\,\varepsilon_{\Delta t}} \Bigr\rceil.
-\end{equation}
+For $d=1$, using $\mathrm{P}(\mathrm{Poisson}(\mu_n)\geq 1) = 1-e^{-\mu_n} \leq \mu_n$, the bound reduces to $\mu_n^2$.
+Depth $d=1$ is therefore sufficient whenever $\mu_n \leq 1$; under the total-flux rule~\eqref{eq:dt-total} this condition reads $\kappa_n\,\varepsilon_{\Delta t} \leq 1$, where $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n)$ is the spatial stiffness ratio.
 \end{corollary}
 
 \begin{proof}
-After expanding $J_n$ by depth $d$, every state in $J'$ lies at graph distance $\geq d+1$ from any state in $J_n$.
-Since probability mass in $J'$ is zero at time $t_n$ (all mass resides in $J_n$), the outflux $\Phi_{\mathrm{out}}$ is driven entirely by mass that has diffused from the interior of $J_n$ to its boundary during $[t_n, t_n+s]$.
-Because each reaction fires at rate $\leq \lambda_{\max}$, the number of reactions along any path in time $s$ is stochastically dominated by $\mathrm{Poisson}(\lambda_{\max}\,s)$.
-The probability mass reaching graph distance $d$ from $J_n$ (hence capable of flowing into $J'$) by time $t_n + s$ is therefore at most $\mathrm{P}(\mathrm{Poisson}(\lambda_{\max}\,s) \geq d)$.
-Hence $\Phi_{\mathrm{out}}(t_n+s) \leq \lambda_{\max} \cdot \mathrm{P}(\mathrm{Poisson}(\lambda_{\max}\,s) \geq d)$, and integrating using the monotonicity of the Poisson survivor in $s$:
-\[
-\int_{t_n}^{t_{n+1}} \Phi_{\mathrm{out}}(s)\,ds
-\;\leq\;
-\lambda_{\max}\,\Delta t_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\lambda_{\max}\,\Delta t_n) \geq d\bigr).
-\]
-Setting $\mu = \lambda_{\max}\,\Delta t_n$ and applying the CLT approximation
-$\mathrm{P}(\mathrm{Poisson}(\mu) \geq d) \approx 1 - \Phi((d-\mu)/\sqrt{\mu})$,
-requiring $\mu \cdot \mathrm{P}(\mathrm{Poisson}(\mu) \geq d) \leq \varepsilon_{\mathrm{exp}}$ yields~\eqref{eq:expansion-depth}.
-Substituting $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ gives $\mu = \kappa_n\,\varepsilon_{\Delta t}$ and hence~\eqref{eq:expansion-depth-stiffness}.
+Let $N(s)$ denote the number of reactions in $[0,s]$. Since each holding time is $\geq\mathrm{Exp}(\lambda_{\max})$, $N(s)\preceq\mathrm{Poisson}(\lambda_{\max}s)$ stochastically.
+All mass starts in $J_n$; reaching $J'$ requires $N(s)\geq d$, so
+$\Phi_{\mathrm{out}}(t_n+s)\leq\lambda_{\max}\,\mathrm{P}(N(s)\geq d)\leq\lambda_{\max}\,\mathrm{P}(\mathrm{Poisson}(\lambda_{\max}s)\geq d)$.
+Integrating and applying monotonicity of the Poisson survivor in $s$ gives~\eqref{eq:expansion-outflux-bound}.
+For $d=1$: $\mathrm{P}(\mathrm{Poisson}(\mu_n)\geq 1)=1-e^{-\mu_n}\leq\mu_n$.
 \end{proof}
 
 \begin{remark}[Expansion strategy and the depth-one regime]
 \label{rem:expansion-strategy}
-Corollary~\ref{cor:expansion-depth} shows that depth $d=1$ suffices whenever $\mu_n\leq 1$.  This is achieved by the max-propensity cap (Remark~\ref{rem:max-propensity-cap}) unconditionally, or by the maximum-flux rule when $\epsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$.  Within this depth-one regime two practical expansion strategies are available:
+Corollary~\ref{cor:expansion-depth} shows that depth $d=1$ suffices whenever $\mu_n\leq 1$.  For highly stiff systems this is enforced by the max-propensity cap (Remark~\ref{rem:max-propensity-cap}).  Within the depth-one regime two practical expansion strategies are available:
 \begin{itemize}
   \item \textbf{Stoichiometric expansion} adds every state reachable by a single reaction step from any active state, covering all $R$ reaction channels simultaneously.  This is the conservative choice, appropriate when $\kappa_n>1$ (multiple fast channels) or when the dominant reaction direction is not known \textit{a priori}.
   \item \textbf{SSA expansion} samples one next-reaction direction per active state according to the propensity distribution, adding only the most probable single-step neighbor.  When $\kappa_n\approx 1$ (a single reaction channel dominates locally), SSA implements $d=1$ with substantially lower state-space growth: stoichiometric expansion inflates $|S_n|$ by up to factor $R$ per step, while SSA adds exactly one new state per active state.
@@ -835,33 +788,26 @@ In systems where $\kappa_n$ varies across the state space---one dominant channel
 
 \begin{remark}[Consistent parameter selection via spatial stiffness]
 \label{rem:consistent-params}
-Corollaries~\ref{cor:local-error-pruning}, \ref{cor:flux-timestep}, and~\ref{cor:expansion-depth} and Remarks~\ref{rem:max-propensity-cap} and~\ref{rem:expansion-strategy} provide a self-consistent framework for parameter selection, governed by the spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$:
+Corollaries~\ref{cor:local-error-pruning}, \ref{cor:flux-timestep}, and~\ref{cor:expansion-depth} and Remark~\ref{rem:expansion-strategy} provide a self-consistent framework for parameter selection, governed by the spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$:
 \begin{itemize}
-  \item \textbf{Time step} (three options in increasing aggressiveness):
-    total-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (leading-order error $\lesssim\varepsilon_{\Delta t}$, $\mu=\kappa\,\varepsilon_{\Delta t}$; \textbf{recommended});
-    max-propensity cap $\Delta t = \min(\varepsilon_{\Delta t}/\Phi_{\mathrm{total}},\,1/\lambda_{\max})$ (error $\lesssim\min(\varepsilon_{\Delta t},1/\kappa)$, always $\mu\leq 1$);
-    maximum-flux $\Delta t = \varepsilon_{\Delta t}/\Phi_{\max}$ (error $\lesssim\eta\,\varepsilon_{\Delta t}$, $\mu\leq 1$ when $\varepsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$; valid only when $\eta_n\approx 1$, otherwise risks solution collapse for spread distributions)
-    \hfill (Corollary~\ref{cor:flux-timestep}, Remark~\ref{rem:max-propensity-cap}),
-  \item \textbf{Expansion depth and strategy:} use $d_{\min}=\lceil\kappa\,\varepsilon_{\Delta t}\rceil$ with stoichiometric expansion under the total-flux rule; reduce to $d_{\min}=1$ via the cap or maximum-flux rule, choosing SSA expansion when $\kappa\approx 1$ (one dominant channel) and stoichiometric expansion when $\kappa>1$ \hfill (Corollary~\ref{cor:expansion-depth}, Remark~\ref{rem:expansion-strategy}),
+  \item \textbf{Time step:} use the total-flux rule $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (leading-order error $\lesssim\varepsilon_{\Delta t}$, $\mu=\kappa\,\varepsilon_{\Delta t}$); for highly stiff systems apply the max-propensity cap (Remark~\ref{rem:max-propensity-cap}) to enforce $\mu\leq 1$ unconditionally \hfill (Corollary~\ref{cor:flux-timestep}),
+  \item \textbf{Expansion depth and strategy:} use $d=1$ (ensured by $\kappa\,\varepsilon_{\Delta t}\leq 1$ or the cap); choose SSA expansion when $\kappa\approx 1$ (one dominant channel) and stoichiometric expansion when $\kappa>1$ \hfill (Corollary~\ref{cor:expansion-depth}, Remark~\ref{rem:expansion-strategy}),
   \item \textbf{Flux tolerance:} $\varepsilon_{\mathrm{flux}} \ll \varepsilon_{\Delta t}$, e.g., $\varepsilon_{\mathrm{flux}} = \varepsilon_{\Delta t}/w_{\max}$ \hfill (Corollary~\ref{cor:local-error-pruning}).
 \end{itemize}
-In the bottleneck example of Section~\ref{sec:results}, $\kappa\approx k_2/k_1=10^5$ early in the simulation: the total-flux rule alone would require $d_{\min}\approx 10^5$, but the max-propensity cap enforces $\Delta t\leq 1/\lambda_{\max}=1/k_2$, reducing $d_{\min}$ to 1 while delivering local error $1/\kappa\ll\varepsilon_{\Delta t}$.
-The maximum-flux rule is advantageous for spatially stiff systems with concentrated distributions ($\kappa\gg 1$, $\eta\approx 1$): it takes larger steps than the total-flux rule while automatically maintaining $d=1$ when $\varepsilon_{\Delta t}\leq\Phi_{\max}/\lambda_{\max}$.
-
 \end{remark}
 
 \begin{table}[!htbp]
 \centering
-\caption{Recommended parameter ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ by system type. Values in parentheses are the parameters used in the corresponding numerical experiment of Section~\ref{sec:results}. The spatial stiffness ratio $\kappa=\lambda_{\max}/\Phi_{\mathrm{total}}$ is computable at each step.}
+\caption{Recommended ranges for $\alpha$ and $\varepsilon_{\Delta t}$ by system type. Values in parentheses are the parameters used in the corresponding numerical experiment of Section~\ref{sec:results}. For flux tolerance guidance see Remark~\ref{rem:param-guidance}.}
 \label{tab:param_guidance}
-\begin{tabular}{lccc}
+\begin{tabular}{lcc}
 \hline
-\textbf{System type} & $\alpha$ & $\varepsilon_{\mathrm{flux}}$ & $\varepsilon_{\Delta t}$ \\
+\textbf{System type} & $\alpha$ & $\varepsilon_{\Delta t}$ \\
 \hline
-Connectivity-critical (bottleneck) & $0.7$--$0.9$ ($0.9$) & $10^{-12}$--$10^{-6}$ ($10^{-12}$) & cap: $1/\lambda_{\max}$ \\
-Oscillatory / limit cycle (Oregonator) & $0.1$--$0.3$ ($0.1$) & $0$ ($0$) & $0.5$--$2$ ($1$) \\
-Stiff autocatalytic (Robertson) & $0.3$--$0.5$ ($0.4$) & $10^{-9}$ ($10^{-9}$) & $0.5$--$1$ ($1$) \\
-Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $10^{-8}$--$10^{-6}$ ($10^{-7}$) & $0.1$--$0.5$ \\
+Connectivity-critical (bottleneck) & $0.7$--$0.9$ ($0.9$) & cap: $1/\lambda_{\max}$ \\
+Oscillatory / limit cycle (Oregonator) & $0.1$--$0.3$ ($0.1$) & $0.5$--$2$ ($1$) \\
+Stiff autocatalytic (Robertson) & $0.3$--$0.5$ ($0.4$) & $0.5$--$1$ ($1$) \\
+Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $0.1$--$0.5$ \\
 \hline
 \end{tabular}
 \end{table}
@@ -1140,6 +1086,18 @@ The system then enters explosive transient phase ($10^{-2}$ s $< t < 10^2$ s) dr
 
 Following the transient ($t > 10^2$ s), reaction R3 slowly regenerates $A$ from $B$ and $C$, driving toward quasi-equilibrium near $(N_A, N_B, N_C) \approx (10000, 0, 0)$. Time steps increase progressively to $\Delta t \approx 10^2$ s by $t = 10^5$ s, spanning six orders of magnitude and the state space contracts to 500-1000 states as the distribution concentrates near quasi-equilibrium. The flux threshold decreases to approximately 100 s$^{-1}$ by $t = 10^4$ s, confirming approach to steady state.
 
+\begin{remark}[Max-propensity cap for depth-one guarantee]
+\label{rem:max-propensity-cap}
+Under the total-flux rule, $\mu_n = \kappa_n\,\epsilon_{\Delta t}$ exceeds one when $\kappa_n > 1/\epsilon_{\Delta t}$ (high spatial stiffness), which would require expansion depth $d > 1$.  For highly stiff systems, depth-one sufficiency can be enforced unconditionally by applying the \emph{max-propensity cap}:
+\begin{equation}
+\label{eq:dt-cap}
+\Delta t_n = \min\!\left(\frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)},\;\frac{1}{\lambda_{\max}(J_n,t_n)}\right).
+\end{equation}
+This ensures $\mu_n = \lambda_{\max}\,\Delta t_n \leq 1$ unconditionally.
+When the cap activates ($\kappa_n\,\epsilon_{\Delta t}>1$), the step is $\Delta t_n = 1/\lambda_{\max}$, giving local error $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim 1/\kappa_n \leq \epsilon_{\Delta t}$ --- actually smaller than the prescribed tolerance while expansion depth remains one.
+The cap therefore trades more frequent steps for cheaper per-step cost: depth-$d$ expansion requires $O(d\,|\mathcal{S}|\,R)$ work, so reducing $d$ from $\lceil\kappa\,\varepsilon_{\Delta t}\rceil$ to $1$ can yield a net simulation speedup when $\kappa$ is large.
+\end{remark}
+
 
 \subsection{Performance Evaluation of Matrix Construction}
 
@@ -1200,31 +1158,31 @@ Toggle switch & 364 & 37 & 9.8$\times$ \\
 
 We compare with the Krylov-FSP-SSA algorithm of Vo and Sidje~\cite{Sidje2015}, reviewed in detail by Dinh and Sidje~\cite{Dinh2016}. This baseline shares the same expand--evolve--prune skeleton and Krylov matrix exponential integrator but differs in three key respects: (i) pruning uses a joint probability-and-derivative threshold (Algorithm~2, Step~7 of~\cite{Vo2017}: state $i$ is dropped only if $p_i < \texttt{droptol}$ \emph{and} $(\mathbf{A}\boldsymbol{p})_i < \texttt{droptol}'$, without flux-based protection), (ii) time stepping uses a mass-conservation accept/reject criterion (halving $\tau$ when retained mass falls below $1 - \varepsilon_{\mathrm{FSP}}(t+\tau)/t_f$) rather than the flux-adaptive rule $\Delta t = \varepsilon_{\Delta t}/\Phi$, and (iii) expansion is SSA-driven with $r$-step reachability enumeration. Figure~\ref{fig:unified_comparison} and Table~\ref{tab:comparison_summary} compare the two methods on the three benchmark systems; each exposes a qualitatively distinct failure mode.
 
-\paragraph{Oregonator: state-space explosion.}
+\subsubsection{Oregonator: state-space explosion.}
 FP-FSP completes $t_f = 0.11$ in 33\,s with max $|\mathcal{S}| = 1{,}003$ (panel~(a)), while Krylov-FSP-SSA grows to 13{,}294 states and reaches only $t = 0.003$ (2.7\%) after 3{,}000 iterations and 74\,s. The explosion arises because the joint probability-and-derivative filter retains expanding boundary states with significant $(\mathbf{A}\boldsymbol{p})_i > \texttt{droptol}'$ even when $p_i$ is small; without flux-based pruning the active set grows monotonically. The $\tau$-lock at $\tau \approx 10^{-6}$ is fundamental: large propensities ($k_3 XZ \sim 10^5$) cause mass-conservation failures for any larger step, independent of $\varepsilon$, so parameter tuning cannot resolve it.
 
-\paragraph{Bottleneck: wavefront truncation.}
+\subsubsection{Bottleneck: wavefront truncation.}
 FP-FSP uses a fixed step $\delta t = 1/k_2 = 10$\,s (panel~(b)), keeping the depth-1 expansion pace-matched with the probability wavefront; it completes $t_f = 10^4$ in 1.0\,s with $\langle C \rangle = 4.978$ (${<}0.1\%$ error). Krylov-FSP-SSA ($\varepsilon=10^{-2}$, $\tau_{\mathrm{init}}=100$, $r=1$, $\mathtt{droptol}=10^{-10}$) also reaches $t_f$ in 7 accepted steps, but produces $\langle C \rangle \approx 0$ (${\gg}1{,}000\times$ underestimate). The failure is \emph{wavefront truncation}: the connector state $B{=}1$ is correctly retained ($p(B{=}1) \approx k_1 t \gg 10^{-10}$; both methods agree on $\langle B \rangle = 0.010$), but $\tau$ doubles after each accepted step (100\,$\to$\,3{,}700\,s) while $r=1$ adds only one new $C$-state per step. After 7 steps the projection covers only $C \leq 12$, while the true distribution of $C\mid B{=}1$ has spread over $[0,\,k_2 t_f] \approx [0, 1{,}000]$. With the absorbing-form generator, probability flux to $C \geq 13$ is absorbed into a sink; the retained mass within the 14-state projection is concentrated near $C{=}0$ and yields $\langle C \rangle \approx 0$. The mass-conservation criterion does not detect the inadequate coverage because the absorbed mass (${\approx}1\%$ by $t_f$) falls within the FSP tolerance. Tuning $(\varepsilon, \tau, r)$ over a wide range achieves at best $\langle C \rangle \approx 4.72$ (${\sim}5\%$ error) at comparable wall time to FP-FSP, because capping $\tau \leq 1/k_2$ forces ${\sim}1{,}000$ steps while recovering the efficiency advantage of large accepted steps requires $r \gtrsim k_2 \tau$, creating a fundamental conflict.
 
-\paragraph{Robertson: stiffness-induced $\tau$-lock.}
+\subsubsection{Robertson: stiffness-induced $\tau$-lock.}
 FP-FSP with the flux-adaptive step $\delta t = \varepsilon_{\Delta t}/\Phi$ tracks the non-monotonic burst-and-relax structure of the autocatalytic Robertson system (panel~(c)): $\delta t$ drops sharply during each burst as probability concentrates on high-flux states, then rises as the burst dissipates and $A$ depletes, peaking at $\approx 0.026$ during the equilibration phase ($t \gtrsim 3{,}000$). FP-FSP completes $t_f = 10^4$ in $662{,}472$ steps ($1{,}117$\,s) with $\langle A \rangle = 507$, $\langle C \rangle = 9{,}493$. Krylov-FSP-SSA with the correct absorbing-form generator (Algorithm~2 of~\cite{Vo2017}) incurs a 67\% rejection rate driven by FSP mass-conservation failures: the stiff $k_2 = 3{\times}10^6$ propensity causes the probability distribution to rapidly hit the projection boundary whenever $B{\geq}2$ states are populated, and the accepted step sizes $\tau$ fluctuate widely as the algorithm repeatedly halves $\tau$ to satisfy the FSP criterion. In 500 iterations ($1.9$\,s) it reaches only $t = 227.8$ ($2.3\%$ of $t_f$).
 
 \begin{table}[!htbp]
 \centering
 \caption{FP-FSP vs.\ Krylov-FSP-SSA summary. Krylov parameters: Oregonator $(\varepsilon{=}10^{-2},\,\tau_0{=}10^{-6},\,r{=}1)$; Bottleneck $(\varepsilon{=}10^{-2},\,\tau_0{=}100,\,r{=}1)$; Robertson $(\varepsilon{=}10^{-2},\,\tau_0{=}0.1,\,r{=}1,\,\text{absorbing gen.})$. FP-FSP parameters: Oregonator $(\varepsilon_{\Delta t}{=}1,\,\alpha{=}0.1,\,\varepsilon_{\mathrm{flux}}{=}1)$; Bottleneck $(\delta t{=}10,\,\alpha{=}0.9,\,\varepsilon_{\mathrm{flux}}{=}10^{-6})$; Robertson $(\varepsilon_{\Delta t}{=}0.01,\,\alpha{=}0.4,\,\varepsilon_{\mathrm{flux}}{=}10^{-9})$.}
 \label{tab:comparison_summary}
-\begin{tabular}{llccc}
+\begin{tabular}{llcc}
 \hline
-System & Method & Wall time & Steps / iters & Outcome \\
+System & Method & Wall time & Steps / iters \\
 \hline
-\multirow{2}{*}{Oregonator} & FP-FSP & 33\,s & 26 snaps & Complete; max $|\mathcal{S}|=1{,}003$ \\
- & Krylov-FSP-SSA & 74\,s & 3{,}000 & 2.7\% of $t_f$; max $|\mathcal{S}|=13{,}294$ \\
+\multirow{2}{*}{Oregonator} & FP-FSP & 33\,s & 26 snaps \\
+ & Krylov-FSP-SSA & 74\,s & 3{,}000 (2.7\% of $t_f$) \\
 \hline
-\multirow{2}{*}{Bottleneck} & FP-FSP & 1.0\,s & 1{,}000 ($\delta t{=}10$) & Complete; $\langle C \rangle=4.978$ (${<}0.1\%$ err) \\
- & Krylov-FSP-SSA & ${<}0.1$\,s & 7 ($\tau$: $100{\to}3{,}700$) & Complete; $\langle C \rangle{\approx}0$ (wavefront truncated) \\
+\multirow{2}{*}{Bottleneck} & FP-FSP & 1.0\,s & 1{,}000 ($\delta t{=}10$) \\
+ & Krylov-FSP-SSA & ${<}0.1$\,s & 7 ($\tau$: $100{\to}3{,}700$) \\
 \hline
-\multirow{2}{*}{Robertson} & FP-FSP & $1{,}117$\,s & $662{,}472$ & Complete; $\langle A \rangle{=}507$, $\langle C \rangle{=}9{,}493$ \\
- & Krylov-FSP-SSA & $1.9$\,s & 500 (67\% rej.) & 2.3\% of $t_f$; incomplete \\
+\multirow{2}{*}{Robertson} & FP-FSP & $1{,}117$\,s & $662{,}472$ \\
+ & Krylov-FSP-SSA & $1.9$\,s & 500 (67\% rej.; 2.3\% of $t_f$) \\
 \hline
 \end{tabular}
 \end{table}
