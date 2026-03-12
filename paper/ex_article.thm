@@ -6,7 +6,7 @@
 \contentsline {definition}{{Definition}{3.1}{Outgoing probability flux}}{6}{theorem.36}%
 \contentsline {definition}{{Definition}{3.2}{Total system flux}}{6}{theorem.38}%
 \contentsline {proposition}{{Proposition}{3.3}{Total flux properties}}{6}{theorem.40}%
-\contentsline {proof}{{Proof}{1}{}}{6}{proof.42}%
+\contentsline {proof}{{Proof}{1}{}}{7}{proof.42}%
 \contentsline {definition}{{Definition}{3.4}{Boundary outflux}}{7}{theorem.44}%
 \contentsline {remark}{{Remark}{3.5}{The central role of boundary outflux}}{7}{theorem.46}%
 \contentsline {proposition}{{Proposition}{3.6}{Flux expansion boundary outflux bound}}{7}{theorem.47}%
@@ -24,7 +24,7 @@
 \contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{15}{theorem.151}%
 \contentsline {proof}{{Proof}{6}{}}{15}{proof.153}%
 \contentsline {corollary}{{Corollary}{4.7}{Adaptive time step}}{16}{theorem.154}%
-\contentsline {proof}{{Proof}{7}{}}{16}{proof.157}%
-\contentsline {remark}{{Remark}{4.8}{Unified parameter selection}}{16}{theorem.158}%
-\contentsline {remark}{{Remark}{4.9}{Practical parameter selection}}{17}{theorem.160}%
-\contentsline {remark}{{Remark}{5.1}{Depth-aware cap for slow-start systems}}{28}{theorem.185}%
+\contentsline {proof}{{Proof}{7}{}}{16}{proof.156}%
+\contentsline {remark}{{Remark}{4.8}{Unified parameter selection}}{16}{theorem.157}%
+\contentsline {remark}{{Remark}{4.9}{Parameter choices for numerical experiments}}{16}{theorem.159}%
+\contentsline {remark}{{Remark}{5.1}{Depth-aware cap for slow-start systems}}{28}{theorem.184}%

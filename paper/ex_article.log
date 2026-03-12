@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2023.4.2)  12 MAR 2026 14:21
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2023.4.2)  12 MAR 2026 15:30
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1010,14 +1010,11 @@ tric-tive bot-tle-neck. Cheeger's|
  []
 
 [7]
-<generator_sparsity.pdf, id=317, 702.625pt x 341.275pt>
+<generator_sparsity.pdf, id=315, 702.625pt x 341.275pt>
 File: generator_sparsity.pdf Graphic file (type pdf)
 <use generator_sparsity.pdf>
 Package pdftex.def Info: generator_sparsity.pdf  used on input line 364.
 (pdftex.def)             Requested size: 266.67674pt x 129.52962pt.
-
-Underfull \vbox (badness 10000) has occurred while \output is active []
-
  [8 <./generator_sparsity.pdf>] [9]
 LaTeX Font Info:    Trying to load font information for OMS+cmr on input line 4
 47.
@@ -1032,62 +1029,64 @@ LaTeX Font Info:    Font shape `OMS/cmr/m/n' in size <10> not available
 Package hyperref Info: bookmark level for unknown corollary defaults to 0 on in
 put line 606.
  [13] [14] [15] [16] [17]
-<flux_vs_naive_comparison.png, id=532, 3312.375pt x 2409.0pt>
+<flux_vs_naive_comparison.png, id=534, 3312.375pt x 2409.0pt>
 File: flux_vs_naive_comparison.png Graphic file (type png)
 <use flux_vs_naive_comparison.png>
-Package pdftex.def Info: flux_vs_naive_comparison.png  used on input line 799.
+Package pdftex.def Info: flux_vs_naive_comparison.png  used on input line 785.
 (pdftex.def)             Requested size: 370.38374pt x 269.36507pt.
  [18 <./flux_vs_naive_comparison.png>] [19]
-<error_accumulation_analysis.png, id=551, 3312.375pt x 2409.0pt>
+<error_accumulation_analysis.png, id=553, 3312.375pt x 2409.0pt>
 File: error_accumulation_analysis.png Graphic file (type png)
 <use error_accumulation_analysis.png>
-Package pdftex.def Info: error_accumulation_analysis.png  used on input line 86
-9.
+Package pdftex.def Info: error_accumulation_analysis.png  used on input line 85
+5.
 (pdftex.def)             Requested size: 370.38374pt x 269.36507pt.
 
 Underfull \vbox (badness 2626) has occurred while \output is active []
 
  [20]
-[21 <./error_accumulation_analysis.png>]
 
 pdfTeX warning: pdflatex (file ./toggle_switch_grid.pdf): PDF inclusion: found 
 PDF version <1.7>, but at most version <1.5> allowed
-<toggle_switch_grid.pdf, id=568, 470.75874pt x 451.6875pt>
+<toggle_switch_grid.pdf, id=566, 470.75874pt x 451.6875pt>
 File: toggle_switch_grid.pdf Graphic file (type pdf)
 <use toggle_switch_grid.pdf>
-Package pdftex.def Info: toggle_switch_grid.pdf  used on input line 903.
+Package pdftex.def Info: toggle_switch_grid.pdf  used on input line 889.
 (pdftex.def)             Requested size: 370.38374pt x 355.38185pt.
-[22 <./toggle_switch_grid.pdf>]
-Underfull \vbox (badness 1742) has occurred while \output is active []
+
+Underfull \vbox (badness 5802) has occurred while \output is active []
+
+ [21 <./error_accumulation_analysis.png>] [22 <./toggle_switch_grid.pdf>]
+Underfull \vbox (badness 10000) has occurred while \output is active []
 
  [23]
-Overfull \hbox (6.40694pt too wide) in paragraph at lines 967--969
+Overfull \hbox (6.40694pt too wide) in paragraph at lines 953--955
 \OT1/cmr/m/n/10 We spec-ify the steady-state pop-u-la-tions as $(\OML/cmm/m/it/
 10 N[]; N[]; N[]\OT1/cmr/m/n/10 ) = (500\OML/cmm/m/it/10 ; \OT1/cmr/m/n/10 1000
 \OML/cmm/m/it/10 ; \OT1/cmr/m/n/10 2000)$ molecules,|
  []
 
 [24]
-Overfull \hbox (9.11954pt too wide) in paragraph at lines 999--1000
+Overfull \hbox (9.11954pt too wide) in paragraph at lines 985--986
 []\OT1/cmr/m/n/10 The mean tra-jec-to-ries (panel c) ex-hibit char-ac-ter-is-ti
 c re-lax-ation os-cil-la-tions. Species|
  []
 
-<orag.pdf, id=637, 379.4175pt x 271.0125pt>
+<orag.pdf, id=639, 379.4175pt x 271.0125pt>
 File: orag.pdf Graphic file (type pdf)
 <use orag.pdf>
-Package pdftex.def Info: orag.pdf  used on input line 1004.
+Package pdftex.def Info: orag.pdf  used on input line 990.
 (pdftex.def)             Requested size: 370.38374pt x 264.56487pt.
 
-Overfull \hbox (0.83217pt too wide) in paragraph at lines 1011--1012
+Overfull \hbox (0.83217pt too wide) in paragraph at lines 997--998
  \OT1/cmr/bx/n/10 5.4. Stiff Dy-nam-ics in the Robert-son Au-to-cat-alytic Sys-
 tem.[][] \OT1/cmr/m/n/10 The Robert-|
  []
 
-<simulation_results.pdf, id=640, 505.89pt x 361.35pt>
+<simulation_results.pdf, id=642, 505.89pt x 361.35pt>
 File: simulation_results.pdf Graphic file (type pdf)
 <use simulation_results.pdf>
-Package pdftex.def Info: simulation_results.pdf  used on input line 1030.
+Package pdftex.def Info: simulation_results.pdf  used on input line 1016.
 (pdftex.def)             Requested size: 370.38374pt x 264.56625pt.
 
 Underfull \vbox (badness 2626) has occurred while \output is active []
@@ -1097,50 +1096,50 @@ Underfull \vbox (badness 2626) has occurred while \output is active []
 Underfull \vbox (badness 5119) has occurred while \output is active []
 
  [27 <./simulation_results.pdf>]
-<benchmark_comparison.pdf, id=689, 505.89pt x 252.945pt>
+<benchmark_comparison.pdf, id=691, 505.89pt x 252.945pt>
 File: benchmark_comparison.pdf Graphic file (type pdf)
 <use benchmark_comparison.pdf>
-Package pdftex.def Info: benchmark_comparison.pdf  used on input line 1069.
+Package pdftex.def Info: benchmark_comparison.pdf  used on input line 1055.
 (pdftex.def)             Requested size: 370.38374pt x 185.19638pt.
  [28]
 
 pdfTeX warning: pdflatex (file ./speed.pdf): PDF inclusion: found PDF version <
 1.7>, but at most version <1.5> allowed
-<speed.pdf, id=700, 752.8125pt x 301.125pt>
+<speed.pdf, id=702, 752.8125pt x 301.125pt>
 File: speed.pdf Graphic file (type pdf)
 <use speed.pdf>
-Package pdftex.def Info: speed.pdf  used on input line 1093.
+Package pdftex.def Info: speed.pdf  used on input line 1079.
 (pdftex.def)             Requested size: 370.38374pt x 148.15904pt.
 [29 <./benchmark_comparison.pdf> <./speed.pdf
 
 pdfTeX warning: pdflatex (file ./speed.pdf): PDF inclusion: multiple pdfs with 
 page group included in a single page
 >]
-Overfull \hbox (0.4621pt too wide) in paragraph at lines 1118--1119
+Overfull \hbox (0.4621pt too wide) in paragraph at lines 1104--1105
  \OT1/cmr/bx/n/10 5.6. Com-par-i-son with Krylov-FSP-SSA.[][] \OT1/cmr/m/n/10 W
 e com-pare with the Krylov-FSP-|
  []
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1127.
+(hyperref)                removing `math shift' on input line 1113.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\tau' on input line 1127.
+(hyperref)                removing `\tau' on input line 1113.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1127.
+(hyperref)                removing `math shift' on input line 1113.
 
 [30]
-Underfull \hbox (badness 5431) in paragraph at lines 1131--1131
+Underfull \hbox (badness 5431) in paragraph at lines 1117--1117
 []\OT1/cmr/m/n/10 Table 10: |FP-FSP vs. Krylov-FSP-SSA sum-mary. Krylov pa-ram-
 e-ters:
  []
 
 
-Underfull \hbox (badness 4353) in paragraph at lines 1131--1131
+Underfull \hbox (badness 4353) in paragraph at lines 1117--1117
 \OT1/cmr/m/n/10 son $(\OML/cmm/m/it/10 "[]\OT1/cmr/m/n/10 10[]\OML/cmm/m/it/10 
 ;  ^^\[][]\OT1/cmr/m/n/10 0\OML/cmm/m/it/10 :\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 
 ;  r[]\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 ;  []\OT1/cmr/m/n/10 )$. FP-FSP pa-ram-
@@ -1148,7 +1147,7 @@ e-ters: Oreg-o-na-
  []
 
 
-Underfull \hbox (badness 1735) in paragraph at lines 1131--1131
+Underfull \hbox (badness 1735) in paragraph at lines 1117--1117
 \OT1/cmr/m/n/10 tor $(\OML/cmm/m/it/10 "[][]\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 ;
   []\OT1/cmr/m/n/10 0\OML/cmm/m/it/10 :\OT1/cmr/m/n/10 1\OML/cmm/m/it/10 ;  "[
 ][]\OT1/cmr/m/n/10 1)$; Bot-tle-neck $(\OML/cmm/m/it/10 ^^Nt[]\OT1/cmr/m/n/10 1
@@ -1156,13 +1155,13 @@ Underfull \hbox (badness 1735) in paragraph at lines 1131--1131
 L/cmm/m/it/10 ;  "[][]\OT1/cmr/m/n/10 10[])$; Robert-son
  []
 
-<unified_comparison.pdf, id=782, 1204.5pt x 361.35pt>
+<unified_comparison.pdf, id=784, 1204.5pt x 361.35pt>
 File: unified_comparison.pdf Graphic file (type pdf)
 <use unified_comparison.pdf>
-Package pdftex.def Info: unified_comparison.pdf  used on input line 1151.
+Package pdftex.def Info: unified_comparison.pdf  used on input line 1137.
 (pdftex.def)             Requested size: 370.38374pt x 111.11308pt.
 [31 <./unified_comparison.pdf>] [32]
-Overfull \hbox (7.36958pt too wide) in paragraph at lines 1176--1177
+Overfull \hbox (7.36958pt too wide) in paragraph at lines 1162--1163
 []\OT1/cmr/m/n/10 Finally, we have fo-cused on time-homogeneous gen-er-a-tors. 
 Time-dependent propen-|
  []
@@ -1210,13 +1209,13 @@ Underfull \vbox (badness 10000) has occurred while \output is active []
 
 [35] (./ex_article.aux)
 Package rerunfilecheck Info: File `ex_article.out' has not changed.
-(rerunfilecheck)             Checksum: 50EFB15B97D2E0AC0E24C15A69F134B3;6281.
+(rerunfilecheck)             Checksum: 8C2C624238E93621551B170D7AD72EE1;6281.
  ) 
 Here is how much of TeX's memory you used:
- 30359 strings out of 476025
- 617618 string characters out of 5790018
+ 30356 strings out of 476025
+ 617557 string characters out of 5790018
  1885388 words of memory out of 5000000
- 50078 multiletter control sequences out of 15000+600000
+ 50076 multiletter control sequences out of 15000+600000
  526996 words of font info for 87 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  89i,20n,90p,1732b,1265s stack positions out of 10000i,1000n,20000p,200000b,200000s
@@ -1247,10 +1246,10 @@ f-dist/fonts/type1/public/amsfonts/cm/cmti8.pfb></usr/local/texlive/2023/texmf-
 dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/local/texlive/2023/texmf-d
 ist/fonts/type1/public/amsfonts/symbols/msam10.pfb></usr/local/texlive/2023/tex
 mf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on ex_article.pdf (35 pages, 1739871 bytes).
+Output written on ex_article.pdf (35 pages, 1741063 bytes).
 PDF statistics:
- 1089 PDF objects out of 1200 (max. 8388607)
- 921 compressed objects within 10 object streams
- 272 named destinations out of 1000 (max. 500000)
+ 1091 PDF objects out of 1200 (max. 8388607)
+ 923 compressed objects within 10 object streams
+ 271 named destinations out of 1000 (max. 500000)
  319 words of extra memory for PDF output out of 10000 (max. 10000000)
 

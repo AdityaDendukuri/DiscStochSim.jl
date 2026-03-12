@@ -262,12 +262,12 @@ Adaptive FSP methods must grapple with stiffness that arises when the generator 
 \section{Methodology: Flux-Based Adaptive FSP}
 \label{sec:methodology}
 
-The adaptive FSP involves three coupled decisions at each step: which states to add (\emph{expansion}), how far to advance in time (\emph{time stepping}), and which states to remove (\emph{pruning}).  These are not independent heuristics---they are three facets of controlling a single quantity: the \emph{boundary outflux} $\Phi_{\mathrm{out}}$, the instantaneous rate at which probability escapes the active set.  The local error theorem (Theorem~\ref{thm:local-model-error}, Section~\ref{sec:theory}) establishes that after renormalization $\Phi_{\mathrm{in}}(t_n)=0$ and
+The adaptive FSP involves three coupled decisions at each step: which states to add (\emph{expansion}), how far to advance in time (\emph{time stepping}), and which states to remove (\emph{pruning}).  These are not independent heuristics---they are three facets of controlling a single quantity: the \emph{boundary outflux} $\Phi_{\mathrm{out}}$, the instantaneous rate at which probability escapes the active set.  The local error theorem (Theorem~\ref{thm:local-model-error}, Section~\ref{sec:theory}) establishes that
 \begin{equation}
 \label{eq:error-is-phiout}
-\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \lesssim \Phi_{\mathrm{out}}(J_n, t_n)\,\Delta t_n,
+\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \int_{t_n}^{t_{n+1}}(\Phi_{\mathrm{in}}(s)+\Phi_{\mathrm{out}}(s))\,ds \leq \Phi_{\mathrm{out}}(J_n, t_n)\,\Delta t_n + O(\Delta t_n^2),
 \end{equation}
-so keeping $\Phi_{\mathrm{out}}\,\Delta t \leq \varepsilon_{\Delta t}$ is the single criterion that governs accuracy.  Expansion reduces $\Phi_{\mathrm{out}}$ by moving boundary states into $J$; time stepping bounds the product $\Phi_{\mathrm{out}}\,\Delta t$; pruning removes states while limiting the increase in $\Phi_{\mathrm{out}}$.  This section develops each component in turn, keeping~\eqref{eq:error-is-phiout} as the unifying thread.
+where the second inequality uses $\Phi_{\mathrm{in}}(t_n)=0$ (renormalization zeroes exterior probability at each step start) and the fact that $\Phi_{\mathrm{in}}$ grows from zero during the step, making its integral second-order.  To first order in $\Delta t_n$, keeping $\Phi_{\mathrm{out}}\,\Delta t \leq \varepsilon_{\Delta t}$ is therefore the single criterion that governs accuracy.  Expansion reduces $\Phi_{\mathrm{out}}$ by moving boundary states into $J$; time stepping bounds the product $\Phi_{\mathrm{out}}\,\Delta t$; pruning removes states while limiting the increase in $\Phi_{\mathrm{out}}$.  This section develops each component in turn, keeping~\eqref{eq:error-is-phiout} as the unifying thread.
 
 \begin{definition}[Outgoing probability flux]
 \label{def:flux}
@@ -695,7 +695,7 @@ Let $e_n := \|\boldsymbol{p}(t_n) - \widetilde{\boldsymbol{p}}_n\|_1$ denote the
 \label{eq:global-error-bound}
 e_N \leq \sum_{n=0}^{N-1}(\varepsilon_n + \tau_n),
 \end{equation}
-where $\varepsilon_n := \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s)+\Phi_{\mathrm{out}}(s))\,ds \leq \lambda_{\max}(J_n)\,\Delta t_n$ is the local model error (Theorem~\ref{thm:local-model-error}), and $\tau_n$ is the ODE error (Proposition~\ref{prop:local_time_error}).
+where $\varepsilon_n := \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s)+\Phi_{\mathrm{out}}(s))\,ds$ is the local model error (Theorem~\ref{thm:local-model-error}), and $\tau_n$ is the ODE error (Proposition~\ref{prop:local_time_error}).  With the total-flux step rule, $\varepsilon_n \leq \varepsilon_{\Delta t}$ to leading order (Corollary~\ref{cor:flux-timestep}).
 \end{corollary}
 
 \begin{proof}
@@ -705,9 +705,9 @@ Let $\boldsymbol{r}(t)$ be the exact CME solution on the full state space starti
 \]
 Renormalization ensures $\widetilde{\boldsymbol{p}}_{n,J'}=0$, so $\Phi_{\mathrm{in}}(t_n)=0$ exactly.  Theorem~\ref{thm:local-model-error} then gives
 \[
-\|\boldsymbol{r}_J(t_{n+1}) - \widehat{\boldsymbol{p}}(t_{n+1})\|_1 \leq \int_{t_n}^{t_{n+1}}(\Phi_{\mathrm{in}}(s)+\Phi_{\mathrm{out}}(s))\,ds =: \varepsilon_n \leq \lambda_{\max}(J_n)\,\Delta t_n,
+\|\boldsymbol{r}_J(t_{n+1}) - \widehat{\boldsymbol{p}}(t_{n+1})\|_1 \leq \int_{t_n}^{t_{n+1}}(\Phi_{\mathrm{in}}(s)+\Phi_{\mathrm{out}}(s))\,ds =: \varepsilon_n.
 \]
-using $\Phi_{\mathrm{in}}+\Phi_{\mathrm{out}} \leq \lambda_{\max}\|\boldsymbol{r}(s)\|_1 = \lambda_{\max}$ pointwise.  Let $\widetilde{\boldsymbol{p}}_{n+1}^{\mathrm{pre}}$ be the numerical solution before pruning at the end of step $n$; Proposition~\ref{prop:local_time_error} gives $\|\widehat{\boldsymbol{p}}(t_{n+1}) - \widetilde{\boldsymbol{p}}_{n+1}^{\mathrm{pre}}\|_1 \leq \tau_n$.  Pruning then zeros the exterior entries to produce $\widetilde{\boldsymbol{p}}_{n+1}$, introducing an additional perturbation of at most $\alpha$, so $\|\widehat{\boldsymbol{p}}(t_{n+1}) - \widetilde{\boldsymbol{p}}_{n+1}\|_1 \leq \tau_n + O(\alpha)$.  The triangle inequality yields $e_{n+1} \leq e_n + \varepsilon_n + \tau_n + O(\alpha)$, and summing from $n=0$ to $N-1$ gives~\eqref{eq:global-error-bound} to leading order in $\alpha$.
+Since $\Phi_{\mathrm{out}}(s) = (\mathbf{1}^\top\mathbf{A}_{J'J})\widehat{\boldsymbol{p}}_J(s) \leq \lambda_{\max}(J_n)\|\widehat{\boldsymbol{p}}_J(s)\|_1 \leq \lambda_{\max}(J_n)$ (outflux involves only exit rates within $J_n$), and since $\Phi_{\mathrm{in}}(t_n)=0$ with $\int_{t_n}^{t_{n+1}}\Phi_{\mathrm{in}}\,ds = O(\Delta t_n^2)$ (inflow requires probability to first leave $J_n$ via $\Phi_{\mathrm{out}}$, so it is second-order), we obtain to leading order $\varepsilon_n \leq \lambda_{\max}(J_n)\,\Delta t_n$.  Let $\widetilde{\boldsymbol{p}}_{n+1}^{\mathrm{pre}}$ be the numerical solution before pruning at the end of step $n$; Proposition~\ref{prop:local_time_error} gives $\|\widehat{\boldsymbol{p}}(t_{n+1}) - \widetilde{\boldsymbol{p}}_{n+1}^{\mathrm{pre}}\|_1 \leq \tau_n$.  Pruning then zeros the exterior entries to produce $\widetilde{\boldsymbol{p}}_{n+1}$, introducing an additional perturbation of at most $\alpha$, so $\|\widehat{\boldsymbol{p}}(t_{n+1}) - \widetilde{\boldsymbol{p}}_{n+1}\|_1 \leq \tau_n + O(\alpha)$.  The triangle inequality yields $e_{n+1} \leq e_n + \varepsilon_n + \tau_n + O(\alpha)$, and summing from $n=0$ to $N-1$ gives~\eqref{eq:global-error-bound} to leading order in $\alpha$.
 \end{proof}
 
 The model error $\varepsilon_n$ measures how well the active set $J_n$ contains the evolving distribution: it equals the probability that leaks through the truncation boundary during step $n$.  The pruning and expansion decisions that determine $J_n$ are design choices that control $\Phi_{\mathrm{out}}(J_n)$ and hence $\varepsilon_n$, but they enter the error bound only through this single quantity.  In particular, the pruning mass itself does not appear: what matters is not how much probability is removed but whether the remaining active set $J_n$ retains the states through which significant probability flows.
@@ -715,26 +715,16 @@ The model error $\varepsilon_n$ measures how well the active set $J_n$ contains 
 
 \begin{corollary}[Adaptive time step]
 \label{cor:flux-timestep}
-Let $\kappa_n := \lambda_{\max}(J_n)/\Phi_{\mathrm{total}}(J_n,t_n) \geq 1$ be the \emph{spatial stiffness ratio}, where $\lambda_{\max}(J_n) := \max_{\boldsymbol{x}\in J_n} w(\boldsymbol{x})$.
 The \emph{total-flux step rule}
 \begin{equation}
 \label{eq:dt-total}
 \Delta t_n = \frac{\varepsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)}
 \end{equation}
-guarantees the exact bound
-\begin{equation}
-\label{eq:model-error-bound}
-\varepsilon_n \leq \kappa_n\,\varepsilon_{\Delta t}.
-\end{equation}
-For $\kappa_n = O(1)$---which holds whenever the distribution is not strongly concentrated on the single highest-rate state---the per-step model error is $O(\varepsilon_{\Delta t})$.
+guarantees $\varepsilon_n \leq \varepsilon_{\Delta t}$ to leading order in $\Delta t_n$.
 \end{corollary}
 
 \begin{proof}
-From the global error proof, $\varepsilon_n \leq \lambda_{\max}(J_n)\,\Delta t_n$ (since $\Phi_{\mathrm{in}}+\Phi_{\mathrm{out}} \leq \lambda_{\max}$ pointwise, as both are bounded by $\lambda_{\max}\|\boldsymbol{r}(s)\|_1 = \lambda_{\max}$).  Substituting $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$:
-\[
-\varepsilon_n \leq \lambda_{\max}(J_n)\cdot\frac{\varepsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)} = \kappa_n\,\varepsilon_{\Delta t}.
-\]
-Using $\Phi_{\mathrm{total}}$ rather than $\lambda_{\max}$ in the denominator gives a larger, distribution-aware step: $\Phi_{\mathrm{total}} = \sum_x p(x)w(x)$ is the probability-weighted average of exit rates, whereas $\lambda_{\max}$ is the worst-case single-state rate.  When the distribution is spread across many states, $\Phi_{\mathrm{total}} \ll \lambda_{\max}$ and the rule $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ takes steps far larger than $\varepsilon_{\Delta t}/\lambda_{\max}$ would permit, while the bound $\varepsilon_n \leq \kappa_n\varepsilon_{\Delta t}$ remains valid.
+Since $\Phi_{\mathrm{in}}(t_n)=0$ (renormalization) and $\int_{t_n}^{t_{n+1}}\Phi_{\mathrm{in}}\,ds = O(\Delta t_n^2)$, Theorem~\ref{thm:local-model-error} gives $\varepsilon_n \leq \Phi_{\mathrm{out}}(t_n)\,\Delta t_n + O(\Delta t_n^2)$.  Since $\Phi_{\mathrm{out}}(J_n,t_n) \leq \Phi_{\mathrm{total}}(J_n,t_n)$ (boundary outflux is a subset of total flux), substituting $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ gives $\varepsilon_n \leq \varepsilon_{\Delta t} + O(\Delta t_n^2)$.  The conservative rule $\Delta t = \varepsilon_{\Delta t}/\lambda_{\max}$ (where $\lambda_{\max}(J_n) = \max_{x\in J_n} w(x)$) would give the same guarantee, but since $\Phi_{\mathrm{total}} \leq \lambda_{\max}$ the total-flux rule takes steps a factor $\lambda_{\max}/\Phi_{\mathrm{total}} \geq 1$ larger---a distribution-aware gain that grows as the probability spreads across many states.
 \end{proof}
 
 
@@ -742,15 +732,15 @@ Using $\Phi_{\mathrm{total}}$ rather than $\lambda_{\max}$ in the denominator gi
 \label{rem:consistent-params}
 The single criterion $\Phi_{\mathrm{out}}\,\Delta t \leq \varepsilon_{\Delta t}$ governs all three algorithm components (Remark~\ref{rem:phiout-central}).  Parameters follow from choosing how to split the error budget between spatial and temporal accuracy:
 \begin{itemize}
-  \item \textbf{Expansion strategy and depth:} choose the strategy that achieves the desired $\Phi_{\mathrm{out}}/\Phi_{\mathrm{total}}$ ratio within the state-space budget; use $d=1$ when $\kappa\,\varepsilon_{\Delta t}\leq 1$, or enforce it via the max-propensity cap (Remark~\ref{rem:max-propensity-cap}) for slow-start systems.
-  \item \textbf{Time step:} $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$; for highly stiff systems cap at $d/\lambda_{\max}$ (Remark~\ref{rem:max-propensity-cap}).
-  \item \textbf{Flux tolerance:} $\varepsilon_{\mathrm{flux}}$ controls which states are protected at the boundary; setting it small ensures $\Phi_{\mathrm{out}}(J_n)$ remains small, keeping $\varepsilon_n$ within the budget set by Corollary~\ref{cor:flux-timestep}.
+  \item \textbf{Expansion strategy and depth:} choose the strategy that achieves the desired $\Phi_{\mathrm{out}}/\Phi_{\mathrm{total}}$ ratio within the state-space budget; for slow-start systems enforce a depth-one cap via the max-propensity rule (Remark~\ref{rem:max-propensity-cap}).
+  \item \textbf{Time step:} $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (Corollary~\ref{cor:flux-timestep}); for highly stiff systems cap at $1/\lambda_{\max}$ (Remark~\ref{rem:max-propensity-cap}).
+  \item \textbf{Flux tolerance:} $\varepsilon_{\mathrm{flux}}$ controls which states are protected at the boundary; setting it small ensures $\Phi_{\mathrm{out}}(J_n)$ remains small, keeping $\varepsilon_n \leq \varepsilon_{\Delta t}$ (Corollary~\ref{cor:flux-timestep}).
 \end{itemize}
 \end{remark}
 
 \begin{table}[!htbp]
 \centering
-\caption{Recommended ranges for $\alpha$ and $\varepsilon_{\Delta t}$ by system type. Values in parentheses are the parameters used in the corresponding numerical experiment of Section~\ref{sec:results}. For flux tolerance guidance see Remark~\ref{rem:param-guidance}.}
+\caption{Parameter values used in the numerical experiments of Section~\ref{sec:results}, with the ranges explored during tuning. The chosen values (in parentheses) reflect the reasoning described in Remark~\ref{rem:param-guidance}.}
 \label{tab:param_guidance}
 \begin{tabular}{lcc}
 \hline
@@ -764,19 +754,15 @@ Bimodal / metastable (toggle switch) & $0.1$--$0.3$ ($0.3$) & $0.1$--$0.5$ \\
 \end{tabular}
 \end{table}
 
-\begin{remark}[Practical parameter selection]
+\begin{remark}[Parameter choices for numerical experiments]
 \label{rem:param-guidance}
-Table~\ref{tab:param_guidance} summarises concrete recommendations complementing the theoretical framework of Remark~\ref{rem:consistent-params}.
-Three rules of thumb emerge.
+Table~\ref{tab:param_guidance} records the parameter values used in Section~\ref{sec:results} and the ranges explored during tuning.  The choices are motivated as follows.
 
-\textbf{$\varepsilon_{\Delta t}$:} Choose $\varepsilon_{\Delta t}\leq 1/\kappa$ so that depth-one expansion suffices; for $\kappa\approx 1$ this permits $\varepsilon_{\Delta t}$ up to~1.
-Reduce $\varepsilon_{\Delta t}$ (to $0.01$--$0.1$) when a long integration horizon demands high accuracy, since local errors accumulate additively (Corollary~\ref{cor:global-error}).
+\textbf{$\varepsilon_{\Delta t}$:} For well-mixed systems with $\kappa \approx 1$ (Oregonator, Robertson at steady state), $\Phi_{\mathrm{total}} \approx \lambda_{\max}$ and $\varepsilon_{\Delta t} = 1$ keeps per-step error at most~$1$; we verified this produced accurate moments.  For long integrations where errors accumulate (Corollary~\ref{cor:global-error}), smaller values ($0.01$--$0.1$) may be needed.  For the bottleneck system the step is dominated by the max-propensity cap $1/\lambda_{\max} = 1/k_2$, so $\varepsilon_{\Delta t}$ is effectively inactive and any value above the cap is equivalent.
 
-\textbf{$\alpha$:} For systems with connectivity bottlenecks, $\alpha$ can be set aggressively ($0.7$--$0.9$) because the flux criterion rescues any misclassified connector states; the quantile filter then removes only the genuinely irrelevant probability tail.
-Without bottlenecks, moderate values ($0.1$--$0.3$) avoid over-pruning.
+\textbf{$\alpha$:} For the bottleneck system, setting $\alpha = 0.9$ aggressively prunes the probability tail while the flux criterion separately protects the connector state $B{=}1$; reducing $\alpha$ gave no accuracy benefit but increased state-space size.  For the Oregonator and toggle switch, moderate values ($0.1$--$0.3$) were sufficient to track the oscillatory or bimodal distribution without over-pruning.
 
-\textbf{$\varepsilon_{\mathrm{flux}}$:} Set to zero for oscillatory or well-mixed systems where the active set is simply connected and no low-probability connector states need protection (a positive value would retain unnecessary states near the expanding boundary).
-For bottleneck systems, match $\varepsilon_{\mathrm{flux}}$ to the expected relative flux of the connector state, $\varepsilon_{\mathrm{flux}}\sim p(s_b)\,w(s_b)/\Phi_{\mathrm{total}}$; in practice $10^{-12}$--$10^{-6}$ covers most cases.
+\textbf{$\varepsilon_{\mathrm{flux}}$:} For systems without connectivity bottlenecks (Oregonator, Robertson, toggle switch) we set $\varepsilon_{\mathrm{flux}} = 0$, since the active set is simply connected and flux-based retention would only add unnecessary boundary states.  For the bottleneck system, $\varepsilon_{\mathrm{flux}} = 10^{-12}$ was chosen to match the expected relative flux of the connector state $p(B{=}1)\,w(B{=}1)/\Phi_{\mathrm{total}} \approx 10^{-12}$; any value in $10^{-12}$--$10^{-6}$ gave identical results.
 \end{remark}
 
 
