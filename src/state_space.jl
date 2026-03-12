@@ -125,6 +125,48 @@ function expand_ssa!(sp::StateSpace{E,T}, model, rates, t::Real, bc; depth::Int=
 end
 
 """
+    expand_flux!(space, model, rates, t, bc; depth=1, threshold=0.1)
+
+Deterministic flux-based expansion: for each active state, add all stoichiometric
+neighbors where the reaction's fractional propensity exceeds `threshold`.
+
+Only reactions with `α_k(x) / w(x) > threshold` (where `w(x) = Σ α_k(x)`) are
+added. This is "deterministic SSA" — it adds exactly the dominant-flux neighbors
+without randomness, giving a stable state space size determined by the propensity
+distribution rather than random sampling.
+"""
+function expand_flux!(sp::StateSpace{E,T}, model, rates, t::Real, bc;
+                      depth::Int=1, threshold::Float64=0.1) where {E,T}
+    n_rxn = length(model.stoichvecs)
+    n_rxn == 0 && return sp
+
+    for _ in 1:depth
+        current = copy(sp.states)
+        for x in current
+            props = Vector{Float64}(undef, n_rxn)
+            total = 0.0
+            @inbounds for k in 1:n_rxn
+                α = Float64(model.propensities[k](x, rates, t))
+                α = max(0.0, α)
+                props[k] = α
+                total += α
+            end
+            total <= 0 && continue
+
+            @inbounds for k in 1:n_rxn
+                if props[k] / total > threshold
+                    y = x + model.stoichvecs[k]
+                    if !haskey(sp.index, y) && bc(y)
+                        add_state!(sp, y)
+                    end
+                end
+            end
+        end
+    end
+    sp
+end
+
+"""
     compress!(space, model, rates, t, prob_quantile; flux_tolerance=1e-6)
 
 Flux-aware pruning with legacy count-quantile candidate selection.

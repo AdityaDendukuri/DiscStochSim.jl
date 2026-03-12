@@ -31,7 +31,7 @@ cb = terminal_progress(["X", "Y", "Z"]; tf=tf, title="Oregonator FP-FSP")
 t_wall_start = time()
 sol, diag = solve(prob, AdaptiveFSP(
     ε_dt=1.0, prob_quantile=0.1, flux_tolerance=1.0,
-    expansion_depth=1, save_interval=1000, flux_method=:total, expand_method=:ssa,
+    expansion_depth=1, save_interval=1000, expand_method=:ssa,
     progress_callback=cb,
 ))
 t_wall = time() - t_wall_start

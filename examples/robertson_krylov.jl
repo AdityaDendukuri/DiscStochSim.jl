@@ -31,12 +31,23 @@ if !isempty(diag.τ_log)
     println("τ range: $(minimum(valid)) → $(maximum(valid))")
 end
 
+# Filter to accepted steps only (time advances on accept, stays same on reject)
+let time_log = diag.time_log, τ_log = diag.τ_log
+    n = length(time_log)
+    accepted_mask = n <= 1 ? fill(true, n) : [true; diff(time_log) .> 0]
+    global acc_τ = τ_log[accepted_mask]
+    global acc_t = time_log[accepted_mask] .- acc_τ   # time before each accepted step
+end
+println("Accepted steps: $(length(acc_τ)), t_range=[$(round(acc_t[1]; sigdigits=3)), $(round(acc_t[end]; sigdigits=3))]")
+
 # Save diagnostics for plotting
 results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
 out = Dict(
     "τ_log"       => diag.τ_log,
     "time_log"    => diag.time_log,
+    "acc_τ"       => acc_τ,          # accepted step sizes (explicit)
+    "acc_t"       => acc_t,          # time before each accepted step
     "total_iters" => diag.total_iters,
     "reject_count"=> diag.reject_count,
     "wall_time"   => t_wall,

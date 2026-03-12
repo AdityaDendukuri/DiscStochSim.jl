@@ -107,7 +107,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::KrylovFSP) where {E,T}
         # absorbing=true: diagonal = total outflow (including to states outside S),
         # so probability leaks out when the projection boundary is hit.
         # This is required for the FSP mass-loss criterion to function correctly.
-        A, _, _ = build_generator(sp, model, rates, t; absorbing=true)
+        A, _, _, _ = build_generator(sp, model, rates, t; absorbing=true)
 
         # ── Steps 2–3: Find τ satisfying FSP criterion ────────────────────
         iexpand = false

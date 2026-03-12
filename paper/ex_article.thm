@@ -3,29 +3,28 @@
 \contentsline {theorem}{{Theorem}{2.3}{Monotonicity \cite {Munsky2006}}}{3}{theorem.16}%
 \contentsline {theorem}{{Theorem}{2.4}{FSP error bound \cite {Munsky2006}}}{3}{theorem.17}%
 \contentsline {remark}{{Remark}{2.5}{Stiffness and multiscale challenges in adaptive FSP}}{5}{theorem.32}%
-\contentsline {definition}{{Definition}{3.1}{Outgoing probability flux}}{5}{theorem.35}%
-\contentsline {definition}{{Definition}{3.2}{Total system flux}}{6}{theorem.37}%
-\contentsline {proposition}{{Proposition}{3.3}{Total flux properties}}{6}{theorem.39}%
-\contentsline {proof}{{Proof}{1}{}}{6}{proof.41}%
-\contentsline {remark}{{Remark}{3.4}{Total flux versus boundary outflux}}{9}{theorem.69}%
-\contentsline {remark}{{Remark}{3.5}{Compressed generator vs.\ renormalization}}{10}{theorem.95}%
-\contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{12}{theorem.116}%
-\contentsline {proof}{{Proof}{2}{}}{13}{proof.121}%
-\contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{13}{theorem.123}%
-\contentsline {proof}{{Proof}{3}{}}{13}{proof.124}%
-\contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{13}{theorem.126}%
-\contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{14}{theorem.131}%
-\contentsline {proof}{{Proof}{4}{}}{14}{proof.133}%
-\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{15}{theorem.141}%
-\contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{15}{theorem.144}%
-\contentsline {proof}{{Proof}{5}{}}{15}{proof.146}%
-\contentsline {corollary}{{Corollary}{4.7}{Combined flux and probability error control}}{15}{theorem.150}%
-\contentsline {proof}{{Proof}{6}{}}{16}{proof.152}%
-\contentsline {corollary}{{Corollary}{4.8}{Adaptive time step}}{16}{theorem.155}%
+\contentsline {definition}{{Definition}{3.1}{Outgoing probability flux}}{6}{theorem.36}%
+\contentsline {definition}{{Definition}{3.2}{Total system flux}}{6}{theorem.38}%
+\contentsline {proposition}{{Proposition}{3.3}{Total flux properties}}{6}{theorem.40}%
+\contentsline {proof}{{Proof}{1}{}}{6}{proof.42}%
+\contentsline {definition}{{Definition}{3.4}{Boundary outflux}}{7}{theorem.44}%
+\contentsline {remark}{{Remark}{3.5}{The central role of boundary outflux}}{7}{theorem.46}%
+\contentsline {proposition}{{Proposition}{3.6}{Flux expansion boundary outflux bound}}{7}{theorem.47}%
+\contentsline {proof}{{Proof}{2}{}}{7}{proof.49}%
+\contentsline {remark}{{Remark}{3.7}{Pruning uses total flux, not boundary outflux}}{9}{theorem.76}%
+\contentsline {remark}{{Remark}{3.8}{Compressed generator vs.\ renormalization}}{11}{theorem.102}%
+\contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{13}{theorem.123}%
+\contentsline {proof}{{Proof}{3}{}}{13}{proof.128}%
+\contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{14}{theorem.130}%
+\contentsline {proof}{{Proof}{4}{}}{14}{proof.131}%
+\contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{14}{theorem.133}%
+\contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{14}{theorem.138}%
+\contentsline {proof}{{Proof}{5}{}}{14}{proof.140}%
+\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{15}{theorem.148}%
+\contentsline {corollary}{{Corollary}{4.6}{Global error bound}}{15}{theorem.151}%
+\contentsline {proof}{{Proof}{6}{}}{15}{proof.153}%
+\contentsline {corollary}{{Corollary}{4.7}{Adaptive time step}}{16}{theorem.154}%
 \contentsline {proof}{{Proof}{7}{}}{16}{proof.157}%
-\contentsline {corollary}{{Corollary}{4.9}{Expansion depth for boundary control}}{17}{theorem.161}%
-\contentsline {proof}{{Proof}{8}{}}{17}{proof.163}%
-\contentsline {remark}{{Remark}{4.10}{Expansion strategy and the depth-one regime}}{17}{theorem.164}%
-\contentsline {remark}{{Remark}{4.11}{Consistent parameter selection via spatial stiffness}}{17}{theorem.165}%
-\contentsline {remark}{{Remark}{4.12}{Practical parameter selection}}{18}{theorem.167}%
-\contentsline {remark}{{Remark}{5.1}{Depth-aware cap for slow-start systems}}{28}{theorem.189}%
+\contentsline {remark}{{Remark}{4.8}{Unified parameter selection}}{16}{theorem.158}%
+\contentsline {remark}{{Remark}{4.9}{Practical parameter selection}}{17}{theorem.160}%
+\contentsline {remark}{{Remark}{5.1}{Depth-aware cap for slow-start systems}}{28}{theorem.185}%

@@ -24,7 +24,7 @@ include("adaptive_fsp/terminal_progress.jl")
 # Exports
 export DiscreteStochasticSystem
 export RectLatticeBoundaryCondition
-export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, compress!, renormalize!, get_global_ids
+export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, expand_flux!, compress!, renormalize!, get_global_ids
 export build_generator, reconstruct_generator
 export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, KrylovFSPDiagnostics, prune_threshold!
 using CommonSolve: solve

@@ -54,9 +54,9 @@ function run_fsp(; δt, tf, prob_quantile, flux_tolerance, save_every, log_every
         expand!(sp, MODEL, BC; depth=1)
 
         if isempty(gids_old)
-            A, _, _ = build_generator(sp, MODEL, RATES, t)
+            A, _, _, _ = build_generator(sp, MODEL, RATES, t)
         else
-            A, _, _ = reconstruct_generator(sp, MODEL, RATES, t, A_old, gids_old)
+            A, _, _, _ = reconstruct_generator(sp, MODEL, RATES, t, A_old, gids_old)
         end
 
         sp.probs = expmv(δt, A, sp.probs)
@@ -90,7 +90,7 @@ function run_exact_cme()
     end
     println("  State space: $(length(sp)) states")
 
-    A, _, _ = build_generator(sp, MODEL, RATES, 0.0)
+    A, _, _, _ = build_generator(sp, MODEL, RATES, 0.0)
     println("  Generator built, nnz=$(nnz(A))")
 
     exact_times = collect(0.0:1e4:1e5)

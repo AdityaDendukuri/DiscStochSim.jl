@@ -1,5 +1,5 @@
 """
-    build_generator(space, model, rates, t; absorbing=false) -> (A, in_flow, out_flow)
+    build_generator(space, model, rates, t; absorbing=false) -> (A, in_flow, out_flow, exit_rate_boundary)
 
 Build the CME generator matrix from scratch in CSC-friendly COO format.
 
@@ -16,18 +16,23 @@ that would exit S is absorbed into a sink, so sum(exp(A·t)·p) ≤ 1 and decrea
 when states near the boundary have significant outflow. Required for the
 Krylov-FSP-SSA mass-loss criterion (Vo & Sidje 2016).
 
-Returns `(A, in_flow, out_flow)` where `A = in_flow + out_flow`,
-`out_flow = diag(A)` (negative), `in_flow = A - out_flow` (non-negative).
+Returns `(A, in_flow, out_flow, exit_rate_boundary)` where `A = in_flow + out_flow`,
+`out_flow = diag(A)` (negative), `in_flow = A - out_flow` (non-negative), and
+`exit_rate_boundary[j] = Σ_{k: x_j+ν_k ∉ J} α_k(x_j)` is the per-state rate of
+probability leaving the active set. Compute `Φ_out = dot(exit_rate_boundary, p)` for
+the boundary outflux used in the adaptive time-step rule `dt = ε_dt / Φ_out`.
 """
 function build_generator(sp::StateSpace{E,T}, model, rates, t::Real;
                          absorbing::Bool=false) where {E,T}
     n = length(sp)
-    n == 0 && return (spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0))
+    n == 0 && return (spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), zeros(T, 0))
 
     n_rxn = length(model.stoichvecs)
     sizehint = n * (n_rxn + 1)
     I = Vector{Int}(); J = Vector{Int}(); V = Vector{T}()
     sizehint!(I, sizehint); sizehint!(J, sizehint); sizehint!(V, sizehint)
+
+    exit_rate_boundary = zeros(T, n)
 
     @inbounds for j in 1:n
         x = sp.states[j]
@@ -40,6 +45,8 @@ function build_generator(sp::StateSpace{E,T}, model, rates, t::Real;
             i = get(sp.index, y, 0)
             if i != 0
                 push!(I, i); push!(J, j); push!(V, α)
+            else
+                exit_rate_boundary[j] += α
             end
             if absorbing || i != 0
                 col_sum += α
@@ -54,16 +61,20 @@ function build_generator(sp::StateSpace{E,T}, model, rates, t::Real;
     A = sparse(I, J, V, n, n)
     out_flow = spdiagm(0 => diag(A))
     in_flow = A - out_flow
-    (A, in_flow, out_flow)
+    (A, in_flow, out_flow, exit_rate_boundary)
 end
 
 """
-    reconstruct_generator(sp, model, rates, t, A_old, gids_old) -> (A, in_flow, out_flow)
+    reconstruct_generator(sp, model, rates, t, A_old, gids_old) -> (A, in_flow, out_flow, exit_rate_boundary)
 
 Incremental rebuild: reuse columns from `A_old` for states that were present in the
 previous step (matched via global IDs). Build new columns from scratch.
 
 Falls back to `build_generator` if overlap is below 30%.
+
+Note: `exit_rate_boundary` is returned as a zero vector (boundary flux is not computed
+here for performance — propensity evaluation is skipped for transitions outside J).
+Use `build_generator` directly if boundary outflux is needed.
 """
 function reconstruct_generator(sp::StateSpace{E,T}, model, rates, t::Real,
                                A_old::SparseMatrixCSC, gids_old::Vector{Int}) where {E,T}
@@ -83,6 +94,8 @@ function reconstruct_generator(sp::StateSpace{E,T}, model, rates, t::Real,
     sizehint_n = n_new * (n_rxn + 1)
     I = Vector{Int}(); J = Vector{Int}(); V = Vector{T}()
     sizehint!(I, sizehint_n); sizehint!(J, sizehint_n); sizehint!(V, sizehint_n)
+
+    exit_rate_boundary = zeros(T, n_new)  # populated only by build_generator full path
 
     @inbounds for j_new in 1:n_new
         x = sp.states[j_new]
@@ -108,5 +121,5 @@ function reconstruct_generator(sp::StateSpace{E,T}, model, rates, t::Real,
     A = sparse(I, J, V, n_new, n_new)
     out_flow = spdiagm(0 => diag(A))
     in_flow = A - out_flow
-    (A, in_flow, out_flow)
+    (A, in_flow, out_flow, exit_rate_boundary)
 end

@@ -86,7 +86,7 @@ function run_krylov_oregonator(prob, tf;
         end
 
         # Non-absorbing generator (rows sum to 0)
-        A, _, _ = build_generator(sp, model, rates_, t)
+        A, _, _, _ = build_generator(sp, model, rates_, t)
 
         τ_step = min(τ, tf - t)
 

@@ -196,8 +196,8 @@ The comparison isolates the effect of flux-aware pruning and flux-adaptive time
 stepping on three benchmark systems.
 
 On the Oregonator, the flux-adaptive time stepping provides a decisive
-advantage: the adaptive FSP completes the simulation in 33\,s using 26
-snapshots with $|S| \leq 1{,}003$, while the Krylov-FSP-SSA method reaches only
+advantage: the adaptive FSP completes the simulation in 36\,s using 26
+snapshots with $|S| \leq 1{,}057$, while the Krylov-FSP-SSA method reaches only
 $t = 0.003$ (2.7\% of the time horizon) after 3{,}000 iterations and 74\,s,
 with the state space growing to 13{,}294 states. On the bottleneck system, both
 methods correctly retain the connector state $B{=}1$ (the joint
@@ -224,13 +224,13 @@ activity indicators.}
 
 \textbf{Response:} The comparison in the new Section~5.6 directly demonstrates
 these benefits. The Oregonator provides two complementary illustrations. First,
-flux-based pruning keeps the active set compact ($|S| \leq 1{,}003$) because
+flux-based pruning keeps the active set compact ($|S| \leq 1{,}057$) because
 the flux criterion identifies and discards dynamically irrelevant states; the
 joint probability-and-derivative filter used by Krylov-FSP-SSA conservatively
 retains all states with significant positive derivative (expanding boundary
 states), causing the projection to grow to 13{,}294 states without bound.
 Second, $\Phi_{\mathrm{total}}$-based stepping adjusts $\Delta t$ from
-$1.4\times10^{-6}$ to $1.9\times10^{-5}$ to match instantaneous system
+$1.6\times10^{-6}$ to $1.9\times10^{-5}$ to match instantaneous system
 activity, while the accept/reject mechanism is locked at $\tau \approx10^{-6}$
 because the large propensities cause mass loss for any larger step.
 The bottleneck system demonstrates the step-size control advantage: both methods
@@ -276,9 +276,6 @@ On the empirical side, the new Section~\ref{sec:comparison} provides a head-to-h
 In response to Referee~1's conceptual question, Remark~3.1 explains why total flux is the correct protection criterion: boundary outflux is approximately zero for genuine bottleneck states (because their transitions lead into the already-retained high-probability regions) and is in any case circular to compute during the pruning step.
 
 Finally, the new parameter guidance table (Table~\ref{tab:param_guidance}) and Remark~\ref{rem:param-guidance} address Referee~2's request for parameter guidance, giving concrete recommended ranges for $(\alpha,\varepsilon_{\mathrm{flux}},\varepsilon_{\Delta t})$ across four qualitatively different model types, grounded in both theory and the benchmark experiments.
-
-\vspace{1em}
-\noindent Sincerely,\\[0.5em]
 
 \vspace{1em}
 \noindent Sincerely,\\[0.5em]

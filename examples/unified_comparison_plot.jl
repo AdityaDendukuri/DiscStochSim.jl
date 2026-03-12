@@ -78,7 +78,7 @@ function _fpfsp_fixed_step(prob::FSPProblem{E,T};
     while t < tf
         iter += 1
         expand!(sp, model, bc; depth)
-        A, _, _ = build_generator(sp, model, rates, t)
+        A, _, _, _ = build_generator(sp, model, rates, t)
         dt = min(δt, tf - t)
         sp.probs = expmv(dt, A, sp.probs)
         compress!(sp, model, rates, t, quantile; flux_tolerance = flux_tol)
@@ -108,12 +108,27 @@ println("Loading Robertson results...")
 rober_fp = deserialize(joinpath(RESDIR, "robertson_fpfsp.jls"))
 rober_k  = deserialize(joinpath(RESDIR, "robertson_krylov.jls"))
 
-dt_r_fp = rober_fp["dt_log"];  t_r_fp = rober_fp["t_log"]
-τ_r_k   = rober_k["τ_log"];   t_r_k  = rober_k["time_log"]
-stride_r = max(1, length(dt_r_fp) ÷ 2000)
-idx_r    = 1:stride_r:length(dt_r_fp)
-println("  FP-FSP:   $(length(dt_r_fp)) steps, dt=[$(round(minimum(dt_r_fp);sigdigits=2)), $(round(maximum(dt_r_fp);sigdigits=2))]")
-println("  KrylovFSP: $(length(τ_r_k)) iters, t_reached=$(rober_k["t_reached"])")
+dt_r_fp_full  = rober_fp["dt_log"];  t_r_fp_full  = rober_fp["t_log"]
+acc_τ_k_all  = rober_k["acc_τ"];   acc_t_k_all = rober_k["acc_t"]
+
+# Log-subsample FP-FSP: pick ~2000 points log-spaced in time
+# (stride-based would massively oversample the burst region)
+let t_full = t_r_fp_full, dt_full = dt_r_fp_full, n_save = 2000
+    t_grid  = 10 .^ range(log10(t_full[1]), log10(t_full[end]); length=n_save)
+    raw_idx = searchsortedfirst.(Ref(t_full), t_grid)
+    log_idx = unique(clamp.(raw_idx, 1, length(t_full)))
+    global dt_r_fp = dt_full[log_idx]
+    global t_r_fp  = t_full[log_idx]
+end
+
+# Filter Krylov to valid (positive) time points for log-scale
+let mask = acc_t_k_all .> 0
+    global acc_τ_k = acc_τ_k_all[mask]
+    global acc_t_k = acc_t_k_all[mask]
+end
+
+println("  FP-FSP:   $(length(dt_r_fp)) pts (subsampled), dt=[$(round(minimum(dt_r_fp);sigdigits=2)), $(round(maximum(dt_r_fp);sigdigits=2))]")
+println("  KrylovFSP: $(length(acc_τ_k)) accepted steps, t_reached=$(rober_k["t_reached"])")
 
 # ─── Build unified 3-panel figure ───────────────────────────────────────────
 println("Building figure...")
@@ -141,19 +156,15 @@ plot!(p2, sol_b_k.t, traj_b_k[:, 3],
       label = "Krylov-FSP-SSA", color = :black, linestyle = :dash, linewidth = 2)
 
 # Panel (c): Robertson — dt/τ vs simulated time (log scale)
-# Show only accepted Krylov steps (where simulated time advances)
-accepted_k = Bool[true; diff(t_r_k) .> 0]
-t_r_k_acc  = t_r_k[accepted_k]
-τ_r_k_acc  = τ_r_k[accepted_k]
-
-p3 = plot(xlabel = "Time", ylabel = "dt / \u03C4", title = "(c) Robertson",
-          yscale = :log10)
-plot!(p3, t_r_fp[idx_r], dt_r_fp[idx_r],
+# FP-FSP: explicitly stored per-step dt; Krylov: explicitly stored accepted τ
+p3 = plot(xlabel = "Time", ylabel = "Step size", title = "(c) Robertson",
+          xscale = :log10, yscale = :log10)
+plot!(p3, t_r_fp, dt_r_fp,
       label = "FP-FSP dt", color = :black, linestyle = :solid, linewidth = 1.5)
-plot!(p3, t_r_k_acc, τ_r_k_acc,
+plot!(p3, acc_t_k, acc_τ_k,
       label = "Krylov-FSP-SSA \u03C4", color = :black, linestyle = :dash, linewidth = 1.5)
 # Mark where Krylov stops
-vline!(p3, [t_r_k_acc[end]], color = :gray, linestyle = :dot, linewidth = 1, label = "")
+vline!(p3, [acc_t_k[end]], color = :gray, linestyle = :dot, linewidth = 1, label = "")
 
 fig = plot(p1, p2, p3; layout = (1, 3), size = (1200, 360), margin = 5Plots.mm)
 savefig(fig, joinpath(OUTDIR, "unified_comparison.png"))
