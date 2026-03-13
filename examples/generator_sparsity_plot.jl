@@ -28,14 +28,9 @@ for j in 1:4; B[j,j] = -sum(B[i,j] for i in 1:4 if i != j); end
 # ── Spy-plot helper ───────────────────────────────────────────────────────────
 function make_spy(M, labels, title_str, block_ranges)
     n = size(M, 1)
-    # Binary matrix: 1=nonzero (black), 0=zero (white)
-    spy = Float64.(M .!= 0)
 
-    p = heatmap(spy;
-        color         = cgrad([:white, :black]),
-        clims         = (0.0, 1.0),
-        colorbar      = false,
-        legend        = false,
+    # Start with an empty plot (white background) — no heatmap to avoid interpolation
+    p = plot(;
         title         = title_str,
         titlefontsize = 11,
         xticks        = (1:n, labels),
@@ -47,24 +42,36 @@ function make_spy(M, labels, title_str, block_ranges)
         tickfontsize  = 11,
         xlims         = (0.5, n + 0.5),
         ylims         = (0.5, n + 0.5),
-        linewidth     = 0.5,
-        linecolor     = :gray,
+        legend        = false,
+        background_color_inside = :white,
     )
 
-    # Thin white grid lines to show individual cells
-    for k in 1.5:1.0:(n-0.5)
-        plot!(p, [0.5, n+0.5], [k, k]; line = (0.7, :white), label = false)
-        plot!(p, [k, k], [0.5, n+0.5]; line = (0.7, :white), label = false)
+    # Draw a filled black square for each nonzero entry
+    for i in 1:n, j in 1:n
+        if M[i, j] != 0
+            xs = [j-0.5, j+0.5, j+0.5, j-0.5, j-0.5]
+            ys = [i-0.5, i-0.5, i+0.5, i+0.5, i-0.5]
+            plot!(p, xs, ys;
+                seriestype  = :shape,
+                fillcolor   = :black,
+                linecolor   = :black,
+                linewidth   = 0,
+                label       = false,
+            )
+        end
     end
 
-    # Dashed boxes around each metastable block.
-    # Use white dashes (visible on black) with black outline fallback.
+    # Light gray cell-grid lines
+    for k in 1.5:1.0:(n-0.5)
+        plot!(p, [0.5, n+0.5], [k, k]; line = (0.5, :gray), label = false)
+        plot!(p, [k, k], [0.5, n+0.5]; line = (0.5, :gray), label = false)
+    end
+
+    # Dashed boxes around each metastable block
     for (a, b) in block_ranges
         xs = [a-0.5, b+0.5, b+0.5, a-0.5, a-0.5]
         ys = [a-0.5, a-0.5, b+0.5, b+0.5, a-0.5]
-        # White inner line for visibility on black regions
         plot!(p, xs, ys; line = (:dash, 2.5, :white), label = false)
-        # Thin black outer line for visibility on white regions
         plot!(p, xs, ys; line = (:dash, 0.8, :black), label = false)
     end
     p

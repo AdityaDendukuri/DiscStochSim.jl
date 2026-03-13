@@ -2,7 +2,7 @@ PWD /Users/adityadendukuri/DiscStochSim.jl/paper
 INPUT /usr/local/texlive/2023/texmf.cnf
 INPUT /usr/local/texlive/2023/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2023/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT ex_article.tex
+INPUT /Users/adityadendukuri/DiscStochSim.jl/paper/ex_article.tex
 OUTPUT ex_article.log
 INPUT ./siamart171218.cls
 INPUT ./siamart171218.cls
@@ -991,6 +991,7 @@ INPUT /usr/local/texlive/2023/texmf-dist/tex/latex/multirow/multirow.sty
 INPUT /usr/local/texlive/2023/texmf-dist/tex/latex/multirow/multirow.sty
 INPUT /usr/local/texlive/2023/texmf-dist/tex/latex/multirow/multirow.sty
 INPUT /usr/local/texlive/2023/texmf-dist/tex/latex/multirow/multirow.sty
+INPUT /usr/local/texlive/2023/texmf-dist/tex/latex/float/float.sty
 INPUT ./ex_shared.tex
 INPUT ./ex_shared.tex
 INPUT ./ex_shared.tex
