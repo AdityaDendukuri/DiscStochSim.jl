@@ -21,6 +21,13 @@ include("adaptive_fsp/solve.jl")
 include("adaptive_fsp/krylov_fsp.jl")
 include("adaptive_fsp/terminal_progress.jl")
 
+# RDME multigrid FSP
+include("rdme/voxel_grid.jl")
+include("rdme/rdme_model.jl")
+include("rdme/operators.jl")
+include("rdme/vcycle.jl")
+include("rdme/solve.jl")
+
 # Exports
 export DiscreteStochasticSystem
 export RectLatticeBoundaryCondition
@@ -30,5 +37,13 @@ export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, 
 using CommonSolve: solve
 export solve
 export mean_trajectory, marginal, terminal_progress
+
+# RDME exports
+export VoxelGrid, coarsen, build_hierarchy, diffusion_rate
+export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
+export restrict, prolong, lumpability_ratio, per_molecule_flux
+export two_level_vcycle
+export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
+export mean_voxel_counts, marginal_voxel
 
 end

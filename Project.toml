@@ -1,11 +1,12 @@
 name = "DiscStochSim"
 uuid = "768643f0-4499-4e3e-a9fb-cd287868bfc9"
-version = "1.0.0-DEV"
 authors = ["Aditya Dendukuri"]
+version = "1.0.0-DEV"
 
 [deps]
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 CommonSolve = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -16,6 +17,7 @@ UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 [compat]
 Catalyst = "14"
 CommonSolve = "0.2"
+Distributions = "0.25.123"
 Expokit = "0.2"
 ExponentialUtilities = "1.30.0"
 Plots = "1"

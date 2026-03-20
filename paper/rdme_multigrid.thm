@@ -1,0 +1,23 @@
+\contentsline {definition}{{Definition}{2.1}{RDME state}}{2}{theorem.11}%
+\contentsline {definition}{{Definition}{3.1}{Strong lumpability}}{4}{theorem.27}%
+\contentsline {proposition}{{Proposition}{3.2}{RDME is not strongly lumpable}}{4}{theorem.31}%
+\contentsline {proof}{{Proof}{1}{}}{4}{proof.32}%
+\contentsline {theorem}{{Theorem}{3.3}{Approximate lumpability error}}{4}{theorem.35}%
+\contentsline {remark}{{Remark}{3.4}{Connection to nearly-decomposable systems}}{5}{theorem.37}%
+\contentsline {definition}{{Definition}{4.1}{Coarse state and state space}}{6}{theorem.47}%
+\contentsline {definition}{{Definition}{4.2}{Restriction}}{6}{theorem.50}%
+\contentsline {proposition}{{Proposition}{4.3}{Stationary within-voxel distribution}}{6}{theorem.55}%
+\contentsline {proof}{{Proof}{2}{}}{7}{proof.58}%
+\contentsline {definition}{{Definition}{4.4}{Prolongation}}{7}{theorem.59}%
+\contentsline {proposition}{{Proposition}{4.5}{Consistency}}{7}{theorem.61}%
+\contentsline {proof}{{Proof}{3}{}}{7}{proof.62}%
+\contentsline {proposition}{{Proposition}{5.1}{Exact coarsening for linear networks}}{8}{theorem.74}%
+\contentsline {proof}{{Proof}{4}{}}{8}{proof.76}%
+\contentsline {remark}{{Remark}{5.2}{Nonlinear closure error}}{8}{theorem.77}%
+\contentsline {remark}{{Remark}{5.3}{Volume rescaling}}{8}{theorem.79}%
+\contentsline {remark}{{Remark}{6.1}{Interpretation as operator splitting}}{9}{theorem.95}%
+\contentsline {theorem}{{Theorem}{7.1}{V-cycle error bound}}{10}{theorem.112}%
+\contentsline {remark}{{Remark}{7.2}{Linear networks: exact coarsening}}{10}{theorem.118}%
+\contentsline {definition}{{Definition}{8.1}{Inter-voxel flux quantities}}{11}{theorem.122}%
+\contentsline {definition}{{Definition}{8.2}{Two-criterion refinement}}{11}{theorem.126}%
+\contentsline {remark}{{Remark}{8.3}{Analogy with FP-FSP bottleneck protection}}{11}{theorem.129}%
