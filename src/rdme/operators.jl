@@ -34,26 +34,28 @@ end
 # ─── prolongation ──────────────────────────────────────────────────────────────
 
 """
-    prolong(sp_coarse, ::Val{K}; weight_tol=1e-14)
+    prolong(sp_coarse, ::Val{K}; weight_tol=1e-14, binom_tol=0.0)
         -> StateSpace{CartesianIndex{K}, T}
 
-Prolongation operator  𝓟: coarse → fine.
+Prolongation operator 𝓟: coarse → fine.
 
-For each coarse state x̄ = (n̄₁, …, n̄_{K/2}) with probability p̄, distributes
-p̄ across all fine states consistent with x̄ using the binomial stationary
-distribution of fast symmetric intra-voxel diffusion:
+Two thresholds control pruning:
+- `weight_tol`: skip entire coarse states with probability < weight_tol.
+- `binom_tol`: at each voxel-pair, skip Binomial(n̄ⱼ, 1/2) splits where the
+  *per-level* Binomial fraction (1/2)^{n̄ⱼ} C(n̄ⱼ, mⱼ) < binom_tol.
 
-    P(mⱼ | n̄ⱼ) = C(n̄ⱼ, mⱼ) (1/2)^{n̄ⱼ}
-
-Fine states with weight below `weight_tol` are discarded to keep the
-active set manageable.
-
-Note: for large per-voxel counts n̄ⱼ the number of fine splits is ∏ⱼ (n̄ⱼ+1);
-use `weight_tol` to prune negligible contributions.
+Using `binom_tol` (per-pair relative threshold) instead of relying solely on
+the accumulated absolute `weight_tol` avoids the K-level compounding problem:
+with K/2 pairs, the accumulated weight shrinks by a factor of ~0.375^{K/2} per
+centre split, so an absolute threshold silently truncates the recursion mid-way
+for any coarse state with small probability.  `binom_tol` ≈ 1e-4 keeps all
+Binomial splits contributing at least 1e-4 of the per-pair probability, and
+delegates absolute probability cuts to `prune_threshold!` in the solver.
 """
 function prolong(sp_coarse::StateSpace{CartesianIndex{K2}, T},
                  ::Val{K};
-                 weight_tol::Float64 = 1e-14) where {K2, K, T}
+                 weight_tol::Float64 = 1e-14,
+                 binom_tol::Float64  = 0.0) where {K2, K, T}
     K == 2 * K2 || error("K=$K must equal 2*K2=$K2 for one-level prolongation")
 
     sp_fine  = StateSpace{CartesianIndex{K}, T}()
@@ -63,7 +65,8 @@ function prolong(sp_coarse::StateSpace{CartesianIndex{K2}, T},
         prob = sp_coarse.probs[i]
         prob > weight_tol || continue
         coarse_tup = Tuple(sp_coarse.states[i])
-        _prolong_recurse!(sp_fine, coarse_tup, prob, fine_buf, 1, K2, weight_tol)
+        _prolong_recurse!(sp_fine, coarse_tup, prob, fine_buf, 1, K2,
+                          weight_tol, binom_tol)
     end
 
     sp_fine
@@ -72,9 +75,10 @@ end
 """
 Recursive enumeration of all fine splits of the coarse count vector.
 
-At each level `pair_idx` we enumerate m ∈ 0..n̄ⱼ and multiply in the
-Binomial(n̄ⱼ, 1/2) weight.  Pruning at `weight_tol` avoids exponential blowup
-for high-count states.
+Two pruning thresholds:
+- `weight_tol`: prune if accumulated weight (coarse_prob × ∏ Binom fractions) < weight_tol.
+- `binom_tol`:  prune if the per-pair Binomial fraction < binom_tol (prevents
+  mid-recursion truncation for small-probability coarse states with large K).
 """
 function _prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
                             coarse_tup::NTuple{K2, Int},
@@ -82,7 +86,8 @@ function _prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
                             fine_buf::Vector{Int},
                             pair_idx::Int,
                             n_pairs::Int,
-                            weight_tol::Float64) where {K, K2, T}
+                            weight_tol::Float64,
+                            binom_tol::Float64) where {K, K2, T}
     if pair_idx > n_pairs
         fine_state = CartesianIndex(NTuple{K, Int}(fine_buf))
         idx = get(sp_fine.index, fine_state, 0)
@@ -94,16 +99,21 @@ function _prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
         return
     end
 
-    nj        = coarse_tup[pair_idx]
+    nj         = coarse_tup[pair_idx]
     log_half_n = -nj * log(2.0)    # log( (1/2)^nj )
 
     for m in 0:nj
-        binom_weight = weight * exp(log_half_n) * binomial(nj, m)
-        binom_weight > weight_tol || continue
+        # Use log-space to avoid Int64 overflow for large nj
+        log_bc     = (sum(log(i) for i in (nj-m+1):nj; init=0.0) -
+                      sum(log(i) for i in 1:m;          init=0.0))
+        binom_frac = exp(log_half_n + log_bc)
+        binom_frac   > binom_tol  || continue               # relative per-pair check
+        binom_weight = weight * binom_frac
+        binom_weight > weight_tol || continue               # absolute accumulated check
         fine_buf[2*pair_idx - 1] = m
         fine_buf[2*pair_idx]     = nj - m
         _prolong_recurse!(sp_fine, coarse_tup, binom_weight, fine_buf,
-                          pair_idx + 1, n_pairs, weight_tol)
+                          pair_idx + 1, n_pairs, weight_tol, binom_tol)
     end
 end
 

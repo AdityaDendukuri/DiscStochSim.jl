@@ -218,6 +218,69 @@ function compress!(sp::StateSpace{E,T}, model, rates, t::Real,
 end
 
 """
+    flux_prune!(sp, w_total, ε_prob, ε_flux) -> n_removed
+
+Two-stage flux-preserving pruning (Dendukuri & Khammash style).
+
+Stage 1 — quantile selection:
+  Build candidate set C = lowest-probability states whose cumulative
+  probability mass ≤ ε_prob.  These are the states that could be removed
+  on probability grounds alone.
+
+Stage 2 — flux protection:
+  Within C, protect any state x where
+      p(x) · w_total(x)  ≥  ε_flux · Φ_total
+  where Φ_total = Σ_x p(x)·w_total(x) is the total system flux.
+  Protected states are transit states: low probability but high firing
+  rate, so significant probability flows through them.
+
+Prune: C \\ protected.  Renormalize the remaining probabilities.
+
+Arguments:
+- `sp`       : active StateSpace (modified in-place)
+- `w_total`  : vector of length |sp|; total exit rate per state,
+               w_total[j] = Σ_k α_k(x_j).  Obtain as
+               `-diag(A) .+ exit_rate_boundary` from `build_generator`.
+- `ε_prob`   : cumulative probability budget for Stage 1 (e.g. 1e-6)
+- `ε_flux`   : relative flux threshold for Stage 2 protection (e.g. 1e-3)
+"""
+function flux_prune!(sp::StateSpace{E,T},
+                     w_total::AbstractVector{<:Real},
+                     ε_prob::Real,
+                     ε_flux::Real) where {E,T}
+    n = length(sp)
+    n == 0 && return 0
+
+    Φ_total = dot(sp.probs, w_total)
+    Φ_thr   = ε_flux * Φ_total
+
+    # Stage 1: sort ascending by probability; add to candidate set
+    # until cumulative mass would exceed ε_prob.
+    idx = sortperm(sp.probs)
+    remove_mask = falses(n)
+    cumprob = 0.0
+    for i in idx
+        cumprob + sp.probs[i] > ε_prob && break
+        cumprob += sp.probs[i]
+        remove_mask[i] = true
+    end
+
+    # Stage 2: protect high-flux candidates
+    if ε_flux > 0 && Φ_total > 0
+        for i in 1:n
+            if remove_mask[i] && sp.probs[i] * w_total[i] >= Φ_thr
+                remove_mask[i] = false
+            end
+        end
+    end
+
+    n_removed = sum(remove_mask)
+    remove_states!(sp, remove_mask)
+    renormalize!(sp)
+    n_removed
+end
+
+"""
     prune_threshold!(space, threshold; max_probs=nothing)
 
 Simple threshold-based pruning: remove states whose probability (or lookback-window

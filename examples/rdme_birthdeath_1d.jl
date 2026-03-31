@@ -51,10 +51,10 @@ Returns: mean count per voxel at steady state.
 """
 function stationary_means(K, D, dx, k_b, k_d)
     d = D / dx^2
-    # Tridiagonal system: (-d - k_d/2)μ_k + d μ_{k-1} + d μ_{k+1} = -k_b
-    # with reflecting BC handled by modified endpoints
+    # Steady-state: d(μ_{k-1} - 2μ_k + μ_{k+1}) + k_b - k_d μ_k = 0
+    # Rearranged as A*μ = -k_b (note sign: rhs is -k_b, not +k_b)
     A = zeros(K, K)
-    b = fill(k_b, K)
+    b = fill(-k_b, K)
     for k in 1:K
         A[k, k] = -(k_d + (k == 1 || k == K ? d : 2d))
         if k > 1; A[k, k-1] = d; end

@@ -4,6 +4,7 @@ authors = ["Aditya Dendukuri"]
 version = "1.0.0-DEV"
 
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 CommonSolve = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
@@ -15,7 +16,8 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 
 [compat]
-Catalyst = "14"
+CairoMakie = "0.12, 0.13, 0.14, 0.15"
+Catalyst = "14, 15, 16"
 CommonSolve = "0.2"
 Distributions = "0.25.123"
 Expokit = "0.2"

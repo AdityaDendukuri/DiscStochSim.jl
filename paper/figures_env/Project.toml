@@ -1,0 +1,13 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+DiscStochSim = "768643f0-4499-4e3e-a9fb-cd287868bfc9"
+ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[sources]
+DiscStochSim = {path = "../.."}
+
+[compat]
+CairoMakie = "0.13, 0.14, 0.15"
+julia = "1.9"

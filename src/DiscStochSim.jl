@@ -25,6 +25,7 @@ include("adaptive_fsp/terminal_progress.jl")
 include("rdme/voxel_grid.jl")
 include("rdme/rdme_model.jl")
 include("rdme/operators.jl")
+include("rdme/dynamic_pi.jl")
 include("rdme/vcycle.jl")
 include("rdme/solve.jl")
 
@@ -41,8 +42,12 @@ export mean_trajectory, marginal, terminal_progress
 # RDME exports
 export VoxelGrid, coarsen, build_hierarchy, diffusion_rate
 export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
+export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system
+export build_schlogl_coarse_system_dynamic
+export schlogl_rate_eq, schlogl_fixed_points
+export compute_dynamic_pi, prolong_dynamic
 export restrict, prolong, lumpability_ratio, per_molecule_flux
-export two_level_vcycle
+export two_level_vcycle, two_level_vcycle_schlogl
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
 
