@@ -1,5 +1,5 @@
 """
-Generate figure: Schlögl K=4 asymmetric front — GT vs Binom-π vs Fix-3.
+Generate figure: Schlögl K=4 asymmetric front — GT vs Binom-π vs Mult. prolong..
 Tracks ⟨n₁⟩ and |S| at every time step.
 Saves paper/figures/fig7_schlogl_front.{pdf,png}
 """
@@ -116,9 +116,9 @@ println("Running V-cycle Binom-π (may take ~60s)...")
 t_binom = @elapsed (ts_b, mu1_b, sz_b, sz_b_final) = run_vcycle_tracked(:binom)
 @printf("  Done: %.1fs  final |S|=%d\n", t_binom, sz_b_final)
 
-println("Running V-cycle Fix-3...")
-t_fix3  = @elapsed (ts_f, mu1_f, sz_f, sz_f_final) = run_vcycle_tracked(:fix3)
-@printf("  Done: %.1fs  final |S|=%d\n", t_fix3, sz_f_final)
+println("Running V-cycle Mult. prolong....")
+t_mult  = @elapsed (ts_f, mu1_f, sz_f, sz_f_final) = run_vcycle_tracked(:multiplicative)
+@printf("  Done: %.1fs  final |S|=%d\n", t_mult, sz_f_final)
 
 # ─── plot ─────────────────────────────────────────────────────────────────────
 
@@ -137,7 +137,7 @@ hlines!(ax1, [n_high], linestyle=:dot, color=(:gray50, 0.8), linewidth=1.2)
 lines!(ax1, ts_gt,  mu1_gt, color=:black,      linewidth=2.2, label="GT (K=4 FSP)")
 lines!(ax1, ts_b,   mu1_b,  color=:firebrick,  linewidth=1.8,
        linestyle=:dash,  label="V-cyc Binom-π")
-lines!(ax1, ts_f,   mu1_f,  color=:royalblue,  linewidth=2.2, label="V-cyc Fix-3")
+lines!(ax1, ts_f,   mu1_f,  color=:royalblue,  linewidth=2.2, label="V-cyc Mult. prolong.")
 
 axislegend(ax1, position=:rt, framevisible=true, labelsize=11)
 

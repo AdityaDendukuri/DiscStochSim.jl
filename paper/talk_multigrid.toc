@@ -1,3 +1,6 @@
-\beamer@sectionintoc {1}{The RDME}{2}{0}{1}
-\beamer@sectionintoc {2}{Multigrid Method}{4}{0}{2}
-\beamer@sectionintoc {3}{Results}{9}{0}{3}
+\beamer@sectionintoc {1}{Setting}{2}{0}{1}
+\beamer@sectionintoc {2}{Multigrid}{3}{0}{2}
+\beamer@sectionintoc {3}{The Problem with Fronts}{5}{0}{3}
+\beamer@sectionintoc {4}{Adaptive Coarsening}{7}{0}{4}
+\beamer@sectionintoc {5}{Results}{11}{0}{5}
+\beamer@sectionintoc {6}{Summary}{14}{0}{6}

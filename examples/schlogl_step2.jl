@@ -10,7 +10,7 @@ Ground truth: K=4 sparse adaptive FSP.
 Methods compared:
   1. K=4 sparse adaptive FSP   (ground truth)
   2. V-cycle Binomial-π        (K=4→K=2, symmetry trap on pair 1)
-  3. V-cycle Fix-3             (K=4→K=2, preserves asymmetry)
+  3. V-cycle Mult. prolong.             (K=4→K=2, preserves asymmetry)
 """
 
 using DiscStochSim
@@ -123,7 +123,7 @@ function run_vcycle(mode::Symbol)
             two_level_vcycle_schlogl(sp, model, fine_grid, coarse_grid,
                                      pi_table, rates, t_cur, dt_step;
                                      use_dynamic_pi=false, coarse_n_max=cnmax)
-        else  # :fix3
+        else  # :multiplicative
             two_level_vcycle_schlogl_injection(sp, model, fine_grid, coarse_grid,
                                                pi_table, rates, t_cur, dt_step;
                                                coarse_n_max=cnmax)
@@ -144,9 +144,9 @@ println("\n── V-cycle Binomial-π ──")
 t_binom = @elapsed (snaps_binom, sp_binom) = run_vcycle(:binom)
 @printf("  %.2fs  final |S|=%d\n", t_binom, length(sp_binom))
 
-println("\n── V-cycle Fix-3 ──")
-t_fix3 = @elapsed (snaps_fix3, sp_fix3) = run_vcycle(:fix3)
-@printf("  %.2fs  final |S|=%d\n", t_fix3, length(sp_fix3))
+println("\n── V-cycle Mult. prolong. ──")
+t_mult = @elapsed (snaps_mult, sp_mult) = run_vcycle(:multiplicative)
+@printf("  %.2fs  final |S|=%d\n", t_mult, length(sp_mult))
 
 # ─── comparison table ─────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ for t in T_SNAP
     @printf("  %4.1f  %-15s %5.1f %5.1f %5.1f %5.1f  —             %d\n",
             t, "GT (K=4 FSP)", mu_gt[1], mu_gt[2], mu_gt[3], mu_gt[4], length(sts_gt))
 
-    for (label, snaps) in [("V-cyc Binom-π", snaps_binom), ("V-cyc Fix-3", snaps_fix3)]
+    for (label, snaps) in [("V-cyc Binom-π", snaps_binom), ("V-cyc Mult. prolong.", snaps_mult)]
         sts, prs = snaps[t]
         mu = voxel_means_k4(sts, prs)
         sp_tmp = StateSpace{CartesianIndex{4}, Float64}()
@@ -174,5 +174,5 @@ for t in T_SNAP
     println()
 end
 
-@printf("  GT: %.2fs   Binom: %.2fs   Fix-3: %.2fs\n", t_gt, t_binom, t_fix3)
+@printf("  GT: %.2fs   Binom: %.2fs   Mult. prolong.: %.2fs\n", t_gt, t_binom, t_mult)
 println("\nDone.")

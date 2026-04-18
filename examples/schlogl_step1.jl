@@ -1,5 +1,5 @@
 """
-Schlögl Step 1 — K=2 spatial front, symmetry trap and Fix-3.
+Schlögl Step 1 — K=2 spatial front, symmetry trap and Mult. prolong..
 
 IC: (n_low, n_high) — one voxel at low fixed point, one at high.
 Coarse variable nc = n1 + n2 = 193 cannot distinguish this from (n_high, n_low).
@@ -9,7 +9,7 @@ Ground truth: direct K=2 FSP (tractable: ~200^2 = 40k states).
 Methods:
   1. Direct FSP                     (ground truth)
   2. V-cycle Binomial-π             (symmetry trap: TV ≈ 0.5 forever)
-  3. V-cycle Fix-3 (injection)      (tracks the asymmetric front)
+  3. V-cycle Mult. prolong. (injection)      (tracks the asymmetric front)
 
 Each method runs the same number of steps with the same dt.
 """
@@ -106,7 +106,7 @@ function run_vcycle(mode::Symbol, T_end, dt)
             two_level_vcycle_schlogl(sp, model, fine_grid, coarse_grid,
                                      pi_table, rates, t_cur, dt;
                                      use_dynamic_pi=false, coarse_n_max=cnmax)
-        else  # :fix3
+        else  # :multiplicative
             two_level_vcycle_schlogl_injection(sp, model, fine_grid, coarse_grid,
                                                pi_table, rates, t_cur, dt;
                                                coarse_n_max=cnmax)
@@ -126,8 +126,8 @@ end
 println("\n── Running V-cycle Binomial-π ──")
 t_binom = @elapsed snaps_binom = run_vcycle(:binom, maximum(T_SNAP), dt)
 
-println("── Running V-cycle Fix-3 ──")
-t_fix3  = @elapsed snaps_fix3  = run_vcycle(:fix3,  maximum(T_SNAP), dt)
+println("── Running V-cycle Mult. prolong. ──")
+t_mult  = @elapsed snaps_mult  = run_vcycle(:multiplicative,  maximum(T_SNAP), dt)
 
 # ─── comparison table ─────────────────────────────────────────────────────────
 
@@ -153,17 +153,17 @@ for t in T_SNAP
                 "", "V-cyc Binom-π", mu1, mu2, tv, length(sts))
     end
 
-    # Fix-3
-    if haskey(snaps_fix3, t)
-        sts, prs = snaps_fix3[t]
+    # Mult. prolong.
+    if haskey(snaps_mult, t)
+        sts, prs = snaps_mult[t]
         sp_tmp = StateSpace{CartesianIndex{2}, Float64}()
         for i in eachindex(sts); add_state!(sp_tmp, sts[i], prs[i]); end
         mu1, mu2 = voxel_means(sp_tmp)
         tv = tv_vs_fsp(sp_tmp, p_gt)
         @printf("  %4s  %-16s %6.1f  %6.1f  %.4f      %d\n\n",
-                "", "V-cyc Fix-3", mu1, mu2, tv, length(sts))
+                "", "V-cyc Mult. prolong.", mu1, mu2, tv, length(sts))
     end
 end
 
-@printf("  Timings — Binom: %.2fs   Fix-3: %.2fs\n", t_binom, t_fix3)
+@printf("  Timings — Binom: %.2fs   Mult. prolong.: %.2fs\n", t_binom, t_mult)
 println("\nDone.")

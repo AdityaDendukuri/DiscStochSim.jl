@@ -10,7 +10,7 @@ Binomial-π will drift toward (n_low+n_high)/2 ≈ 96 (symmetry trap).
 
 Methods:
   1. V-cycle Binomial-π  (K=8→K=4, symmetry trap expected)
-  2. V-cycle Fix-3       (K=8→K=4, should preserve the front)
+  2. V-cycle Mult. prolong.       (K=8→K=4, should preserve the front)
 """
 
 using DiscStochSim
@@ -72,7 +72,7 @@ function voxel_means(states, probs, K)
 end
 
 println("\nDirect K=8 FSP: intractable (>75k states at t=0.5, >1M at t=2) — skipped.")
-println("Correctness: Fix-3 should keep ⟨n1⟩ ≈ $n_low; Binom-π will drift to ≈ $((n_low+n_high)÷2).\n")
+println("Correctness: Mult. prolong. should keep ⟨n1⟩ ≈ $n_low; Binom-π will drift to ≈ $((n_low+n_high)÷2).\n")
 
 # ─── V-cycle variants ─────────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ function run_vcycle(mode::Symbol)
             two_level_vcycle_schlogl(sp, model, fine_grid, coarse_grid,
                                      pi_table, rates, t_cur, dt_step;
                                      use_dynamic_pi=false, coarse_n_max=cnmax)
-        else  # :fix3
+        else  # :multiplicative
             two_level_vcycle_schlogl_injection(sp, model, fine_grid, coarse_grid,
                                                pi_table, rates, t_cur, dt_step;
                                                coarse_n_max=cnmax)
@@ -108,9 +108,9 @@ end
 # Already demonstrated at K=4 in step 2. Skipped here.
 println("V-cyc Binom-π: skipped (symmetry trap demonstrated in step 2; state space explodes at K=8)")
 
-println("\n── V-cycle Fix-3 (K=8→K=4) ──")
-t_fix3  = @elapsed (snaps_fix3, sp_fix3) = run_vcycle(:fix3)
-@printf("  %.2fs  final |S|=%d\n", t_fix3, length(sp_fix3))
+println("\n── V-cycle Mult. prolong. (K=8→K=4) ──")
+t_mult  = @elapsed (snaps_mult, sp_mult) = run_vcycle(:multiplicative)
+@printf("  %.2fs  final |S|=%d\n", t_mult, length(sp_mult))
 
 # ─── results ──────────────────────────────────────────────────────────────────
 
@@ -119,14 +119,14 @@ println("  t    Method              n1    n2    n3    n4    n5    n6    n7    n8
 println("  ─────────────────────────────────────────────────────────────────────────────")
 
 for t in T_SNAP
-    sts, prs = snaps_fix3[t]
+    sts, prs = snaps_mult[t]
     mu = voxel_means(sts, prs, K)
     @printf("  %4.1f  %-16s %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f  %d\n",
-            t, "V-cyc Fix-3", mu[1],mu[2],mu[3],mu[4],mu[5],mu[6],mu[7],mu[8], length(sts))
+            t, "V-cyc Mult. prolong.", mu[1],mu[2],mu[3],mu[4],mu[5],mu[6],mu[7],mu[8], length(sts))
     println()
 end
 
 println("── Timing & state space ─────────────────────────────────────────────")
 println("  V-cycle Binomial-π:  intractable at K=8 (state space explodes in prolong)")
-@printf("  V-cycle Fix-3:       %.2fs  final |S|=%d\n", t_fix3, length(sp_fix3))
+@printf("  V-cycle Mult. prolong.:       %.2fs  final |S|=%d\n", t_mult, length(sp_mult))
 println("\nDone.")

@@ -3,6 +3,7 @@ module DiscStochSim
 using Catalyst
 using SparseArrays
 using LinearAlgebra
+using Statistics
 using ExponentialUtilities
 using Expokit
 using UnicodePlots
@@ -42,12 +43,13 @@ export mean_trajectory, marginal, terminal_progress
 # RDME exports
 export VoxelGrid, coarsen, build_hierarchy, diffusion_rate
 export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
-export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system
+export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system, build_schlogl_mixed_system
 export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
-export restrict, prolong, prolong_injection, prolong_fine_conditional, lumpability_ratio, per_molecule_flux
+export restrict, prolong, prolong_multiplicative, prolong_conditional, lumpability_ratio, per_molecule_flux, pair_admissibility, select_coarsening_mask, partial_restrict, partial_prolong
 export two_level_vcycle, two_level_vcycle_schlogl, two_level_vcycle_schlogl_injection
+export two_level_vcycle_adaptive
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
 

@@ -113,7 +113,7 @@ function run_vcycle_steps(mode::Symbol, t_end, dt)
                                      pi_table, rates, t_cur, dt;
                                      τ_pre=0.0, τ_post=0.0, use_dynamic_pi=true,
                                      coarse_n_max=cnmax)
-        else  # :fix3 — fine-conditional transfer (injection + conditional carry-over)
+        else  # :multiplicative — fine-conditional transfer (injection + conditional carry-over)
             two_level_vcycle_schlogl_injection(sp, model, fine_grid, coarse_grid,
                                                pi_table, rates, t_cur, dt;
                                                τ_pre=0.0, τ_post=0.0, use_dynamic_pi=true,
@@ -155,7 +155,7 @@ for t in t_steps
 
     sp_b = run_vcycle_steps(:binom,    t, dt_step)
     sp_d = run_vcycle_steps(:dynpi,    t, dt_step)
-    sp_i = run_vcycle_steps(:fix3,     t, dt_step)
+    sp_i = run_vcycle_steps(:multiplicative,     t, dt_step)
 
     m1b, m2b, tvb = means_and_tv(sp_b, p_true_t)
     m1d, m2d, tvd = means_and_tv(sp_d, p_true_t)

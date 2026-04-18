@@ -15,7 +15,7 @@ Ground truth options:
 Methods compared:
   1. Coarse-only Dyn-π     (K=4, no V-cycle)
   2. V-cycle Dyn-π         (K=8→K=4, correction prolongation)
-  3. V-cycle Fix-3         (K=8→K=4, fine-conditional prolongation)
+  3. V-cycle Mult. prolong.         (K=8→K=4, fine-conditional prolongation)
 
 Run: JULIA_PKG_PRECOMPILE_AUTO=0 julia --project examples/schlogl_k8_vcycle.jl
 """
@@ -231,17 +231,17 @@ end
 t_vc_dyn = time() - t0_vd
 @printf("\n  Done in %.1fs  final |S|=%d\n", t_vc_dyn, length(sp_vc_dyn))
 
-# ─── V-cycle Fix-3 (K=8→K=4) ─────────────────────────────────────────────────
+# ─── V-cycle Mult. prolong. (K=8→K=4) ─────────────────────────────────────────────────
 
-println("\n── Method 3: V-cycle Fix-3 (K=8→K=4, τ_pre=$(round(τ_pre_vc,digits=3))) ──")
+println("\n── Method 3: V-cycle Mult. prolong. (K=8→K=4, τ_pre=$(round(τ_pre_vc,digits=3))) ──")
 
-sp_vc_fix3 = StateSpace{CartesianIndex{8}, Float64}()
-add_state!(sp_vc_fix3, u0, 1.0)
-result_vc_fix3 = Dict{Float64, Vector{Float64}}()
-snap_vc_fix3   = Dict{Float64, StateSpace{CartesianIndex{8}, Float64}}()
+sp_vc_mult = StateSpace{CartesianIndex{8}, Float64}()
+add_state!(sp_vc_mult, u0, 1.0)
+result_vc_mult = Dict{Float64, Vector{Float64}}()
+snap_vc_mult   = Dict{Float64, StateSpace{CartesianIndex{8}, Float64}}()
 
 t0_vf = time()
-let sp = sp_vc_fix3, t_cur = 0.0
+let sp = sp_vc_mult, t_cur = 0.0
     for step in 1:n_steps
         dt_step = min(dt_c, t_max - t_cur)
         sp = two_level_vcycle_schlogl_injection(sp, model, fine_grid, coarse_grid,
@@ -260,18 +260,18 @@ let sp = sp_vc_fix3, t_cur = 0.0
         end
 
         t_snap = t_solve[argmin(abs.(t_solve .- t_cur))]
-        if abs(t_cur - t_snap) < dt_c/2 && !haskey(result_vc_fix3, t_snap)
-            result_vc_fix3[t_snap] = voxel_means(sp)
+        if abs(t_cur - t_snap) < dt_c/2 && !haskey(result_vc_mult, t_snap)
+            result_vc_mult[t_snap] = voxel_means(sp)
             let sp2 = StateSpace{CartesianIndex{8}, Float64}()
                 for i in eachindex(sp.states); add_state!(sp2, sp.states[i], sp.probs[i]); end
-                snap_vc_fix3[t_snap] = sp2
+                snap_vc_mult[t_snap] = sp2
             end
         end
     end
-    global sp_vc_fix3 = sp
+    global sp_vc_mult = sp
 end
-t_vc_fix3 = time() - t0_vf
-@printf("\n  Done in %.1fs  final |S|=%d\n", t_vc_fix3, length(sp_vc_fix3))
+t_vc_mult = time() - t0_vf
+@printf("\n  Done in %.1fs  final |S|=%d\n", t_vc_mult, length(sp_vc_mult))
 
 # ─── Results ──────────────────────────────────────────────────────────────────
 
@@ -308,14 +308,14 @@ for t in t_solve
             mu_vd[1], mu_vd[2], mu_vd[3], mu_vd[4], mu_vd[5], mu_vd[6], mu_vd[7], mu_vd[8],
             tv_vd, length(sp_vc_dyn))
 
-    # V-cycle Fix-3
-    mu_vf  = get(result_vc_fix3, t, fill(NaN, K))
-    sp_vfs = get(snap_vc_fix3,   t, nothing)
+    # V-cycle Mult. prolong.
+    mu_vf  = get(result_vc_mult, t, fill(NaN, K))
+    sp_vfs = get(snap_vc_mult,   t, nothing)
     tv_vf  = sp_vfs !== nothing ? tv_vs_pairs(sp_vfs, t) : NaN
     @printf("  %4s  %-20s %4.1f %4.1f %4.1f %4.1f %4.1f %4.1f %4.1f %4.1f   %.4f       %d\n\n",
-            "", "V-cyc Fix-3 (K=8→4)",
+            "", "V-cyc Mult. prolong. (K=8→4)",
             mu_vf[1], mu_vf[2], mu_vf[3], mu_vf[4], mu_vf[5], mu_vf[6], mu_vf[7], mu_vf[8],
-            tv_vf, length(sp_vc_fix3))
+            tv_vf, length(sp_vc_mult))
 end
 
 println("── Timing ───────────────────────────────────────────────────────────────")
@@ -323,7 +323,7 @@ println("── Timing ───────────────────
 println("  K=8 sparse adaptive FSP:     intractable (>75K states at t=0.5)")
 @printf("  Coarse-only Dyn-π (K=4):     %.2fs  |S|=%d\n", t_coarse, length(sp_c))
 @printf("  V-cycle Dyn-π (K=8→4):       %.2fs  |S|=%d\n", t_vc_dyn, length(sp_vc_dyn))
-@printf("  V-cycle Fix-3 (K=8→4):       %.2fs  |S|=%d\n", t_vc_fix3, length(sp_vc_fix3))
+@printf("  V-cycle Mult. prolong. (K=8→4):       %.2fs  |S|=%d\n", t_vc_mult, length(sp_vc_mult))
 println()
 println("="^70)
 println("DONE")

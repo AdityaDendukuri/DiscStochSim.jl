@@ -1,12 +1,12 @@
 """
-Schlögl K=4 Fix-3 Benchmark: Asymmetric Within-Pair Front
+Schlögl K=4 Mult. prolong. Benchmark: Asymmetric Within-Pair Front
 
-Tests Fix-3 (fine-conditional prolongation) against V-cycle Dynamic-π for a case
+Tests Mult. prolong. (fine-conditional prolongation) against V-cycle Dynamic-π for a case
 that triggers the symmetry trap: IC = (n_low, n_high, n_low, n_high).
 
 Each pair has nc_j = n_low + n_high = 193. The static dynamic-π assigns 50/50 weight
 between (n_low, n_high) and (n_high, n_low) → symmetry trap → ⟨n1⟩ → nc/2 ≈ 96.
-Fix-3 carries the fine conditional from the covered state to new states, keeping
+Mult. prolong. carries the fine conditional from the covered state to new states, keeping
 the asymmetry alive.
 
 Note: τ_pre=0 (no pre-smooth) to avoid the pre-smoother itself introducing symmetry
@@ -14,7 +14,7 @@ at nc=193 (the intra-pair stationary for nc=193 is bimodal at n_low and n_high).
 
 Ground truth: 2 × independent K=2 FSPs, each from IC (n_low, n_high).
 
-Run: JULIA_PKG_PRECOMPILE_AUTO=0 julia --project examples/schlogl_k4_fix3.jl
+Run: JULIA_PKG_PRECOMPILE_AUTO=0 julia --project examples/schlogl_k4_mult.jl
 """
 
 using DiscStochSim
@@ -44,7 +44,7 @@ dt_c     = 0.2
 n_steps  = round(Int, t_max / dt_c)
 
 println("="^70)
-println("Schlögl K=$K Fix-3 Benchmark — Asymmetric Within-Pair IC")
+println("Schlögl K=$K Mult. prolong. Benchmark — Asymmetric Within-Pair IC")
 @printf("Fixed points: n_low=%d  n_uns=%d  n_high=%d\n", n_low, n_uns, n_high)
 println("IC: (n_low, n_high, n_low, n_high) — both pairs are spatial fronts")
 println("Each coarse pair: nc = n_low+n_high = $(n_low+n_high) (symmetry trap nc)")
@@ -86,7 +86,7 @@ for t in t_solve
     @printf("  %4.1f   %5.1f %5.1f\n", t, mu1, mu2)
 end
 
-# ─── compute dynamic-π (for dynamic-π V-cycle and Fix-3) ─────────────────────
+# ─── compute dynamic-π (for dynamic-π V-cycle and Mult. prolong.) ─────────────────────
 
 println("\n── Computing dynamic-π table ──")
 t0 = time()
@@ -157,9 +157,9 @@ end
 t_vd = time() - t0
 @printf("\n  Done in %.1fs  final |S|=%d\n", t_vd, length(sp_vd))
 
-# ─── Method 2: V-cycle Fix-3 (fine-conditional prolongation) ─────────────────
+# ─── Method 2: V-cycle Mult. prolong. (fine-conditional prolongation) ─────────────────
 
-println("\n── Method 2: V-cycle Fix-3 fine-conditional prolongation (τ_pre=0) ──")
+println("\n── Method 2: V-cycle Mult. prolong. fine-conditional prolongation (τ_pre=0) ──")
 
 sp_f3 = StateSpace{CartesianIndex{4}, Float64}()
 add_state!(sp_f3, u0, 1.0)
@@ -223,17 +223,17 @@ for t in t_solve
     end
     if !isnothing(f3)
         @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f    %d\n\n",
-                "", "Fix-3 fine-cond.",
+                "", "Mult. prolong. fine-cond.",
                 f3.mu[1], f3.mu[2], f3.mu[3], f3.mu[4], f3.tv, f3.n)
     end
 end
 
 println("── Timing ───────────────────────────────────────────────────────────────")
 @printf("  V-cycle Dyn-π:  %.1fs  final |S|=%d\n", t_vd, length(sp_vd))
-@printf("  V-cycle Fix-3:  %.1fs  final |S|=%d\n", t_f3, length(sp_f3))
+@printf("  V-cycle Mult. prolong.:  %.1fs  final |S|=%d\n", t_f3, length(sp_f3))
 println()
 println("  Key: ⟨n1⟩ and ⟨n3⟩ should stay near n_low=31 (low voxels of each front).")
-println("  Fix-3 preserves the within-pair asymmetry; Dyn-π correction symmetrizes.")
+println("  Mult. prolong. preserves the within-pair asymmetry; Dyn-π correction symmetrizes.")
 println("="^70)
 println("DONE")
 println("="^70)

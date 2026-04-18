@@ -13,7 +13,7 @@ Methods compared:
   2. Coarse-only Dynamic-π    (K=2, no V-cycle)
   3. V-cycle Binomial-π       (K=4→K=2, τ_pre=τ_post=0)
   4. V-cycle Dynamic-π        (K=4→K=2, dynamic-π correction)
-  5. V-cycle Fix-3            (K=4→K=2, fine-conditional prolongation)
+  5. V-cycle Mult. prolong.            (K=4→K=2, fine-conditional prolongation)
 
 Since K=4 direct FSP (n_max=200: 201^4 ~ 1.6B states) is intractable, we
 use the true K=4 sparse adaptive FSP as ground truth (builds state space
@@ -377,13 +377,13 @@ end
 t_vc_dyn = time() - t0_vd
 @printf("  V-cycle Dyn-π: %.1fs  final fine states: %d\n", t_vc_dyn, length(sp_vc_dyn.states))
 
-# ── Method 5: V-cycle Fix-3 (fine-conditional prolongation) ──────────────────
-sp_vc_fix3 = StateSpace{CartesianIndex{4}, Float64}()
-add_state!(sp_vc_fix3, u0, 1.0)
-result_vc_fix3 = Dict{Float64, Vector{Float64}}()
+# ── Method 5: V-cycle Mult. prolong. (fine-conditional prolongation) ──────────────────
+sp_vc_mult = StateSpace{CartesianIndex{4}, Float64}()
+add_state!(sp_vc_mult, u0, 1.0)
+result_vc_mult = Dict{Float64, Vector{Float64}}()
 
 t0_vf = time()
-let sp = sp_vc_fix3, t_cur = 0.0
+let sp = sp_vc_mult, t_cur = 0.0
     for step in 1:n_steps
         dt_step = min(dt_c, t_max - t_cur)
         sp = two_level_vcycle_schlogl_injection(sp, model,
@@ -398,21 +398,21 @@ let sp = sp_vc_fix3, t_cur = 0.0
         prune_threshold!(sp, 1e-12)
 
         if step % 10 == 0
-            @printf("  [V-cyc Fix-3] step %d/%d  fine states: %d\n",
+            @printf("  [V-cyc Mult. prolong.] step %d/%d  fine states: %d\n",
                     step, n_steps, length(sp.states))
             flush(stdout)
         end
 
         if any(abs(t_cur - t) < dt_c/2 for t in t_solve)
             t_snap = t_solve[argmin(abs.(t_solve .- t_cur))]
-            !haskey(result_vc_fix3, t_snap) &&
-                (result_vc_fix3[t_snap] = voxel_means_k4(sp.states, sp.probs))
+            !haskey(result_vc_mult, t_snap) &&
+                (result_vc_mult[t_snap] = voxel_means_k4(sp.states, sp.probs))
         end
     end
-    global sp_vc_fix3 = sp
+    global sp_vc_mult = sp
 end
-t_vc_fix3 = time() - t0_vf
-@printf("  V-cycle Fix-3: %.1fs  final fine states: %d\n", t_vc_fix3, length(sp_vc_fix3.states))
+t_vc_mult = time() - t0_vf
+@printf("  V-cycle Mult. prolong.: %.1fs  final fine states: %d\n", t_vc_mult, length(sp_vc_mult.states))
 
 # ─── Print comparison table ───────────────────────────────────────────────────
 
@@ -471,11 +471,11 @@ for t in t_solve
     @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n",
             "", "V-cyc Dyn-π", mu_vd[1], mu_vd[2], mu_vd[3], mu_vd[4], tv_vd, length(sp_vc_dyn))
 
-    # V-cycle Fix-3
-    mu_vf = get(result_vc_fix3, t, fill(NaN, 4))
-    tv_vf = tv_vs_k4gt(sp_vc_fix3.states, sp_vc_fix3.probs)
+    # V-cycle Mult. prolong.
+    mu_vf = get(result_vc_mult, t, fill(NaN, 4))
+    tv_vf = tv_vs_k4gt(sp_vc_mult.states, sp_vc_mult.probs)
     @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n\n",
-            "", "V-cyc Fix-3", mu_vf[1], mu_vf[2], mu_vf[3], mu_vf[4], tv_vf, length(sp_vc_fix3))
+            "", "V-cyc Mult. prolong.", mu_vf[1], mu_vf[2], mu_vf[3], mu_vf[4], tv_vf, length(sp_vc_mult))
 end
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
@@ -491,8 +491,8 @@ println("── Summary ──────────────────�
         t_vc_binom, τ_pre_vc, length(sp_vc_binom))
 @printf("  V-cycle Dynamic-π:          %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
         t_vc_dyn, τ_pre_vc, length(sp_vc_dyn))
-@printf("  V-cycle Fix-3:              %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
-        t_vc_fix3, τ_pre_vc, length(sp_vc_fix3))
+@printf("  V-cycle Mult. prolong.:              %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
+        t_vc_mult, τ_pre_vc, length(sp_vc_mult))
 println()
 println("="^70)
 println("DONE")

@@ -347,7 +347,7 @@ function two_level_vcycle_schlogl_injection(
 
     # ── 2. Restrict ───────────────────────────────────────────────────────────
     sp_coarse     = restrict(sp_smoothed)
-    sp_coarse_pre = _copy_sp(sp_coarse)     # save p^{2h} as a StateSpace for prolong_injection
+    sp_coarse_pre = _copy_sp(sp_coarse)     # save p^{2h} before coarse solve for multiplicative correction
 
     # ── 3. Coarse system + optional expand ────────────────────────────────────
     coarse_sys = if use_dynamic_pi
@@ -364,13 +364,12 @@ function two_level_vcycle_schlogl_injection(
     A_coarse, = build_generator(sp_coarse, coarse_sys, rates, t)
     sp_coarse.probs .= expv(Float64(dt), A_coarse, sp_coarse.probs; m = krylov_m)
 
-    # ── 5. Fix-3 prolongation: fine-conditional transfer ─────────────────────
+    # ── 5. Multiplicative prolongation with conditional extension ─────────────
     #
-    # For covered coarse states: injection (exact, preserves asymmetry).
-    # For new (expanded) coarse states: carry over the fine conditional from the
-    # nearest covered neighbor, shifted to match the new pair count.  This avoids
-    # the static-π symmetry trap for fronts at expanded nc values.
-    sp_fine_new = prolong_fine_conditional(sp_smoothed, sp_coarse_pre, sp_coarse;
+    # Covered coarse states: exact multiplicative correction (preserves asymmetry).
+    # Newly-expanded coarse states: carry over the fine conditional from the
+    # nearest covered neighbor, shifted to match the new pair count.
+    sp_fine_new = prolong_conditional(sp_smoothed, sp_coarse_pre, sp_coarse;
                                            prob_tol = weight_tol)
 
     # ── 6. Post-smooth ────────────────────────────────────────────────────────
@@ -393,4 +392,83 @@ function _copy_sp(sp::StateSpace{E, T}) where {E, T}
         add_state!(sp2, sp.states[i], sp.probs[i])
     end
     sp2
+end
+
+# ─── Adaptive two-level V-cycle ───────────────────────────────────────────────
+"""
+    two_level_vcycle_adaptive(sp_fine, model, fine_grid, rates, t, dt; kwargs...)
+
+Adaptive V-cycle: selects a coarsening mask, restricts to mixed space, solves
+the mixed CME, then prolongs back to the fine space.
+
+Returns `(sp_fine_new, mask)` so the caller can pass `mask` as `prev_mask` on
+the next time step (hysteresis).
+
+Keyword arguments:
+- `prev_mask`        : mask from previous step (nothing = first step)
+- `α_lo/hi, φ_lo/hi`: admissibility thresholds forwarded to select_coarsening_mask
+- `krylov_m`         : Krylov subspace dimension for expv
+- `weight_tol`       : probability weight cutoff for partial_prolong
+- `binom_tol`        : Binomial truncation threshold for partial_prolong
+- `expand_mixed`     : whether to expand the mixed state space before solving
+- `mixed_expand_depth` : depth for expand!
+- `mixed_n_max`      : per-voxel upper bound for mixed boundary condition
+"""
+function two_level_vcycle_adaptive(
+    sp_fine::StateSpace{CartesianIndex{K}, Float64},
+    model::SchloglModel1D,
+    fine_grid::VoxelGrid,
+    rates,
+    t::Real,
+    dt::Real;
+    prev_mask::Union{BitVector, Nothing} = nothing,
+    α_lo::Float64 = 0.10,
+    α_hi::Float64 = 0.25,
+    φ_lo::Float64 = 1.5,
+    φ_hi::Float64 = 3.0,
+    krylov_m::Int = 30,
+    weight_tol::Float64 = 1e-14,
+    binom_tol::Float64 = 1e-6,
+    expand_mixed::Bool = true,
+    mixed_expand_depth::Int = 1,
+    mixed_n_max::Int = 400,
+) where {K}
+
+    # ── 1. Select coarsening mask ─────────────────────────────────────────────
+    rdme_model = RDMEModel1D(model.D, 0.0, 0.0)   # diffusion-only for admissibility
+    mask = select_coarsening_mask(sp_fine, rdme_model, fine_grid, prev_mask;
+                                   α_lo, α_hi, φ_lo, φ_hi)
+
+    # If nothing is coarsened, skip the mixed machinery and solve directly.
+    if !any(mask)
+        fine_sys = build_schlogl_rdme_system(model, fine_grid)
+        A_fine, = build_generator(sp_fine, fine_sys, rates, t)
+        sp_out = _copy_sp(sp_fine)
+        sp_out.probs .= expv(Float64(dt), A_fine, sp_fine.probs; m = krylov_m)
+        return sp_out, mask
+    end
+
+    KM = K - sum(mask)
+
+    # ── 2. Partial restriction: fine → mixed ──────────────────────────────────
+    sp_mixed = _partial_restrict_val(sp_fine, mask, Val(KM))
+
+    # ── 3. Build mixed-resolution CME system ─────────────────────────────────
+    mixed_sys = build_schlogl_mixed_system(model, fine_grid, mask)
+
+    # ── 4. Optionally expand the mixed state space ────────────────────────────
+    if expand_mixed
+        bc_mixed = s -> all(c -> 0 ≤ c ≤ mixed_n_max, Tuple(s))
+        expand!(sp_mixed, mixed_sys, bc_mixed; depth = mixed_expand_depth)
+    end
+
+    # ── 5. Solve mixed CME ────────────────────────────────────────────────────
+    A_mixed, = build_generator(sp_mixed, mixed_sys, Float64[], Float64(t))
+    sp_mixed.probs .= expv(Float64(dt), A_mixed, sp_mixed.probs; m = krylov_m)
+
+    # ── 6. Partial prolongation: mixed → fine ─────────────────────────────────
+    sp_fine_new = partial_prolong(sp_mixed, mask, Val(K);
+                                   weight_tol, binom_tol)
+
+    return sp_fine_new, mask
 end

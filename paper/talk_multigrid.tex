@@ -13,11 +13,12 @@
 
 \usepackage{amsmath,amssymb,bm,mathtools}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning}
+\usetikzlibrary{arrows.meta,positioning,patterns,decorations.pathreplacing}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{xcolor}
 \usepackage[numbers,sort&compress]{natbib}
+\usepackage{pifont}
 
 \graphicspath{{figures/}}
 
@@ -29,19 +30,20 @@
 \newcommand{\calR}{\mathcal{R}}
 \newcommand{\calP}{\mathcal{P}}
 \newcommand{\norm}[1]{\left\|#1\right\|}
-% short inline citation: [Author Year]
 \newcommand{\citeref}[1]{{\scriptsize\textcolor{gray}{#1}}}
 
 \definecolor{fastblue}{RGB}{31,119,180}
 \definecolor{slowred}{RGB}{214,39,40}
 \definecolor{coarsegreen}{RGB}{44,160,44}
+\definecolor{finecolor}{RGB}{214,39,40}
+\definecolor{coarsecolor}{RGB}{31,119,180}
 
 % ================================================================
-\title[Multigrid FSP for the RDME]{%
+\title[Adaptive Multigrid FSP]{%
   Adaptive Multigrid Finite State Projection\\
   for the Reaction-Diffusion Master Equation}
 \author{Aditya Dendukuri}
-\institute{University of California, Santa Barbara}
+\institute[UCSB]{University of California, Santa Barbara}
 \date{}
 % ================================================================
 
@@ -52,303 +54,376 @@
 \end{frame}
 
 % ================================================================
-\section{The RDME}
+\section{Setting}
 % ================================================================
 
-\begin{frame}{The Reaction-Diffusion Master Equation
-  \citeref{[Erban et al.\ 2007]}}
+\begin{frame}{The Reaction-Diffusion Master Equation}
 
-  \textbf{Setting.}
-  Domain $\Omega \subset \mathbb{R}^d$ partitioned into $K$ voxels of side length $h$.
-  $N$ species with diffusion coefficients $D_1,\ldots,D_N$.
-  State: $x_{ik}$ = molecules of species $i$ in voxel $k$;
-  $\bx_k = (x_{1k},\ldots,x_{Nk})$ = local voxel state.
+  \textbf{Setting:}
+  Domain $\Omega$ partitioned into $K$ voxels of size $h$.
+  State $\bx_k$ = molecule counts in voxel $k$.
 
   \medskip
   \begin{center}
-  \begin{tikzpicture}[scale=1.1]
-    % voxel boxes
+  \begin{tikzpicture}[scale=1.05]
     \foreach \k in {1,2,3,4} {
-      \draw[thick,fill=blue!10] (\k-1,0) rectangle (\k,0.9);
-      \node[font=\normalsize] at (\k-0.5,0.45) {$\Omega_\k$};
+      \draw[thick,fill=blue!10] (\k-1,0) rectangle (\k,0.85);
+      \node[font=\normalsize] at (\k-0.5,0.42) {$\bx_\k$};
     }
-    % clean horizontal diffusion arrows above boxes
     \foreach \k in {1,2,3} {
-      \draw[<->,fastblue,very thick] (\k-0.35,1.25) -- (\k+0.35,1.25);
+      \draw[<->,fastblue,very thick] (\k-0.3,1.2) -- (\k+0.3,1.2);
     }
-    \node[fastblue,font=\small] at (2,1.65)
-      {diffusion: rate $d_i = D_i/h^2$ per molecule};
-    % reaction arrow below box
-    \draw[->,slowred,thick] (2.5,0) -- (2.5,-0.45);
-    \node[slowred,font=\small] at (2.5,-0.68)
+    \node[fastblue,font=\small] at (2,1.55)
+      {diffusion: rate $d = D/h^2$ per molecule};
+    \draw[->,slowred,thick] (2.5,0) -- (2.5,-0.42);
+    \node[slowred,font=\small] at (2.5,-0.62)
       {reactions: propensity $\alpha_r(\bx_k)$ in each voxel};
   \end{tikzpicture}
   \end{center}
 
-  \medskip
   \[
     \frac{dp}{dt} = A_{\mathrm{RDME}}\, p
-    \;=\; \Bigl(\sum_k A_{\mathrm{rxn}}^{(k)}
-          \;+\; \sum_{\substack{k,k'\\ \text{adjacent}}}
-          A_{\mathrm{diff}}^{(kk')}\Bigr)\, p
+    \;=\; \Bigl(\underbrace{A_{\mathrm{rxn}}}_{\text{slow}}
+          + \underbrace{A_{\mathrm{diff}}}_{\text{fast}}\Bigr) p
   \]
 
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{The Computational Bottleneck: FSP
-  \citeref{[Munsky \& Khammash 2006]}}
-
-  The \textbf{Finite State Projection} (FSP) cuts the infinite state space
-  $\Znn^{N\times K}$ down to a finite active set $\mathcal{S}$
-  and solves the resulting ODE exactly.
-  $n_{\max}$ = how many molecules we allow per species per voxel.
-
-  \bigskip
-  \textbf{State space size:} $|\mathcal{S}| \sim (n_{\max}+1)^{N \cdot K}$
-
-  \bigskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.4}
-  \begin{tabular}{ccc|c}
-    \toprule
-    $N$ & $K$ & $n_{\max}$ & $|\mathcal{S}|$ \\
-    \midrule
-    1 & 4  & 12 & $13^4 = 28{,}561$ \quad
-      \textcolor{coarsegreen}{tractable} \\
-    1 & 8  & 12 & $13^8 \approx 8\times10^8$ \quad
-      \textcolor{slowred}{intractable} \\
-    1 & 16 & 12 & $13^{16}\approx 7\times10^{17}$ \quad
-      \textcolor{slowred}{hopeless} \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \bigskip
-  \begin{block}{Goal}
-    Exploit the \emph{spatial structure} of the RDME to reduce computation
-    to a sequence of small, coarse-level FSP solves.
+  \begin{block}{FSP bottleneck \citeref{[Munsky \& Khammash 2006]}}
+    State space $|\mathcal{S}| \sim n_{\max}^K$ grows exponentially in $K$.\\[0.2em]
+    \begin{tabular}{cccc}
+      $K=4$: & $13^4 \approx 28\text{k}$ & \textcolor{coarsegreen}{\small tractable} &\\
+      $K=8$: & $13^8 \approx 8 \times 10^8$ &
+        \textcolor{slowred}{\small intractable} &\hspace{0.5em}
+    \end{tabular}
   \end{block}
 
 \end{frame}
 
 % ================================================================
-\section{Multigrid Method}
+\section{Multigrid}
 % ================================================================
 
-\begin{frame}{Spatial Coarsening via Lumpability
-  \citeref{[Kemeny \& Snell 1960]}}
+\begin{frame}{Spatial Coarsening via Lumpability}
 
-  \textbf{Lumpability (Kemeny \& Snell):}
-  if a set of states transition among themselves \emph{very fast},
-  you can collapse them into a single macro-state.
-  The internal distribution settles to a known stationary form ---
-  that's what we use as the prolongation operator.
+  \textbf{Idea:} merge adjacent fine-voxel pairs into a single coarse voxel.
+  Coarse count: $\bar x_j = x_{2j-1} + x_{2j}$.
 
   \medskip
-  \textbf{Idea:} merge pairs of adjacent fine voxels into one coarse voxel.
-  Coarse count for species $i$, coarse voxel $j$:
-  \[
-    \bar{x}_{ij} = x_{i,2j-1} + x_{i,2j}
-  \]
-
   \begin{center}
   \begin{tikzpicture}[scale=0.95]
-    \draw[thick,fill=blue!12] (0,1.2) rectangle (1.4,2.0);
-    \draw[thick,fill=blue!12] (1.4,1.2) rectangle (2.8,2.0);
-    \draw[thick,fill=red!12]  (2.8,1.2) rectangle (4.2,2.0);
-    \draw[thick,fill=red!12]  (4.2,1.2) rectangle (5.6,2.0);
-    \node at (0.7,1.6) {$k_1$};  \node at (2.1,1.6) {$k_2$};
-    \node at (3.5,1.6) {$k_3$};  \node at (4.9,1.6) {$k_4$};
+    \foreach \k/\col in {1/blue!15,2/blue!15,3/red!15,4/red!15} {
+      \draw[thick,fill=\col] (\k-1,1.2) rectangle (\k,2.0);
+    }
+    \node[font=\small] at (0.5,1.6) {$n_{\mathrm{lo}}$};
+    \node[font=\small] at (1.5,1.6) {$n_{\mathrm{hi}}$};
+    \node[font=\small] at (2.5,1.6) {$n_{\mathrm{hi}}$};
+    \node[font=\small] at (3.5,1.6) {$n_{\mathrm{hi}}$};
     \node[left,font=\small] at (0,1.6) {fine:};
-    \draw[thick,fill=blue!28] (0,0) rectangle (2.8,0.8);
-    \draw[thick,fill=red!28]  (2.8,0) rectangle (5.6,0.8);
-    \node at (1.4,0.4) {$\bar{k}_1$};  \node at (4.2,0.4) {$\bar{k}_2$};
+    \draw[thick,fill=blue!35] (0,0) rectangle (2,0.8);
+    \draw[thick,fill=red!35]  (2,0) rectangle (4,0.8);
+    \node[font=\small] at (1.0,0.4) {$\bar x_1 = n_{\mathrm{lo}}+n_{\mathrm{hi}}$};
+    \node[font=\small] at (3.0,0.4) {$\bar x_2 = 2n_{\mathrm{hi}}$};
     \node[left,font=\small] at (0,0.4) {coarse:};
-    \draw[->,thick,gray!70] (1.4,1.2) -- (1.4,0.8)
-      node[midway,right,font=\footnotesize]{$\calR$: sum counts};
-    \draw[->,thick,coarsegreen!70!black] (1.1,0.8) -- (0.7,1.2)
-      node[midway,left,font=\footnotesize]{$\calP$: split counts};
+    \draw[->,thick,gray] (1.0,1.2) -- (1.0,0.8)
+      node[midway,right,font=\footnotesize]{$\calR$: sum};
+    \draw[->,thick,coarsegreen!80!black] (0.7,0.8) -- (0.7,1.2)
+      node[midway,left,font=\footnotesize]{$\calP$: split};
   \end{tikzpicture}
   \end{center}
 
-  \textbf{Lumpability parameter} (ratio of inter- to intra-pair diffusion rates):
-  \[
-    \epsilon = \frac{d_{\mathrm{inter}}}{d_{\mathrm{intra}}}
-    = \frac{D/(2h)^2}{D/h^2} = \frac{1}{4}
-    \quad \text{per level (uniform grid)}
-  \]
-  Small $\epsilon \Rightarrow$ coarsening is accurate.
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Restriction and Prolongation}
-
-  \textbf{Restriction} $\calR$: go from fine to coarse by summing over all
-  fine states that share the same coarse counts.
-  \[
-    (\calR\, p)(\bar{\bx})
-    = \sum_{\bx\,:\; x_{i,2j-1}+x_{i,2j}=\bar{x}_{ij}\;\forall i,j} p(\bx)
-  \]
-
   \medskip
-  \textbf{Prolongation} $\calP$ \citeref{[Kemeny \& Snell 1960; Simon \& Ando 1961]}:
-  go from coarse back to fine.
-  With $n = \bar{x}_{ij}$ total molecules in coarse voxel $j$,
-  fast intra-voxel diffusion drives the split to stationarity:
+  \textbf{Why it works:}
+  intra-pair diffusion at rate $D/h^2$ equilibrates molecules within a pair
+  \emph{much faster} than inter-pair dynamics.
+  After this fast equilibration the within-pair split follows:
   \[
-    \pi(m \mid n) = \Bin\!\left(n,\;\tfrac{1}{2}\right),
-    \quad m = 0,1,\ldots,n
+    \pi(m \mid \bar x) = \Bin\!\bigl(\bar x,\,\tfrac{1}{2}\bigr)
   \]
-  (detailed balance; equal-volume sub-voxels). Then:
-  \[
-    (\calP\,\bar{p})(\bx)
-    = \bar{p}(\bar{\bx})\cdot\prod_{i,j}\pi(x_{i,2j-1}\mid\bar{x}_{ij})
-  \]
-
-  \begin{block}{Consistency: $\calR\,\calP = I$}
-    If you go coarse then fine, you get back exactly where you started.
-  \end{block}
+  \textbf{Coarse generator} $\bar A = \calR A_{\mathrm{RDME}} \calP$
+  is itself an RDME on a $K/2$-voxel grid.
 
 \end{frame}
 
 % ----------------------------------------------------------------
-\begin{frame}{Coarse-Level Generator}
-
-  Petrov--Galerkin projection:
-  $\bar{A} = \calR\, A_{\mathrm{RDME}}\, \calP$,
-  where $A_{\mathrm{RDME}} = A_{\mathrm{rxn}} + A_{\mathrm{intra}} + A_{\mathrm{inter}}$:
-  \begin{itemize}\setlength\itemsep{0pt}
-    \item $A_{\mathrm{intra}}$: diffusion within each fine pair (fast; rate $D/h^2$)
-    \item $A_{\mathrm{inter}}$: diffusion between coarse voxels (slow; rate $D/(2h)^2$)
-  \end{itemize}
-
-  \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.45}
-  \begin{tabular}{p{3.6cm}p{7cm}}
-    \toprule
-    Term & Result \\
-    \midrule
-    $\calR\, A_{\mathrm{intra}}\, \calP$ &
-      $=0$\; ($\Bin$ is stationary for $A_{\mathrm{intra}}$;
-      fast intra-voxel diffusion drops out) \\
-    $\calR\, A_{\mathrm{inter}}\, \calP$ &
-      Coarse diffusion at rate $D/(2h)^2$, same structural form \\
-    $\calR\, A_{\mathrm{rxn}}\, \calP$ &
-      \textbf{Exact} for linear (0th- and 1st-order) reactions;
-      error $O(1/n)$ for nonlinear \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \begin{alertblock}{Nice structure}
-    $\bar{A}$ is itself an RDME on a coarser grid ---
-    so you can keep coarsening recursively all the way down.
-  \end{alertblock}
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{The V-Cycle \citeref{[Briggs et al.\ 2000]}}
-
-  Split $A_{\mathrm{RDME}} = A_{\mathrm{fast}} + A_{\mathrm{slow}}$,
-  where $A_{\mathrm{fast}} = A_{\mathrm{intra}}$ and
-  $A_{\mathrm{slow}} = A_{\mathrm{rxn}} + A_{\mathrm{inter}}$.
+\begin{frame}{Two-Level V-Cycle}
 
   \begin{columns}[T]
-    \begin{column}{0.54\textwidth}
-      \begin{block}{V-Cycle: $p(t) \to p(t+\Delta t)$}
-        \begin{enumerate}
-          \setlength\itemsep{0.35em}
-          \item \textbf{Pre-smooth:}
-            $\tilde p \gets e^{\tau A_{\mathrm{fast}}} p$ \\
-            {\small Run fast diffusion for time $\tau$ so molecules
-            even out within each merged pair}
+    \begin{column}{0.52\textwidth}
+      \begin{block}{$p(t) \;\to\; p(t+\Delta t)$}
+        \begin{enumerate}\setlength\itemsep{0.4em}
           \item \textbf{Restrict:}
-            $p^c \gets \calR\,\tilde p$ \\
-            {\small Collapse to the coarse level}
-          \item \textbf{Coarse solve (FSP):}
+            $p^c \gets \calR\, p$ \\
+            {\small marginalize over within-pair splits}
+          \item \textbf{Coarse solve:}
             $\bar p^c \gets e^{\Delta t\,\bar A}\, p^c$ \\
-            {\small Take a full time step on the much smaller coarse problem}
-          \item \textbf{Prolongate correction:}
-            $p \gets \tilde p + \calP(\bar p^c - p^c)$ \\
-            {\small Fold the coarse correction back into the fine solution}
-          \item \textbf{Post-smooth:}
-            $p \gets e^{\tau A_{\mathrm{fast}}} p$
+            {\small full time step on the small $K/2$ problem}
+          \item \textbf{Prolong:}
+            $p_{\mathrm{new}} \gets \calP\,\bar p^c$ \\
+            {\small reconstruct fine distribution via $\Bin(\bar x, \tfrac{1}{2})$}
         \end{enumerate}
       \end{block}
+
+      \smallskip
+      \textbf{Why it's fast:}\\
+      Coarse state space is $\sim n_{\max}^{K/2}$ vs.\ $n_{\max}^K$.\\[0.3em]
+      $K{=}8{\to}4$: $\mathbf{13^4}$ vs.\ $\mathbf{13^8}$
+      \textbf{(30k$\times$ smaller)}.
     \end{column}
-    \begin{column}{0.43\textwidth}
+    \begin{column}{0.44\textwidth}
       \begin{center}
-      \begin{tikzpicture}[every node/.style={font=\small}, scale=0.98]
+      \begin{tikzpicture}[every node/.style={font=\footnotesize}, scale=0.82]
         \node[draw,rounded corners,fill=blue!22,
-              minimum width=3.1cm,minimum height=0.62cm]
-          (f) at (0,3.4) {level $\ell=0$ (fine)};
-        \node[draw,rounded corners,fill=blue!13,
-              minimum width=2.7cm,minimum height=0.62cm]
-          (m) at (-0.3,2.1) {level $\ell=1$};
+              minimum width=2.8cm,minimum height=0.62cm]
+          (f) at (0,3.2) {fine ($K$ voxels)};
         \node[draw,rounded corners,fill=coarsegreen!28,
-              minimum width=2.3cm,minimum height=0.62cm]
-          (c) at (0,0.8) {level $\ell=L$ (coarsest)};
-        \draw[->,thick] (f.south west) -- (m.north)
-          node[midway,left,font=\footnotesize]{restrict};
-        \draw[->,thick] (m.south) -- (c.north west)
-          node[midway,left,font=\footnotesize]{restrict};
-        \draw[->,thick,slowred] (c.north east) -- (m.south east)
-          node[midway,right,font=\footnotesize]{prolong};
-        \draw[->,thick,slowred] (m.north east) -- (f.south east)
-          node[midway,right,font=\footnotesize]{prolong};
-        \node[coarsegreen!70!black,font=\footnotesize] at (0,0.28)
-          {FSP solve};
+              minimum width=2.8cm,minimum height=0.62cm]
+          (c) at (0,1.5) {coarse ($K/2$ voxels)};
+        \draw[->,thick] (f.south west) -- (c.north west)
+          node[midway,left]{$\calR$};
+        \draw[->,thick,slowred] (c.north east) -- (f.south east)
+          node[midway,right]{$\calP$};
+        \node[coarsegreen!70!black] at (0,0.9){FSP solve};
+        \draw[coarsegreen!60!black,thick,rounded corners]
+          (-1.2,0.62) rectangle (1.2,1.15);
       \end{tikzpicture}
       \end{center}
 
       \smallskip
-      \textbf{Why this helps:}\\[0.2em]
-      The coarse level isn't stiff ---
-      you can take steps of size $\Delta t \sim 1/\|A_{\mathrm{slow}}\|$
-      instead of the tiny fine-level limit $\sim 1/\|A_{\mathrm{fast}}\|$.\\[0.2em]
-      Speedup $\sim d_{\mathrm{intra}} / k_{\mathrm{rxn}} \gg 1$
+      {\small\textbf{Analogy to geometric MG:}\\
+      Restrict $=$ marginalize\\
+      Coarse solve $=$ lumped CME\\
+      Prolong $=$ Binomial split\\
+      Smooth $=$ intra-pair diffusion}
     \end{column}
   \end{columns}
 
 \end{frame}
 
+% ================================================================
+\section{The Problem with Fronts}
+% ================================================================
+
+\begin{frame}{When Coarsening Goes Wrong: The Symmetry Trap}
+
+  \textbf{Schlögl model} is bistable:
+  two stable states at $n_{\mathrm{low}}=31$ and $n_{\mathrm{high}}=162$.
+
+  \begin{center}
+    \includegraphics[height=4.4cm]{fig1_schlogl_bistability}
+  \end{center}
+  \footnotesize
+  \textbf{Left:} rate equation $f(n)$; zeros are fixed points.
+  \textbf{Right:} potential $U(n)$; two wells separated by a barrier at $n=72$.
+
+\end{frame}
+
 % ----------------------------------------------------------------
-\begin{frame}{Adaptive Refinement
-  \citeref{[Dendukuri et al.\ 2025]}}
+\begin{frame}{The Symmetry Trap}
 
-  \textbf{Total inter-voxel flux} between adjacent voxels $k$ and $k'$:
-  \[
-    \Phi_{kk'} = \sum_{i=1}^N d_i\,\E[x_{ik}]
-    \qquad \text{(expected molecules crossing per unit time)}
-  \]
-  Simple rule: merge if $\Phi_{kk'}$ is small. But this breaks in two ways:
-
-  \begin{enumerate}
-    \setlength\itemsep{0.6em}
-    \item \textbf{Background inactivity.}
-      Almost no molecules around, so $\Phi_{kk'}\approx 0$ no matter what $d_i$ is.
-      \textcolor{coarsegreen}{Fine to merge.}
-
-    \item \textbf{Spatial bottleneck.}
-      Molecules are there, but $d_i$ is just slow (membrane, narrow channel).
-      $\Phi_{kk'}$ looks small, but this pair is a gateway between two regions.
-      \textcolor{slowred}{Merging here is wrong.}
-  \end{enumerate}
+  \textbf{Problem:} a spatial front lives \emph{inside} a coarse voxel.
 
   \medskip
-  \textbf{Fix:} refine pair $\{k,k'\}$ if either:
-  \[
-    \epsilon_{kk'} \geq \epsilon_{\mathrm{lump}}
-    \qquad\text{or}\qquad
-    \phi_{kk'} = \frac{\Phi_{kk'}}{\displaystyle\sum_i \E[x_{ik}]}
-    \;\geq\; \epsilon_{\mathrm{bn}}\cdot\bar\phi
-  \]
-  where $\bar\phi$ = mean per-molecule flux across the domain;
-  $\epsilon_{\mathrm{lump}},\epsilon_{\mathrm{bn}}$ are user thresholds.
+  \begin{center}
+  \begin{tikzpicture}[scale=0.9, every node/.style={font=\small}]
+    % Fine level
+    \draw[thick,fill=blue!20] (0,2.2) rectangle (1.6,3.0);
+    \node at (0.8,2.6) {$n_1 = 31$};
+    \draw[thick,fill=red!20] (1.6,2.2) rectangle (3.2,3.0);
+    \node at (2.4,2.6) {$n_2 = 162$};
+    \draw[thick,fill=red!15] (3.2,2.2) rectangle (4.8,3.0);
+    \node at (4.0,2.6) {$n_3 = 162$};
+    \node[left,font=\footnotesize] at (0,2.6) {fine:};
+
+    % Restrict arrow
+    \draw[->,thick,gray] (1.6,2.2) -- (1.0,1.5)
+      node[midway,left,font=\footnotesize]{$\calR$};
+
+    % Coarse level
+    \draw[thick,fill=blue!35] (0,0.6) rectangle (3.2,1.4);
+    \node at (1.6,1.0) {$\bar n_1 = 31+162 = 193$};
+    \draw[thick,fill=red!25] (3.2,0.6) rectangle (4.8,1.4);
+    \node at (4.0,1.0) {$\bar n_2 = 162$};
+    \node[left,font=\footnotesize] at (0,1.0) {coarse:};
+
+    % Prolong arrow
+    \draw[->,thick,slowred] (1.1,0.6) -- (0.7,0.0)
+      node[midway,left,font=\footnotesize]{$\calP_{\mathrm{Bin}}$};
+
+    % Wrong result
+    \draw[thick,fill=yellow!30] (0,-0.9) rectangle (1.6,-0.1);
+    \node at (0.8,-0.5) {$n_1 \approx 96$\;\textcolor{slowred}{\ding{55}}};
+    \draw[thick,fill=yellow!30] (1.6,-0.9) rectangle (3.2,-0.1);
+    \node at (2.4,-0.5) {$n_2 \approx 97$\;\textcolor{slowred}{\ding{55}}};
+    \node[left,font=\footnotesize] at (0,-0.5) {result:};
+
+    % Annotation
+    \node[slowred,align=center,font=\footnotesize] at (6.2,1.0)
+      {$\Bin(193,\tfrac12)$ peaks\\at midpoint 96\\[0.2em]\textbf{front is erased}};
+  \end{tikzpicture}
+  \end{center}
+
+  \begin{alertblock}{Root cause}
+    The coarse variable $\bar n_1 = 193$ is consistent with both
+    $(31, 162)$ \emph{and} $(162, 31)$.
+    Binomial splits them 50/50 around the midpoint.
+    \textbf{Directionality is lost.}
+  \end{alertblock}
+
+\end{frame}
+
+% ================================================================
+\section{Adaptive Coarsening}
+% ================================================================
+
+\begin{frame}{The Fix: Don't Coarsen the Front}
+
+  \begin{block}{Key insight}
+    The Binomial approximation is only wrong \emph{where the distribution
+    is asymmetric within a pair}.
+    For bulk pairs far from the front it works well.
+    \textbf{Solution: selectively refine only the pairs that need it.}
+  \end{block}
+
+  \medskip
+  \begin{center}
+  \begin{tikzpicture}[scale=0.92, every node/.style={font=\small}]
+    % K=8 fine grid
+    \foreach \k in {1,2,3,5,6,7,8} {
+      \draw[thick,fill=blue!12] (\k-1,2.2) rectangle (\k,3.0);
+    }
+    \draw[thick,fill=red!25] (3,2.2) rectangle (4,3.0);
+    \node[font=\footnotesize] at (0.5,2.6){$n_\mathrm{lo}$};
+    \node[font=\footnotesize] at (1.5,2.6){$n_\mathrm{lo}$};
+    \node[font=\footnotesize,slowred] at (2.5,2.6){$n_\mathrm{lo}$};
+    \node[font=\footnotesize,slowred] at (3.5,2.6){$n_\mathrm{hi}$};
+    \node[font=\footnotesize] at (4.5,2.6){$n_\mathrm{hi}$};
+    \node[font=\footnotesize] at (5.5,2.6){$n_\mathrm{hi}$};
+    \node[font=\footnotesize] at (6.5,2.6){$n_\mathrm{hi}$};
+    \node[font=\footnotesize] at (7.5,2.6){$n_\mathrm{hi}$};
+    \node[left,font=\footnotesize] at (0,2.6){fine $K{=}8$:};
+
+    % Pair brackets
+    \foreach \j/\xl/\xr in {1/0/2, 2/2/4, 3/4/6, 4/6/8} {
+      \draw[decorate,decoration={brace,mirror,amplitude=4pt}]
+        (\xl,2.15) -- (\xr,2.15) node[midway,below=6pt,font=\footnotesize]
+        {pair \j};
+    }
+    % F/C labels under each pair
+    \node[coarsecolor,font=\footnotesize] at (1,1.55) {C};
+    \node[slowred,font=\footnotesize\bfseries] at (3,1.55) {\textbf{F}};
+    \node[coarsecolor,font=\footnotesize] at (5,1.55) {C};
+    \node[coarsecolor,font=\footnotesize] at (7,1.55) {C};
+
+    % Mixed grid
+    \draw[thick,fill=blue!30] (0,0.0) rectangle (1.0,0.8);
+    \node[font=\footnotesize] at (0.5,0.4) {$\bar n_1$};
+    \draw[thick,fill=red!40] (1.0,0.0) rectangle (3.0,0.8);
+    \node[font=\footnotesize] at (2.0,0.4) {$n_3,\; n_4$};
+    \draw[thick,fill=blue!30] (3.0,0.0) rectangle (4.0,0.8);
+    \node[font=\footnotesize] at (3.5,0.4) {$\bar n_3$};
+    \draw[thick,fill=blue!30] (4.0,0.0) rectangle (5.0,0.8);
+    \node[font=\footnotesize] at (4.5,0.4) {$\bar n_4$};
+    \node[left,font=\footnotesize] at (0,0.4){mixed $K_\mathrm{M}{=}5$:};
+
+    % arrows
+    \draw[->,thick,gray!70] (1.0,2.2) -- (0.5,0.8)
+      node[midway,left,font=\tiny]{$\calR$};
+    \draw[->,thick,slowred] (3.0,2.2) -- (2.0,0.8)
+      node[midway,right,font=\tiny]{keep fine};
+    \draw[->,thick,gray!70] (5.0,2.2) -- (3.5,0.8);
+    \draw[->,thick,gray!70] (7.0,2.2) -- (4.5,0.8);
+
+    % labels
+    \node[coarsecolor,font=\footnotesize] at (0.5,1.2){C};
+    \node[slowred,font=\footnotesize] at (2.0,1.2){F};
+    \node[coarsecolor,font=\footnotesize] at (3.5,1.2){C};
+    \node[coarsecolor,font=\footnotesize] at (4.5,1.2){C};
+  \end{tikzpicture}
+  \end{center}
+
+  \smallskip
+  Pair 2 (front pair) is kept \textcolor{slowred}{\textbf{F}}ine.
+  Bulk pairs 1, 3, 4 are \textcolor{coarsecolor}{\textbf{C}}oarsened.
+  Mixed dimension $K_\mathrm{M} = 8 - 3 = 5$.
+
+\end{frame}
+
+% ----------------------------------------------------------------
+\begin{frame}[shrink=3]{Detecting Which Pairs Need Refinement}
+
+  Two admissibility diagnostics, computed from voxel means $\mu_k = \E[n_k]$:
+
+  \smallskip
+  \begin{description}\setlength\itemsep{0.6em}
+    \item[\textbf{Within-pair asymmetry} $\alpha_j$:]
+      \[
+        \alpha_j = \frac{|\mu_{2j-1} - \mu_{2j}|}{\mu_{2j-1}+\mu_{2j}}
+      \]
+      Large when \emph{the front lies inside pair $j$}
+      (one voxel high, other low).
+
+    \item[\textbf{Inter-pair boundary gradient} $\beta_j$:]
+      \[
+        \beta_j = \frac{|\mu_{2j} - \mu_{2j+1}|}{\mu_{2j}+\mu_{2j+1}}
+        \qquad (j < K/2)
+      \]
+      Large when \emph{the front lies on the boundary between pairs $j$ and $j+1$}.
+      Forces both pairs $j$ and $j+1$ fine.
+  \end{description}
+
+  \smallskip
+  \begin{block}{Refinement rule (with hysteresis)}
+    Define $\alpha^\mathrm{eff}_j = \max(\alpha_j,\;\beta_{j-1},\;\beta_j)$
+    \;{\footnotesize(boundary terms $\beta_0 = \beta_{K/2} = 0$)}.
+    \[
+      \alpha^\mathrm{eff}_j > \alpha_{\mathrm{hi}} \;\Rightarrow\; \text{force fine};
+      \qquad
+      \alpha^\mathrm{eff}_j < \alpha_{\mathrm{lo}} \;\Rightarrow\; \text{coarsen}.
+    \]
+    Between the bands: keep previous mask (prevents chatter at moving fronts).
+  \end{block}
+
+\end{frame}
+
+% ----------------------------------------------------------------
+\begin{frame}[shrink=2]{Three Scenarios, One Criterion}
+
+  \begin{center}
+    \includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{fig_adaptive_criterion}
+  \end{center}
+  {\footnotesize
+  \textbf{A:} front inside pair 2 ($\alpha$ fires).\;
+  \textbf{B:} front on pair 2$|$3 boundary ($\beta$ fires on both).\;
+  \textbf{C:} homogeneous — all coarsened.}
+
+\end{frame}
+
+% ----------------------------------------------------------------
+\begin{frame}{The Mixed-Grid CME}
+
+  Once the mask is chosen, we need a generator for the mixed-dimension
+  state space $\mathcal{S}^M \subset \Znn^{K_M}$.
+
+  \medskip
+  \textbf{Mixed-grid rates:}
+  \begin{itemize}\setlength\itemsep{0.5em}
+    \item \textbf{Fine pair} (mask$_j=0$): standard per-voxel Schlögl rates;
+      intra-pair diffusion included.
+    \item \textbf{Coarse pair} (mask$_j=1$): reaction rates with Binomial
+      first-moment closure (e.g.\ autocatalysis $\propto \bar n(\bar n-1)/4$
+      for a merged pair of equal sub-voxels).
+    \item \textbf{Cross-pair diffusion:}
+      fine side $\to$ coarse side at rate $d\,n_{2j}$;\;
+      coarse side $\to$ fine side at $d\,\bar n_j/2$
+      (first-moment: $\E[n_{2j+1}\mid\bar n_j] = \bar n_j/2$).
+  \end{itemize}
+
+  \medskip
+  \begin{block}{Why no multiplicative correction is needed}
+    Front pairs are kept fine: their within-pair distribution is never
+    approximated by Binomial. The coarse pairs are bulk pairs where
+    the Binomial assumption holds by symmetry.
+    \textbf{Binomial prolongation is then accurate where applied.}
+  \end{block}
 
 \end{frame}
 
@@ -356,351 +431,117 @@
 \section{Results}
 % ================================================================
 
-\begin{frame}{Benchmark 1: Birth-Death-Diffusion (V-Cycle, $K=4$)}
+\begin{frame}{$K=8$ Selector Recovery at Representative States}
 
-  \textbf{Model:} $\emptyset \xrightarrow{k_b} A \xrightarrow{k_d} \emptyset$,
-  $k_b=2$, $k_d=1$, $D=1$.
-  \textbf{Smooth IC:} product-Poisson with $\mu=[4,2,1,1]$ per voxel.
+  \textbf{Claim:} the criterion fires correctly regardless of where the front
+  falls relative to the coarsening partition.
 
   \medskip
-  $K=4$ fine, $K=2$ coarse. Full V-cycle with Binomial-$\pi$ prolongation.
-  Ground truth: $\pi^*$ (product-Poisson stationary distribution).
-
-  \bigskip
   \begin{center}
-  \renewcommand{\arraystretch}{1.4}
-  \begin{tabular}{l|c|c}
+  \small
+  \begin{tabular}{lcccc}
     \toprule
-    Metric & Fine FSP & MG V-cycle \\
+    Scenario & $\alpha_\mathrm{intra}[2]$ & $\beta_\mathrm{right}[2]$ & Fine pairs & OK?\\
     \midrule
-    $\TV(p,\,\pi^*)$ at $t=0.5,1,2,\ldots$ &
-      $\searrow 0$ & $\mathbf{0.000}$ at all $t$ \\
-    State space $|\mathcal{S}|$ & ${\sim}10{,}400$ & ${\sim}190$ \\
-    Wall time & $5.3\,\text{s}$ & $\mathbf{0.22\,\text{s}}$ \\
+    A: front inside pair 2       & 0.68 & 0.00 & \{2\}   & \textcolor{coarsegreen}{\checkmark}\\
+    B: front on pair 2$|$3 bdry  & 0.00 & 0.68 & \{2,3\} & \textcolor{coarsegreen}{\checkmark}\\
+    C: homogeneous (all low)     & 0.00 & 0.00 & (none)  & \textcolor{coarsegreen}{\checkmark}\\
     \bottomrule
   \end{tabular}
   \end{center}
 
-  \bigskip
-  \begin{block}{Exact coarse generator for linear networks}
-    For birth-death-diffusion the Petrov--Galerkin term
-    $\calR A_{\mathrm{rxn}} \calP$ is \emph{exact}.
-    The V-cycle therefore matches $\pi^*$ \textbf{perfectly} at every time step.\\[0.35em]
-    \textbf{54$\times$ fewer states.  \quad  24$\times$ faster.}
+  \medskip
+  $K=8$ Schlögl ($n_\mathrm{low}=31$, $n_\mathrm{high}=162$).
+  Mask computed from actual depth-1 FSP expansions around each IC.
+  Thresholds $\alpha_\mathrm{lo}=0.10$, $\alpha_\mathrm{hi}=0.25$ throughout.
+
+  \medskip
+  \begin{block}{}
+    We validate on representative expanded states rather than full trajectories:
+    time-resolved $K=8$ FSP is itself intractable — that is the problem being solved.
+    The $\beta$ criterion is what handles case B; without it, pair 3 would be
+    coarsened while straddling the front.
   \end{block}
 
 \end{frame}
 
 % ----------------------------------------------------------------
-\begin{frame}{Benchmark 2: Spatial Schl\"ogl Model}
+\begin{frame}{Adaptive V-Cycle: Accuracy on $K=4$ Schlögl Front}
 
-  \textbf{Model:} $2A+B \rightleftharpoons 3A$, $\;\emptyset\rightleftharpoons A$
-  (species $B$ held fixed).\\[0.3em]
-  \textbf{Bistable:} the rate equation $f(n)$ has three fixed points;
-  the two stable ones sit at $n_{\mathrm{low}}=31$ and $n_{\mathrm{high}}=162$.
-
-  \bigskip
   \begin{center}
-    \includegraphics[height=5.0cm]{fig1_schlogl_bistability}
+    \includegraphics[width=\textwidth,height=0.72\textheight,keepaspectratio]{fig_adaptive_accuracy}
   \end{center}
 
-  \footnotesize
-  \textbf{Left:} rate equation $f(n)$; zeros are fixed points.
-  \textbf{Right:} potential $U(n)=-\int_0^n f\,dm$;
-  wells at $n=31$, $162$; barrier at $n=72$.
+  {\footnotesize
+  IC: $(n_\mathrm{low}, n_\mathrm{high}, n_\mathrm{high}, n_\mathrm{high})$, front inside pair 1.\quad
+  \textbf{(a)} Voxel means: direct FSP (solid), non-adaptive (dashed), adaptive (dotted).\quad
+  \textbf{(b)} TV distance to direct FSP.}
 
 \end{frame}
 
 % ----------------------------------------------------------------
-\begin{frame}{Three Prolongation Approaches}
-
-  Coarse variable $n_c = n_1+n_2$ loses directionality.
-  Three ways to reconstruct $p(n_1\mid n_c)$:
-
-  \medskip
-  \begin{description}
-    \setlength\itemsep{0.75em}
-    \item[\textbf{Binomial-$\pi$}:]
-      $\pi(n_1\mid n_c) = \Bin(n_c,\tfrac12)$.
-      Free to compute; ignores all reaction structure.
-      \textcolor{slowred}{Symmetric — peaks at $n_1=n_c/2$.}
-
-    \item[\textbf{Dynamic-$\pi$}:]
-      True stationary conditional of the $K=2$ RDME,
-      $\pi^*(n_1\mid n_c)$, precomputed once.
-      Bistable: \emph{bimodal} at $(n_{\mathrm{low}},n_{\mathrm{high}})$
-      and $(n_{\mathrm{high}},n_{\mathrm{low}})$ --- still 50/50 weight.
-      \textcolor{slowred}{Symmetric — can't distinguish which voxel holds which state.}
-
-    \item[\textbf{Fix-3 (fine-conditional injection):}]
-      For states already represented in the fine distribution,
-      rescale multiplicatively (inject, don't split).
-      For newly created coarse states, fall back to $\pi^*(\cdot\mid n_c)$.
-      \textcolor{coarsegreen}{Preserves the directionality of the front.}
-  \end{description}
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Prolongation Failure: The Symmetry Trap}
-
-  \textbf{Setup:} $K=2$, IC $(n_1,n_2)=(31,162)$.
-  Coarse variable $n_c = 193$.
-
-  \bigskip
-  \begin{center}
-    \includegraphics[height=4.6cm]{fig2_prolongation_failure}
-  \end{center}
-
-  \smallskip
-  \begin{itemize}\setlength\itemsep{0.2em}
-    \item \textbf{Binomial-$\pi$:}
-      $\Bin(193,\tfrac12)$ peaks at $n_1=96$ (midpoint). TV$=1.000$.
-    \item \textbf{Dynamic-$\pi$:}
-      Stationary conditional $\pi^*(n_1\mid 193)$ bimodal at 31 and 162,
-      but 50/50 weight (stationary is symmetric under $n_1\leftrightarrow n_2$).
-      TV$=0.798$.
-  \end{itemize}
-  \textbf{Symmetry trap:} $n_c=193$ is consistent with both $(31,162)$ and $(162,31)$;
-  the coarse variable loses the directionality of the front.
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{2D Joint Distribution at $t=0.5$}
+\begin{frame}{$K=4$ Time-Resolved Mask Evolution}
 
   \begin{center}
-    \includegraphics[width=\textwidth]{fig3_heatmap_comparison}
-  \end{center}
-
-  \smallskip
-  \footnotesize
-  \textbf{(a)} Direct FSP (ground truth): mass at $(n_1,n_2)=(31,162)$.\\
-  \textbf{(b)} Binomial-$\pi$: mass at $(96,97)$ on the anti-diagonal. TV$=1$.\\
-  \textbf{(c)} Dynamic-$\pi$: bimodal at $(31,162)$ and $(162,31)$.
-  TV$=0.798$ (symmetry trap).
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Fix-3: Fine-Conditional Prolongation}
-
-  \textbf{Key insight:} the fine distribution before the coarse step
-  already encodes which voxel is in which state.
-  Use it directly instead of re-splitting via Binomial.
-
-  \begin{center}
-  \begin{tikzpicture}[scale=0.88, every node/.style={font=\small}]
-    % Fine level (top)
-    \foreach \k/\val/\col in {0/31/blue!30, 1/162/red!30, 2/162/red!30, 3/162/red!30} {
-      \draw[thick,fill=\col] (\k*1.55,2.6) rectangle (\k*1.55+1.35,3.3);
-      \node at (\k*1.55+0.675,2.95) {$n_{\k+1}{=}\val$};
-    }
-    \node[left,font=\footnotesize] at (0,2.95) {fine IC:};
-
-    % Restrict arrow
-    \draw[->,thick,gray] (2.35,2.6) -- (1.55,1.8)
-      node[midway,left,font=\footnotesize]{$\calR$};
-
-    % Coarse level (middle)
-    \foreach \j/\nc/\col in {0/193/blue!55, 1/324/red!55} {
-      \draw[thick,fill=\col] (\j*3.1,0.9) rectangle (\j*3.1+2.9,1.65);
-      \node at (\j*3.1+1.45,1.275) {$n_c{=}\nc$};
-    }
-    \node[left,font=\footnotesize] at (0,1.275) {coarse:};
-
-    % Two prolong paths
-    % Binom path (left)
-    \draw[->,thick,slowred] (0.7,0.9) -- (0.35,-0.1)
-      node[midway,left,font=\footnotesize]{$\calP_{\mathrm{Bin}}$};
-
-    % Fix-3 path (right)
-    \draw[->,thick,coarsegreen!80!black] (2.1,0.9) -- (3.7,-0.1)
-      node[midway,right,font=\footnotesize]{$\calP_{\mathrm{Fix3}}$};
-
-    % Binom result
-    \foreach \k/\val in {0/96, 1/97, 2/162, 3/162} {
-      \draw[thick,fill=slowred!20] (\k*1.0-1.5,-1.05) rectangle (\k*1.0-0.62,-0.35);
-      \node[font=\tiny] at (\k*1.0-1.06,-0.7) {\val};
-    }
-    \node[slowred,font=\footnotesize] at (-1.06,-1.3){Binom: $\langle n_1\rangle\to96$};
-
-    % Fix-3 result
-    \foreach \k/\val/\col in {0/31/blue!30, 1/162/red!20, 2/162/red!20, 3/162/red!20} {
-      \draw[thick,fill=\col] (\k*1.0+2.6,-1.05) rectangle (\k*1.0+3.38,-0.35);
-      \node[font=\tiny] at (\k*1.0+2.99,-0.7) {\val};
-    }
-    \node[coarsegreen!70!black,font=\footnotesize] at (4.19,-1.3){Fix-3: $\langle n_1\rangle=31$ \checkmark};
-  \end{tikzpicture}
-  \end{center}
-
-  \smallskip
-  \textbf{Implementation:} for each fine state $(n_1,n_2)$ already in $\mathcal{S}$,
-  multiply its probability by the coarse correction ratio $\bar{p}^c(n_c)/p^c(n_c)$.
-  No Binomial enumeration --- state space stays \emph{bounded}.
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Asymmetric Front: $K=2$ (Step 1)}
-
-  IC: $(n_1,n_2)=(31,162)$.  Ground truth: direct $K=2$ FSP ($\sim40{,}000$ states).
-
-  \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.35}
-  \begin{tabular}{l|cc|cc|r}
-    \toprule
-    Method & $\langle n_1\rangle$ & $\langle n_2\rangle$ & TV $t{=}0.5$ & TV $t{=}2$ & Time \\
-    \midrule
-    Direct FSP & 31.0 & 162.0 & — & — & ref \\
-    V-cyc Binom-$\pi$ & $\approx95$ & $\approx98$ & 0.999 & 0.999 & $1\times$ \\
-    V-cyc Fix-3       & \textbf{31.0} & \textbf{162.0} & 0.98 & 0.98 & \textbf{5$\times$ faster} \\
-    \bottomrule
-  \end{tabular}
+    \includegraphics[width=\textwidth,height=0.55\textheight,keepaspectratio]{fig_adaptive_mask}
   \end{center}
 
   \medskip
-  \begin{itemize}
-    \setlength\itemsep{0.4em}
-    \item \textbf{Binom-$\pi$:} immediately loses the front ($n_c=193\to$ midpoint 96).
-    \item \textbf{Fix-3:} correctly tracks $\langle n_1\rangle=31$ at all times;
-      5 to 51 fine states (vs 40k for FSP).
-    \item Residual TV reflects the coarse-level approximation,
-      not directionality loss.
-  \end{itemize}
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Asymmetric Front: $K=4$ — Results}
-
-  \begin{center}
-    \includegraphics[width=\textwidth]{fig7_schlogl_front}
-  \end{center}
-
-  \footnotesize
-  IC: $(31,162,162,162)$.
-  \textbf{Left:} $\langle n_1\rangle$ (front voxel mean) vs time.
-  Fix-3 tracks the front exactly; Binom-$\pi$ immediately loses directionality.
-  \textbf{Right:} fine state space size on log scale.
-  Fix-3: $|\mathcal{S}|\lesssim221$; Binom-$\pi$: $|\mathcal{S}|\to2\times10^6$.
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Asymmetric Front: $K=4$ (Step 2)}
-
-  IC: $(31,162,162,162)$. Front in coarse pair $\{1,2\}$: $n_c^{(1)}=193$.\\
-  Ground truth: $K=4$ adaptive FSP (evolving state space).
+  Pair 1 (orange circles) is \textcolor{finecolor}{\textbf{forced fine}} throughout: the front stays inside it.\\
+  Pair 2 (blue squares) is \textcolor{coarsecolor}{\textbf{coarsened}} immediately: the bulk is symmetric.
 
   \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.38}
-  \begin{tabular}{l|cccc|r|r}
-    \toprule
-    Method & $\langle n_1\rangle$ & $\langle n_2\rangle$
-           & $\langle n_3\rangle$ & $\langle n_4\rangle$ & Time & $|\mathcal{S}|$ \\
-    \midrule
-    GT ($K=4$ FSP)  & 31.0 & 162.0 & 162.0 & 162.0 & 1.2\,s & 22{,}551 \\
-    V-cyc Binom-$\pi$ & $\approx$90 & $\approx$103 & 162 & 162
-                       & 65.2\,s & 2{,}000{,}000+ \\
-    V-cyc Fix-3       & \textbf{31.0} & \textbf{162.0} & \textbf{162.0} & \textbf{162.0}
-                       & \textbf{0.18\,s} & \textbf{221} \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \medskip
-  \begin{block}{Fix-3 dominates on all axes}
-    \textbf{360$\times$ faster} than Binom-$\pi$.\quad
-    \textbf{6$\times$ faster} than ground truth.\quad
-    \textbf{100$\times$ smaller} state space than GT.\\[0.2em]
-    Binom-$\pi$: state space explodes exponentially (recursive Binomial splits);
-    $K=4\to2$ requires enumerating all pairwise combinations.
+  \begin{block}{}
+    The mask is set automatically at each step from the current distribution.
+    No look-ahead, no hand-tuning of IC or grid alignment.
   \end{block}
 
 \end{frame}
 
-% ----------------------------------------------------------------
-\begin{frame}{Asymmetric Front: $K=8$ (Step 3)}
+% ================================================================
+\section{Summary}
+% ================================================================
 
-  IC: $(31,\underbrace{162,\ldots,162}_{7})$.
-  Front in coarse pair $\{1,2\}$ after $K=8\to K=4$ restriction.
-
-  \medskip
-  \begin{center}
-  \renewcommand{\arraystretch}{1.38}
-  \begin{tabular}{l|cccc|r|r}
-    \toprule
-    Method & $\langle n_1\rangle$ & $\langle n_2\rangle$
-           & $\langle n_3\rangle$ & $\langle\cdots\rangle$ & Time & $|\mathcal{S}|$ \\
-    \midrule
-    $K=8$ direct FSP & — & — & — & — &
-      \multicolumn{2}{c}{\textcolor{slowred}{intractable ($>$75k states at $t{=}0.5$)}} \\
-    V-cyc Binom-$\pi$ & — & — & — & — &
-      \multicolumn{2}{c}{\textcolor{slowred}{state space explodes in prolong}} \\
-    V-cyc Fix-3 & \textbf{31.0} & \textbf{162.0} & 162.0 & 162.0 &
-      \textbf{1.7\,s} & \textbf{8{,}361} \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-
-  \medskip
-  \textbf{Scalability:} Fix-3 fine state count grows modestly ($K=2$: 51,
-  $K=4$: 221, $K=8$: 8361) while Binom-$\pi$ explodes factorially.
-
-  \medskip
-  \begin{alertblock}{Why Binom-$\pi$ explodes at $K=8$}
-    Each coarse voxel $n_c$ spawns $n_c+1$ fine splits;
-    with $K/2=4$ coarse voxels, the recursion generates
-    $O(n_c^4)$ fine states per coarse state.
-    Fix-3 never enumerates Binomial combinations at all.
-  \end{alertblock}
-
-\end{frame}
-
-% ----------------------------------------------------------------
-\begin{frame}{Summary}
+\begin{frame}[shrink=3]{Summary}
 
   \begin{columns}[T]
     \begin{column}{0.5\textwidth}
-      \textbf{Method}
-      \begin{itemize}
-        \setlength\itemsep{0.45em}
-        \item Spatial coarsening via lumpability
-          \citeref{[Kemeny \& Snell 1960]};
-          $\epsilon = d_{\mathrm{inter}}/d_{\mathrm{intra}} = 1/4$ per level
-        \item V-cycle \citeref{[Briggs et al.\ 2000]}:
-          smooth $\to$ restrict $\to$ coarse FSP $\to$ prolong $\to$ smooth
-        \item Three prolongation operators:
-          Binom-$\pi$, Dyn-$\pi$, Fix-3
-        \item \textbf{Fix-3}: multiplicative injection preserves
-          directionality of spatial fronts
-        \item Two-criterion adaptive refinement:
-          lumpability + per-molecule bottleneck
+      \textbf{What we built}
+      \begin{itemize}\setlength\itemsep{0.45em}
+        \item \textbf{Probabilistic two-level multigrid} for the CME.
+          Restriction = exact marginalisation.
+          Prolongation = Binomial conditional.
+          Coarse operator = Galerkin-projected RDME.
+
+        \item \textbf{Adaptive pair selection.}
+          Two diagnostics: within-pair $\alpha_j$ and
+          inter-pair $\beta_j$. Hysteresis prevents chatter.
+
+        \item \textbf{Mixed-grid CME.}
+          Fine and coarse pairs in a single generator;
+          first-moment closure at cross-pair boundaries.
       \end{itemize}
     \end{column}
     \begin{column}{0.47\textwidth}
-      \textbf{Results}
-      \begin{itemize}
-        \setlength\itemsep{0.4em}
-        \item Birth-death: TV$(p_{\mathrm{MG}},\pi^*)=0$ at all times
-          (exact coarse generator); \textbf{24$\times$ faster}, 54$\times$ fewer states
-        \item Schl\"ogl $K=4$: Fix-3 \textbf{360$\times$ faster} than Binom-$\pi$,
-          \textbf{6$\times$ faster} than direct FSP; 221 vs 2M states
-        \item Schl\"ogl $K=8$: Fix-3 solves in \textbf{1.7\,s},
-          8361 states; direct FSP and Binom-$\pi$ both intractable
-        \item Binom-$\pi$ / Dyn-$\pi$: symmetry trap, TV$\approx1$
-          for asymmetric fronts
+      \textbf{Key results}
+      \begin{itemize}\setlength\itemsep{0.45em}
+        \item Adaptive mask is \textbf{partition-independent}:
+          detects fronts inside a pair ($\alpha$) \emph{and}
+          on pair boundaries ($\beta$).
+
+        \item Front pairs kept fine $\Rightarrow$
+          \textbf{no symmetry trap}, no special correction needed.
+
+        \item $K=8$ Schlögl: direct FSP intractable;
+          adaptive V-cycle solves with modest state growth.
       \end{itemize}
 
       \medskip
-      \textbf{Open}
-      \begin{itemize}
-        \setlength\itemsep{0.35em}
-        \item Multi-level Fix-3 ($K\to K/2\to K/4\to\cdots$)
-        \item Adaptive spatial refinement driven by per-molecule flux
+      \textbf{Open directions}
+      \begin{itemize}\setlength\itemsep{0.3em}
+        \item Multi-level hierarchy ($K\to K/2\to\cdots$)
+        \item Multi-species / 2D spatial domains
+        \item Error-driven automatic threshold selection
       \end{itemize}
     \end{column}
   \end{columns}
@@ -722,16 +563,12 @@
     \item Kemeny \& Snell (1960).
       \textit{Finite Markov Chains}. Van Nostrand.
 
-    \item Simon \& Ando (1961).
-      Aggregation of variables in dynamic systems.
-      \textit{Econometrica}, 29:111--138.
-
     \item Briggs, Henson, McCormick (2000).
       \textit{A Multigrid Tutorial}, 2nd ed.\ SIAM.
 
     \item Dendukuri, Chandrasekaran, Petzold (2025).
-      Flux-preserving adaptive FSP for multiscale stochastic reaction networks.
-      \textit{SIAM Multiscale Model.\ Simul.} (under review).
+      Adaptive multigrid FSP for the RDME.
+      \textit{In preparation}.
   \end{itemize}
 \end{frame}
 
