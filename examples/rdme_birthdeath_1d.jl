@@ -103,14 +103,16 @@ println("  μ* = ", round.(μ_star, digits=3))
 
 # ─── Run: Multigrid FSP ───────────────────────────────────────────────────────
 
-println("\n── Multigrid FSP (2-level) ──────────────────────────────")
+println("\n── Multigrid FSP (coarse-only K=8→K=4) ─────────────────")
 alg_mg = RDMEMultigridFSP(
-    dt         = 0.05,
-    τ_pre      = 0.01,   # small pre-smoothing: ≈ 1 intra-pair diffusion event
-    τ_post     = 0.01,
-    n_max      = N_MAX,
-    krylov_m   = 20,
-    save_every = 10,
+    dt          = 0.1,
+    n_max       = N_MAX,
+    krylov_m    = 20,
+    save_every  = 5,
+    coarse_only = true,    # solve at K=4; prolong to K=8 only at snapshots
+    n_levels    = 1,       # one coarsening level: K=8 → K=4
+    prune_tol   = 1e-10,
+    binom_tol   = 1e-4,
 )
 
 t_mg = @elapsed sol_mg = solve_rdme_multigrid(model, fine_grid, u0,

@@ -137,14 +137,18 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         A_old = A
         gids_old = get_global_ids(sp)
 
-        # 3) Adaptive time step: dt = min(ε_dt/Φ, d·dt_max, tf-t)
-        # Φ = Σᵢ p[i]·(internal exit rate at xᵢ) = -dot(diag(A), p).
-        # For stoichiometric expansion Φ ≈ Φ_total (all neighbors in J, Φ_out≈0),
-        # so ‖ε‖₁ ≲ Φ_total·dt ≈ Φ·dt = ε_dt (Corollary 4.7).
-        # For SSA expansion Φ < Φ_total (only 1 neighbor per state in J), but Φ
-        # still tracks system activity and gives empirically good step control.
-        Φ = dot(-LinearAlgebra.diag(A), sp.probs)
-        dt_flux = Φ > 0 ? alg.ε_dt / Φ : (tf - t)
+        # 3) Adaptive time step: dt = min(ε_dt/Φ_total, d·dt_max, tf-t)
+        # Compute Φ_total = Σᵢ p[i]·w(xᵢ) directly from the full exit rate w(xᵢ),
+        # not from the compressed generator diagonal.
+        Φ_total = zero(Float64)
+        @inbounds for i in eachindex(sp.probs)
+            w = zero(Float64)
+            for prop in model.propensities
+                w += prop(sp.states[i], rates, t)
+            end
+            Φ_total += sp.probs[i] * w
+        end
+        dt_flux = Φ_total > 0 ? alg.ε_dt / Φ_total : (tf - t)
         dt = min(dt_flux, alg.expansion_depth * alg.dt_max, tf - t)
 
         # 4) Propagate probability (subcycle if dt*||A||_1 is too large)
@@ -162,7 +166,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         push!(dt_log, dt)
         push!(t_log, t)
         push!(size_log_diag, length(sp))
-        push!(flux_log, Φ)
+        push!(flux_log, Φ_total)
 
         # 8) Save snapshot
         if iter % alg.save_interval == 0 || t >= tf

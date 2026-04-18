@@ -11,14 +11,14 @@
 \contentsline {proposition}{{Proposition}{3.5}{Adaptive time step rule}}{10}{theorem.71}%
 \contentsline {proof}{{Proof}{2}{}}{10}{proof.73}%
 \contentsline {proposition}{{Proposition}{4.1}{Compressed generator properties}}{13}{theorem.117}%
-\contentsline {proof}{{Proof}{3}{}}{13}{proof.122}%
+\contentsline {proof}{{Proof}{3}{}}{14}{proof.122}%
 \contentsline {corollary}{{Corollary}{4.2}{Truncated generator contraction}}{14}{theorem.124}%
 \contentsline {proof}{{Proof}{4}{}}{14}{proof.125}%
 \contentsline {remark}{{Remark}{4.3}{Infinite-dimensional extension}}{14}{theorem.127}%
 \contentsline {theorem}{{Theorem}{4.4}{Local model error bound}}{15}{theorem.132}%
 \contentsline {proof}{{Proof}{5}{}}{15}{proof.134}%
-\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{15}{theorem.142}%
+\contentsline {proposition}{{Proposition}{4.5}{Local time-stepping error}}{16}{theorem.142}%
 \contentsline {corollary}{{Corollary}{4.6}{Local step error}}{16}{theorem.144}%
 \contentsline {proof}{{Proof}{6}{}}{16}{proof.146}%
-\contentsline {corollary}{{Corollary}{4.7}{Global error bound}}{16}{theorem.148}%
+\contentsline {corollary}{{Corollary}{4.7}{Global error bound}}{17}{theorem.148}%
 \contentsline {proof}{{Proof}{7}{}}{17}{proof.150}%

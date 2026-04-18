@@ -46,8 +46,8 @@ export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system
 export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
-export restrict, prolong, lumpability_ratio, per_molecule_flux
-export two_level_vcycle, two_level_vcycle_schlogl
+export restrict, prolong, prolong_injection, prolong_fine_conditional, lumpability_ratio, per_molecule_flux
+export two_level_vcycle, two_level_vcycle_schlogl, two_level_vcycle_schlogl_injection
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
 

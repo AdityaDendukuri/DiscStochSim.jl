@@ -13,10 +13,11 @@ Methods compared:
   2. Coarse-only Dynamic-π    (K=2, no V-cycle)
   3. V-cycle Binomial-π       (K=4→K=2, τ_pre=τ_post=0)
   4. V-cycle Dynamic-π        (K=4→K=2, dynamic-π correction)
+  5. V-cycle Fix-3            (K=4→K=2, fine-conditional prolongation)
 
 Since K=4 direct FSP (n_max=200: 201^4 ~ 1.6B states) is intractable, we
-use two independent K=2 FSPs (one per pair) as the pair-level ground truth.
-These are exact for each isolated pair and approximate the coupled K=4 system.
+use the true K=4 sparse adaptive FSP as ground truth (builds state space
+adaptively from IC, reaching ~22K states at t=2).
 
 Run: julia --project examples/schlogl_vcycle.jl
 """
@@ -159,13 +160,66 @@ function tv_vs_pairs(fine_states, fine_probs, sp_p1, pp1, sp_p2, pp2, n_max)
     tv / 2
 end
 
-# ─── run all four methods ─────────────────────────────────────────────────────
+# ─── true K=4 sparse adaptive FSP (ground truth) ─────────────────────────────
 
-println("\n── Method comparison: voxel means at each time ──")
-println("  (GT = pair-level ground truth; +/- shows error in means)")
-println()
-println("  t     GT(n1,n2|n3,n4)         Coarse Binom    Coarse Dyn-π    V-cyc Binom     V-cyc Dyn-π")
-println("  ──────────────────────────────────────────────────────────────────────────────────────────")
+println("\n── True K=4 sparse adaptive FSP (ground truth) ──")
+println("  Adaptive: expand from IC, prune small states each step.")
+
+fine_sys_k4 = build_schlogl_rdme_system(model, fine_grid)
+fine_bc_k4  = state -> rdme_bc(state, n_max)
+
+sp_gt = StateSpace{CartesianIndex{4}, Float64}()
+add_state!(sp_gt, u0, 1.0)
+
+probs_gt_k4 = Dict{Float64, Tuple{Vector{CartesianIndex{4}}, Vector{Float64}}}()
+t0_gt = time()
+let sp = sp_gt, t_cur = 0.0
+    for step in 1:n_steps
+        dt_step = min(dt_c, t_max - t_cur)
+        expand!(sp, fine_sys_k4, fine_bc_k4; depth=1)
+        A_gt, = build_generator(sp, fine_sys_k4, rates, t_cur)
+        sp.probs .= expv(dt_step, A_gt, sp.probs; m=50)
+        sp.probs  = max.(sp.probs, 0.0)
+        t_cur += dt_step
+        renormalize!(sp)
+        prune_threshold!(sp, 1e-14)
+
+        if step % 2 == 0
+            @printf("  step %2d/%d  |S|=%d\r", step, n_steps, length(sp))
+            flush(stdout)
+        end
+
+        t_snap = t_solve[argmin(abs.(t_solve .- t_cur))]
+        if abs(t_cur - t_snap) < dt_c/2 && !haskey(probs_gt_k4, t_snap)
+            probs_gt_k4[t_snap] = (copy(sp.states), copy(sp.probs))
+        end
+    end
+    global sp_gt = sp
+end
+t_gt_k4 = time() - t0_gt
+@printf("\n  Done in %.1fs  final |S|=%d\n", t_gt_k4, length(sp_gt))
+
+# Voxel means from true K=4 FSP
+function voxel_means_from_snap(states, probs)
+    mu = zeros(4)
+    for (i, s) in enumerate(states)
+        t = Tuple(s)
+        for k in 1:4; mu[k] += probs[i] * t[k]; end
+    end
+    mu
+end
+
+println("  t     ⟨n1⟩  ⟨n2⟩  ⟨n3⟩  ⟨n4⟩")
+println("  ────────────────────────────────")
+for t in t_solve
+    if haskey(probs_gt_k4, t)
+        st, pr = probs_gt_k4[t]
+        mu = voxel_means_from_snap(st, pr)
+        @printf("  %4.1f  %5.1f %5.1f %5.1f %5.1f\n", t, mu[1], mu[2], mu[3], mu[4])
+    end
+end
+
+# ─── run all five methods ─────────────────────────────────────────────────────
 
 # Common setup: coarse initial condition
 function init_coarse()
@@ -323,91 +377,122 @@ end
 t_vc_dyn = time() - t0_vd
 @printf("  V-cycle Dyn-π: %.1fs  final fine states: %d\n", t_vc_dyn, length(sp_vc_dyn.states))
 
+# ── Method 5: V-cycle Fix-3 (fine-conditional prolongation) ──────────────────
+sp_vc_fix3 = StateSpace{CartesianIndex{4}, Float64}()
+add_state!(sp_vc_fix3, u0, 1.0)
+result_vc_fix3 = Dict{Float64, Vector{Float64}}()
+
+t0_vf = time()
+let sp = sp_vc_fix3, t_cur = 0.0
+    for step in 1:n_steps
+        dt_step = min(dt_c, t_max - t_cur)
+        sp = two_level_vcycle_schlogl_injection(sp, model,
+                                                fine_grid, coarse_grid, pi_table,
+                                                rates, t_cur, dt_step;
+                                                τ_pre=τ_pre_vc, krylov_m=30,
+                                                use_dynamic_pi=true, weight_tol=1e-8,
+                                                coarse_n_max=2*n_max,
+                                                expand_coarse=true, coarse_expand_depth=1)
+        t_cur += dt_step
+        renormalize!(sp)
+        prune_threshold!(sp, 1e-12)
+
+        if step % 10 == 0
+            @printf("  [V-cyc Fix-3] step %d/%d  fine states: %d\n",
+                    step, n_steps, length(sp.states))
+            flush(stdout)
+        end
+
+        if any(abs(t_cur - t) < dt_c/2 for t in t_solve)
+            t_snap = t_solve[argmin(abs.(t_solve .- t_cur))]
+            !haskey(result_vc_fix3, t_snap) &&
+                (result_vc_fix3[t_snap] = voxel_means_k4(sp.states, sp.probs))
+        end
+    end
+    global sp_vc_fix3 = sp
+end
+t_vc_fix3 = time() - t0_vf
+@printf("  V-cycle Fix-3: %.1fs  final fine states: %d\n", t_vc_fix3, length(sp_vc_fix3.states))
+
 # ─── Print comparison table ───────────────────────────────────────────────────
 
-for t in t_solve
-    p1_gt, p2_gt = probs_gt[t]
-    mu1_gt, mu2_gt = pair_means(sp_pair1, p1_gt)
-    mu3_gt, mu4_gt = pair_means(sp_pair2, p2_gt)
-
-    mu_cb = get(result_binom,    t, fill(NaN, 4))
-    mu_cd = get(result_dyn,      t, fill(NaN, 4))
-    mu_vb = get(result_vc_binom, t, fill(NaN, 4))
-    mu_vd = get(result_vc_dyn,   t, fill(NaN, 4))
-
-    @printf("  %4.1f  (%4.1f,%4.1f|%4.1f,%4.1f)  (%4.1f,%4.1f|%4.1f,%4.1f)  (%4.1f,%4.1f|%4.1f,%4.1f)  (%4.1f,%4.1f|%4.1f,%4.1f)  (%4.1f,%4.1f|%4.1f,%4.1f)\n",
-            t,
-            mu1_gt, mu2_gt, mu3_gt, mu4_gt,
-            mu_cb[1], mu_cb[2], mu_cb[3], mu_cb[4],
-            mu_cd[1], mu_cd[2], mu_cd[3], mu_cd[4],
-            mu_vb[1], mu_vb[2], mu_vb[3], mu_vb[4],
-            mu_vd[1], mu_vd[2], mu_vd[3], mu_vd[4])
-end
-
-# ─── TV vs pair-level ground truth ───────────────────────────────────────────
-
-println()
-println("  TV vs pair-level ground truth:")
-println("  t       Coarse Binom   Coarse Dyn-π   V-cyc Binom   V-cyc Dyn-π")
-println("  ──────────────────────────────────────────────────────────────────")
+println("\n── Method comparison: voxel means ──")
+println("  t     Method               ⟨n1⟩  ⟨n2⟩  ⟨n3⟩  ⟨n4⟩    TV vs K4-GT   |S|")
+println("  ─────────────────────────────────────────────────────────────────────────")
 
 for t in t_solve
-    p1_gt, p2_gt = probs_gt[t]
+    !haskey(probs_gt_k4, t) && continue
+    st_gt, pr_gt = probs_gt_k4[t]
+    mu_gt = voxel_means_from_snap(st_gt, pr_gt)
 
-    # TV = 1 - Σ_s min(p_fine(s), p_GT(s))
-    # Equivalently: TV = (1/2)||p_fine - p_GT||_1.
-    # Only iterating over fine states is exact because:
-    #   Σ_s min(p,q) = Σ_{s∈fine} min(p_fine(s), p_GT(s))
-    # since min(0, p_GT(s)) = 0 for s outside fine support.
-    function tv_fine(states, probs)
+    # Build lookup for K=4 GT TV
+    gt_index = Dict{CartesianIndex{4}, Float64}()
+    for (i, s) in enumerate(st_gt); gt_index[s] = pr_gt[i]; end
+
+    function tv_vs_k4gt(states, probs)
         overlap = 0.0
         for (i, s) in enumerate(states)
-            t4 = Tuple(s)
-            i1 = get(sp_pair1.index, CartesianIndex(t4[1], t4[2]), 0)
-            i2 = get(sp_pair2.index, CartesianIndex(t4[3], t4[4]), 0)
-            p_gt = (i1 != 0 ? p1_gt[i1] : 0.0) * (i2 != 0 ? p2_gt[i2] : 0.0)
+            p_gt = get(gt_index, s, 0.0)
             overlap += min(probs[i], p_gt)
         end
         1.0 - overlap
     end
 
-    # Rebuild fine distributions for TV computation
+    @printf("  %4.1f  %-20s %5.1f %5.1f %5.1f %5.1f   —            %d\n",
+            t, "GT (K=4 sparse FSP)", mu_gt[1], mu_gt[2], mu_gt[3], mu_gt[4], length(st_gt))
+
+    # Coarse Binomial
     sp_tmp_b = StateSpace{CartesianIndex{2}, Float64}()
-    for (i, s) in enumerate(sp_c_binom.states)
-        add_state!(sp_tmp_b, s, sp_c_binom.probs[i])
-    end
+    for (i, s) in enumerate(sp_c_binom.states); add_state!(sp_tmp_b, s, sp_c_binom.probs[i]); end
     sp_prol_b = prolong(sp_tmp_b, Val(4); binom_tol=1e-6); renormalize!(sp_prol_b)
+    mu_cb = get(result_binom, t, fill(NaN, 4))
+    tv_cb = tv_vs_k4gt(sp_prol_b.states, sp_prol_b.probs)
+    @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n",
+            "", "Coarse Binom-π", mu_cb[1], mu_cb[2], mu_cb[3], mu_cb[4], tv_cb, length(sp_c_binom))
 
+    # Coarse Dynamic-π
     sp_tmp_d = StateSpace{CartesianIndex{2}, Float64}()
-    for (i, s) in enumerate(sp_c_dyn.states)
-        add_state!(sp_tmp_d, s, sp_c_dyn.probs[i])
-    end
+    for (i, s) in enumerate(sp_c_dyn.states); add_state!(sp_tmp_d, s, sp_c_dyn.probs[i]); end
     sp_prol_d = prolong_dynamic(sp_tmp_d, pi_table, n_max); renormalize!(sp_prol_d)
+    mu_cd = get(result_dyn, t, fill(NaN, 4))
+    tv_cd = tv_vs_k4gt(sp_prol_d.states, sp_prol_d.probs)
+    @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n",
+            "", "Coarse Dyn-π", mu_cd[1], mu_cd[2], mu_cd[3], mu_cd[4], tv_cd, length(sp_c_dyn))
 
-    tv_cb = tv_fine(sp_prol_b.states, sp_prol_b.probs)
-    tv_cd = tv_fine(sp_prol_d.states, sp_prol_d.probs)
-    tv_vb = tv_fine(sp_vc_binom.states, sp_vc_binom.probs)
-    tv_vd = tv_fine(sp_vc_dyn.states,   sp_vc_dyn.probs)
+    # V-cycle Binomial
+    mu_vb = get(result_vc_binom, t, fill(NaN, 4))
+    tv_vb = tv_vs_k4gt(sp_vc_binom.states, sp_vc_binom.probs)
+    @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n",
+            "", "V-cyc Binom-π", mu_vb[1], mu_vb[2], mu_vb[3], mu_vb[4], tv_vb, length(sp_vc_binom))
 
-    @printf("  %4.1f    %.4f         %.4f         %.4f        %.4f\n",
-            t, tv_cb, tv_cd, tv_vb, tv_vd)
+    # V-cycle Dynamic-π
+    mu_vd = get(result_vc_dyn, t, fill(NaN, 4))
+    tv_vd = tv_vs_k4gt(sp_vc_dyn.states, sp_vc_dyn.probs)
+    @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n",
+            "", "V-cyc Dyn-π", mu_vd[1], mu_vd[2], mu_vd[3], mu_vd[4], tv_vd, length(sp_vc_dyn))
+
+    # V-cycle Fix-3
+    mu_vf = get(result_vc_fix3, t, fill(NaN, 4))
+    tv_vf = tv_vs_k4gt(sp_vc_fix3.states, sp_vc_fix3.probs)
+    @printf("  %4s  %-20s %5.1f %5.1f %5.1f %5.1f   %.4f       %d\n\n",
+            "", "V-cyc Fix-3", mu_vf[1], mu_vf[2], mu_vf[3], mu_vf[4], tv_vf, length(sp_vc_fix3))
 end
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 println()
 println("── Summary ──────────────────────────────────────────────────────────────")
-@printf("  Pair-level GT (2×K=2 FSP): %.2fs\n", t_gt)
+@printf("  True K=4 sparse FSP (GT):   %.2fs  final |S|=%d\n", t_gt_k4, length(sp_gt))
+@printf("  Pair-level GT (2×K=2 FSP):  %.2fs  (approximate)\n", t_gt)
 @printf("  Dynamic-π compute:          %.2fs\n", t_pi)
 @printf("  Coarse-only Binomial-π:     %.2fs\n", t_binom)
 @printf("  Coarse-only Dynamic-π:      %.2fs\n", t_dyn)
-@printf("  V-cycle Binomial-π:         %.2fs  (τ_pre=%.3f)\n", t_vc_binom, τ_pre_vc)
-@printf("  V-cycle Dynamic-π:          %.2fs  (τ_pre=%.3f)\n", t_vc_dyn, τ_pre_vc)
-println()
-println("  For IC = (n_low, n_low, n_high, n_high) both pairs are symmetric:")
-println("  nc1=$(2*n_low)=2·n_low and nc2=$(2*n_high)=2·n_high.  Binom and dynamic-π")
-println("  give the same conditional (both peak at the correct fixed point).")
-println("  Residual TV measures inter-pair coupling error, not prolongation error.")
+@printf("  V-cycle Binomial-π:         %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
+        t_vc_binom, τ_pre_vc, length(sp_vc_binom))
+@printf("  V-cycle Dynamic-π:          %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
+        t_vc_dyn, τ_pre_vc, length(sp_vc_dyn))
+@printf("  V-cycle Fix-3:              %.2fs  (τ_pre=%.3f)  final |S|=%d\n",
+        t_vc_fix3, τ_pre_vc, length(sp_vc_fix3))
 println()
 println("="^70)
 println("DONE")

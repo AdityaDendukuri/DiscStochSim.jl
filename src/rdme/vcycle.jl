@@ -293,6 +293,98 @@ function two_level_vcycle_schlogl(sp_fine::StateSpace{CartesianIndex{K}, Float64
     sp_fine_new
 end
 
+# ─── Schlögl V-cycle with injection prolongation ─────────────────────────────
+
+"""
+    two_level_vcycle_schlogl_injection(sp_fine, model, fine_grid, coarse_grid,
+                                        pi_table, rates, t, dt; kwargs...)
+        -> StateSpace{CartesianIndex{K}, Float64}
+
+Two-level V-cycle for the Schlögl RDME using **injection prolongation** (Fix 1).
+
+Instead of prolongating a signed correction δ = p̄^{2h} - p^{2h} via Binomial or
+dynamic-π splits, the fine distribution is rescaled multiplicatively:
+
+    p^h_new(x) = p̃^h(x) · p̄^{2h}(x̄) / p^{2h}(x̄)
+
+This preserves asymmetry in the fine distribution: a fine state concentrated at
+(n_low, n_high) stays there after the coarse update rather than bleeding into the
+symmetric (n_high, n_low) mode.
+
+Keyword arguments are the same as `two_level_vcycle_schlogl`.
+"""
+function two_level_vcycle_schlogl_injection(
+    sp_fine::StateSpace{CartesianIndex{K}, Float64},
+    model::SchloglModel1D,
+    fine_grid::VoxelGrid,
+    coarse_grid::VoxelGrid,
+    pi_table::Vector{Vector{Float64}},
+    rates, t::Real, dt::Real;
+    τ_pre::Real              = 0.0,
+    τ_post::Real             = 0.0,
+    krylov_m::Int            = 30,
+    weight_tol::Float64      = 1e-14,
+    use_dynamic_pi::Bool     = true,
+    expand_coarse::Bool      = true,
+    coarse_expand_depth::Int = 1,
+    coarse_n_max::Int        = 80
+) where {K}
+    @assert fine_grid.n_voxels   == K
+    @assert coarse_grid.n_voxels == K ÷ 2
+    K2 = K ÷ 2
+
+    # ── 1. Pre-smooth: intra-pair diffusion only ──────────────────────────────
+    sp_smoothed = if τ_pre > 0.0
+        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)
+        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
+        A_intra, = build_generator(sp_fine, intra_sys, rates, t)
+        sp_s = _copy_sp(sp_fine)
+        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_fine.probs; m = krylov_m)
+        sp_s
+    else
+        sp_fine
+    end
+
+    # ── 2. Restrict ───────────────────────────────────────────────────────────
+    sp_coarse     = restrict(sp_smoothed)
+    sp_coarse_pre = _copy_sp(sp_coarse)     # save p^{2h} as a StateSpace for prolong_injection
+
+    # ── 3. Coarse system + optional expand ────────────────────────────────────
+    coarse_sys = if use_dynamic_pi
+        build_schlogl_coarse_system_dynamic(model, coarse_grid, fine_grid, pi_table)
+    else
+        build_schlogl_coarse_system(model, coarse_grid, fine_grid)
+    end
+    if expand_coarse && coarse_expand_depth > 0
+        coarse_bc = state -> rdme_bc(state, coarse_n_max)
+        expand!(sp_coarse, coarse_sys, coarse_bc; depth = coarse_expand_depth)
+    end
+
+    # ── 4. Coarse solve ───────────────────────────────────────────────────────
+    A_coarse, = build_generator(sp_coarse, coarse_sys, rates, t)
+    sp_coarse.probs .= expv(Float64(dt), A_coarse, sp_coarse.probs; m = krylov_m)
+
+    # ── 5. Fix-3 prolongation: fine-conditional transfer ─────────────────────
+    #
+    # For covered coarse states: injection (exact, preserves asymmetry).
+    # For new (expanded) coarse states: carry over the fine conditional from the
+    # nearest covered neighbor, shifted to match the new pair count.  This avoids
+    # the static-π symmetry trap for fronts at expanded nc values.
+    sp_fine_new = prolong_fine_conditional(sp_smoothed, sp_coarse_pre, sp_coarse;
+                                           prob_tol = weight_tol)
+
+    # ── 6. Post-smooth ────────────────────────────────────────────────────────
+    if τ_post > 0.0
+        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)
+        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
+        A_intra, = build_generator(sp_fine_new, intra_sys, rates, t)
+        sp_fine_new.probs .= expv(Float64(τ_post), A_intra, sp_fine_new.probs;
+                                   m = krylov_m)
+    end
+
+    sp_fine_new
+end
+
 # ─── helper: copy a StateSpace (states + probs, fresh index/ids) ─────────────
 
 function _copy_sp(sp::StateSpace{E, T}) where {E, T}
