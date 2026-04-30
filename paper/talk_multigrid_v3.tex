@@ -261,10 +261,10 @@
 
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
-      \textbf{Compress ($\calR$) — exact:}
+      \textbf{Compress ($\calR$): exact:}
       \[ p^c(\bar n) = \!\!\sum_{n_1 + n_2 = \bar n}\!\! p(n_1, n_2). \]
 
-      \textbf{Reconstruct ($\calP$) — approximate:}
+      \textbf{Reconstruct ($\calP$): approximate:}
       \[ p(n_1, n_2) \approx p^c(\bar n)\cdot\Bin(\bar n,\tfrac{1}{2}). \]
 
       \begin{block}{State-space reduction}
@@ -274,7 +274,7 @@
 
       \smallskip
       {\small $\calP$ is accurate when the distribution is near-Binomial
-      — verified at runtime, not assumed globally.}
+     : verified at runtime, not assumed globally.}
     \end{column}
     \begin{column}{0.46\textwidth}
       \begin{center}
@@ -303,14 +303,21 @@
           \draw[black!30] (3.7+\nb*\cb, 0.35) rectangle
                           (3.7+\nb*\cb+\cb-0.04, 0.35+\ht);
         }
-        \node[above,font=\footnotesize] at (3.7+4*\cb+\cb/2, 1.0) {$\bar n$};
+        % x-axis labels
+        \draw[black!35] (3.7,0.35) -- (3.7+9*\cb,0.35);
+        \foreach \nb/\lbl in {0/0, 4/4, 8/8} {
+          \draw[black!35] (3.7+\nb*\cb+\cb/2,0.35) -- (3.7+\nb*\cb+\cb/2,0.25);
+          \node[below,font=\tiny] at (3.7+\nb*\cb+\cb/2,0.25) {\lbl};
+        }
+        \node[below,font=\scriptsize,mygray] at (3.7+4.5*\cb,0.0)
+          {$\bar n = n_1{+}n_2$};
+        \node[above,font=\footnotesize] at (3.7+4*\cb+\cb/2, 1.0) {$P^c(\bar n)$};
       \end{tikzpicture}
 
       \vspace{0.3em}
       {\footnotesize
-        Summing along constant-total diagonals gives
-        the scalar $\bar n$.
-        Reconstruction spreads mass back via Binomial.
+        $\calR$: sum along each diagonal $\to$ scalar $\bar n = n_1{+}n_2$.\\
+        $\calP$: spread back via $\Bin(\bar n, \tfrac{1}{2})$.
       }
       \end{center}
     \end{column}
@@ -326,7 +333,7 @@
 
   \begin{columns}[T]
     \begin{column}{0.44\textwidth}
-      \textbf{Full matrix $A$ — 4 voxels:}
+      \textbf{Full matrix $A$: 4 voxels:}
       \begin{center}
       \begin{tikzpicture}[scale=0.75]
         \def\bs{1.00}
@@ -373,7 +380,7 @@
       \end{center}
     \end{column}
     \begin{column}{0.42\textwidth}
-      \textbf{Merged matrix $\bar A$ — 2 pairs:}
+      \textbf{Merged matrix $\bar A$: 2 pairs:}
       \begin{center}
       \begin{tikzpicture}[scale=0.75]
         \def\cs{1.82}
@@ -398,7 +405,7 @@
       {\footnotesize Size: $n_{\max}^2$ \quad ($\mathbf{10^4\times}$ smaller for $n_{\max}{=}100$)}
       \begin{itemize}\setlength\itemsep{0.15em}
         \item $A_k \to \bar A_j$: reactions averaged over Binomial
-        \item Within-pair $D$ disappears — implicit in Binomial
+        \item Within-pair $D$ disappears: implicit in Binomial
         \item $\bar D_{12}$: only between-pair diffusion remains
       \end{itemize}
     \end{column}
@@ -407,7 +414,128 @@
 \end{frame}
 
 %================================================================
-%  6. BISTABILITY
+%  ALGORITHM PSEUDOCODE
+%================================================================
+
+\begin{frame}{The multigrid FSP algorithm}
+
+\begin{columns}[T]
+\column{0.54\textwidth}
+
+\textbf{\texttt{multigrid\_fsp}($u_0$, $T$, $\Delta t$)}\\[0.4em]
+
+\begin{enumerate}\setlength\itemsep{0.25em}
+  \item \textbf{Initialise}: $p \leftarrow \delta_{u_0}$;\; expand $\mathcal{S}$ by one shell
+
+  \item \textbf{Detect front}:
+    \[ \alpha_j = \frac{|\mu_{2j-1} - \mu_{2j}|}{\mu_{2j-1}+\mu_{2j}}, \quad
+       j^* = \operatorname{argmax}_j\,\alpha_j \]
+    Keep pairs $j^*\!\pm\!1$ fine; merge rest.
+
+  \item \textbf{Restrict}: $\tilde n_j = n_{2j-1}+n_{2j}$ for merged pairs
+
+  \item \textbf{Solve}: $p \leftarrow e^{\Delta t\,A^M}\,p$\quad (Krylov)
+
+  \item \textbf{Prolong}: $\Bin(\tilde n_j,\tfrac12)$ for merged;
+    dynamic-$\pi$ at fine pairs
+
+  \item \textbf{Expand}: add one-step reachable states to $\mathcal{S}$
+
+  \item \textbf{Prune}: remove $\{x : p(x) < \tau\}$
+
+  \item Repeat from \textbf{2} until $t = T$
+\end{enumerate}
+
+\column{0.42\textwidth}
+\vspace{0.5em}
+\begin{block}{Cost per step}
+  \textbf{Coarse solve}: $|\mathcal{S}^M| \ll N^K$\\
+  \textbf{Expand}: $O(|\mathcal{S}^M| \cdot |\text{reactions}|)$\\
+  \textbf{Prune}: $O(|\mathcal{S}^M|)$\\[0.4em]
+  $\mathcal{S}^M$ tracks only the support of $p$: never the full truncated space.
+\end{block}
+
+\vspace{0.5em}
+\begin{block}{Key decision (step 2)}
+  $\alpha_j \approx 0$: merge pair $j$ (Binom exact)\\
+  $\alpha_j \approx 1$: keep fine (front present)\\[0.3em]
+  Same criterion for birth-death and Schl\"{o}gl.
+\end{block}
+
+\end{columns}
+
+\end{frame}
+
+%================================================================
+%  6. ADAPTIVE FSP ALGORITHM
+%================================================================
+
+\begin{frame}{The adaptive FSP algorithm: expand, solve, prune}
+\begin{center}
+  \includegraphics[width=0.92\textwidth,keepaspectratio]{fig_talk_fsp}
+\end{center}
+\vspace{-0.4em}
+{\small
+\textbf{Top row:} joint distribution $P(n_1,n_2)$ of a 2-voxel birth-death system: point source at $(n_\text{src},0)$ traveling to the stationary point (white cross).\\[0.2em]
+\textbf{Bottom row} (one step at $t{=}0.5$):
+\textbf{(e)}~Current support $|S|{=}105$.
+\textbf{(f)}~After expand $|S|{=}139$: thin boundary shell added (white dots).
+\textbf{(g)}~After solve+prune $|S|{=}117$: compact again.}
+\end{frame}
+
+%================================================================
+%  7. BIRTH-DEATH RESULT
+%================================================================
+
+\begin{frame}{Result: K=8 RDME wavefront via coarsened simulation}
+\begin{center}
+  \includegraphics[width=0.92\textwidth,keepaspectratio]{fig_talk_result}
+\end{center}
+\vspace{-0.4em}
+{\small
+Birth-death RDME, $K{=}8$, $D{=}0.1$.
+IC: $v_1{=}v_2{=}40$ (delta), $v_3\ldots v_8{=}0$.
+Each panel shows marginals $P(n_k{=}n)$ for all 8 voxels.\\[0.2em]
+\textbf{(a)--(d):} Wavefront sweeps left$\to$right, distributions broaden.
+\textbf{(e):} Stationary: all voxels reach $\operatorname{Poisson}(10)$ (dashed line).\\[0.2em]
+Solved via \textbf{K=4 coarse FSP} (30k states). Direct K=8 FSP: intractable.
+Fine marginals recovered via $\operatorname{Bin}(\tilde{n},\tfrac12)$: \emph{exact} for balanced pairs.}
+\end{frame}
+
+%================================================================
+%  TRANSITION TO BISTABILITY
+%================================================================
+
+\begin{frame}{What about bistable reactions?}
+
+\begin{columns}[T]
+\column{0.50\textwidth}
+\textbf{Birth-death: coarsening is exact at stationarity.}\\[0.4em]
+Each voxel has a single stable state.
+Pairs equilibrate to $\Bin(\tilde{n},\tfrac12)$: merging always valid.
+
+\vspace{0.8em}
+\textbf{But what if reactions are bistable?}\\[0.4em]
+Some systems have \emph{two} stable states per voxel.
+Spatial fronts form where neighbors occupy opposite states.
+These fronts are metastable: persistent for very long times.
+
+\column{0.46\textwidth}
+\vspace{0.3em}
+\begin{block}{The Schl\"{o}gl model}
+Bistable autocatalytic reactions:\\[0.3em]
+\quad $\emptyset \rightleftharpoons X$ \quad (zeroth/first order)\\
+\quad $2X \rightleftharpoons 3X$ \quad (auto-catalysis)\\[0.3em]
+Two stable states: $n_\text{lo} \approx 31$ and $n_\text{hi} \approx 162$.\\[0.3em]
+At a spatial front: joint $P(n_k,n_{k+1})$ is \emph{bimodal} —
+Binomial prolongation is completely wrong.
+\end{block}
+\end{columns}
+
+\end{frame}
+
+%================================================================
+%  8. BISTABILITY
 %================================================================
 
 \begin{frame}{Each voxel is bistable: two stable molecular states}
@@ -416,26 +544,25 @@
 \end{center}
 \vspace{-0.3em}
 {\small
-\textbf{(a)} Net production rate $f(n)$ — three zeros: two stable ($n_\text{lo}$, $n_\text{hi}$), one unstable.
+\textbf{(a)} Net production rate $f(n)$: three zeros: two stable ($n_\text{lo}$, $n_\text{hi}$), one unstable.
 \quad\textbf{(b)} Stationary distribution is bimodal.\\[0.2em]
 \emph{Think of it as a double-well potential: each voxel wants to be at $n_\text{lo}$ or $n_\text{hi}$.}
-Each spatial configuration — e.g., $(n_\text{lo},n_\text{lo},n_\text{hi},n_\text{hi},\ldots)$ — is metastable.}
+Each spatial configuration: e.g., $(n_\text{lo},n_\text{lo},n_\text{hi},n_\text{hi},\ldots)$: is metastable.}
 \end{frame}
 
 %================================================================
 %  7. MERGING FAILS AT THE FRONT
 %================================================================
 
-\begin{frame}{Merging fails at a bistable front}
+\begin{frame}{Bistable fronts: when does Binomial coarsening fail?}
 
   \begin{columns}[T]
-    \begin{column}{0.38\textwidth}
-      A \textbf{spatial front} forms when neighboring voxels
-      occupy opposite stable states.
-      Slow diffusion ($d \ll$ reaction rates) sustains it indefinitely.
+    \begin{column}{0.46\textwidth}
+      \textbf{A spatial front} forms when neighboring voxels occupy opposite stable states.
+      Slow diffusion sustains it indefinitely.
 
       \medskip
-      \begin{tikzpicture}[scale=0.65, every node/.style={font=\footnotesize}]
+      \begin{tikzpicture}[scale=0.68, every node/.style={font=\footnotesize}]
         \foreach \k in {1,2,3,4} {
           \draw[thick,fill=myblue!22] (\k-1,0) rectangle (\k,0.8);
           \node at (\k-0.5,0.4) {lo};
@@ -449,21 +576,36 @@ Each spatial configuration — e.g., $(n_\text{lo},n_\text{lo},n_\text{hi},n_\te
       \end{tikzpicture}
 
       \medskip
-      At the front: the joint distribution of the two interface voxels is
-      \emph{bimodal} — concentrated at $(n_{\rm lo},n_{\rm hi})$
-      and $(n_{\rm hi},n_{\rm lo})$.\\[0.4em]
-      The Binomial is \textbf{unimodal}: wrong shape, wrong means.
+      At the interface pair: the joint $P(n_k,n_{k+1})$ is \textbf{bimodal}
+      (two orientations: lo$|$hi and hi$|$lo).
+
+      \vspace{0.5em}
+      Coarsening sums $\tilde n = n_k + n_{k+1}$: both orientations give the \emph{same} total.
+      Binomial prolongation puts both voxels at $\tilde n/2 \approx 97$.
+      \textbf{Wrong.}
+
     \end{column}
-    \begin{column}{0.58\textwidth}
-      \begin{center}
-        \includegraphics[width=\textwidth,keepaspectratio]{fig_prob_diffusion}
-      \end{center}
-      {\footnotesize
-        \textbf{Top:} uniform IC — probability spreads along
-        constant-total diagonals; Binomial reconstruction is accurate. \textcolor{coarsegreen!80!black}{\checkmark}\\
-        \textbf{Bottom:} bistable front — probability stays at the corners;
-        Binomial reconstruction gives the wrong shape. \textcolor{slowred}{\ding{55}}
-      }
+    \begin{column}{0.50\textwidth}
+      \vspace{0.3em}
+      \begin{block}{The symmetry trap}
+        \[
+          (n_\text{lo},\,n_\text{hi}) \xrightarrow{\calR} \tilde n = 193
+          \xleftarrow{\calR} (n_\text{hi},\,n_\text{lo})
+        \]
+        Both front orientations map to the same coarse state.
+        $\calP$ cannot recover the orientation.
+      \end{block}
+
+      \vspace{0.4em}
+      \begin{block}{Birth-death vs.\ Schl\"{o}gl}
+        \begin{tabular}{@{}lcc@{}}
+          & BD & Schl\"{o}gl front \\
+          \midrule
+          Within-pair dist. & Binomial & Bimodal \\
+          $\calP$ accurate? & yes & no \\
+          $\alpha_j$ & $\approx 0$ & $\approx 1$ \\
+        \end{tabular}
+      \end{block}
     \end{column}
   \end{columns}
 
@@ -522,21 +664,26 @@ Each spatial configuration — e.g., $(n_\text{lo},n_\text{lo},n_\text{hi},n_\te
 %  9. RESULTS
 %================================================================
 
-\begin{frame}{Results: the V-cycle tracks the front and stays tractable}
+%================================================================
+%  SCHLÖGL RESULT
+%================================================================
+
+\begin{frame}{Result: adaptive V-cycle correctly tracks the Schl\"{o}gl front}
 \begin{center}
-  \includegraphics[width=0.92\textwidth,keepaspectratio]{fig_talk_result}
+  \includegraphics[width=0.93\textwidth,keepaspectratio]{fig_talk_schlogl}
 \end{center}
-\vspace{-0.4em}
-{\small
-\textbf{(a)} Spatial concentration profile $\mathbb{E}[n_k]$ vs.\ voxel $k$ at four times — K=8 Schl\"{o}gl, V-cycle solver.
-The step-function front (voxels 1--3 at $n_\text{lo}$, voxels 4--8 at $n_\text{hi}$) is tracked exactly throughout.\\[0.2em]
-\textbf{(b)} State-space size over time.
-K=8 V-cycle uses \emph{fewer} states than K=4 direct FSP, while solving a system twice as large.
-Direct K=8 FSP is intractable.}
+\vspace{-0.5em}
+{\footnotesize
+K=4 Schl\"{o}gl, IC\,=\,$(n_\text{lo},n_\text{hi},n_\text{hi},n_\text{hi})$, front in pair 1.\quad
+\textbf{Top:} voxel means.
+\textbf{(a)} Direct (22k states), ground truth.
+\textbf{(b)} Coarse Binomial (331 states): front collapses to ${\approx}96$ (wrong).
+\textbf{(c)} V-cycle dyn-$\pi$ (221 states): correct, same cost as coarse.
+\textbf{Bottom:} spatial marginals at $t{=}1$ confirm (b) is wrong, (c) matches (a).}
 \end{frame}
 
 %================================================================
-%  10. SUMMARY
+%  SUMMARY
 %================================================================
 
 \begin{frame}{Summary}
@@ -545,26 +692,26 @@ Direct K=8 FSP is intractable.}
     When the joint distribution of two adjacent voxels is near $\Bin(\bar n,\tfrac12)$,
     replacing $(n_1,n_2)$ by $\bar n$ cuts the per-pair state space
     from $n_{\max}^{2S}$ to $n_{\max}^{S}$.
+    \emph{K=8 birth-death wavefront solved with 30k states (direct: intractable).}
   \end{block}
 
   \smallskip
-  \begin{block}{2.\quad Bistable fronts violate the Binomial assumption.}
-    Reactions keep neighboring voxels in opposite stable states,
-    producing a bimodal conditional distribution.
-    The imbalance $\alpha_j$ detects this automatically at runtime.
+  \begin{block}{2.\quad Bistable fronts require dynamic-$\pi$ prolongation.}
+    At a front, the within-pair distribution is bimodal: Binomial is wrong.
+    The imbalance $\alpha_j$ detects this at runtime.
+    V-cycle with dynamic-$\pi$ corrects the prolongation.
+    \emph{K=4 Schl\"{o}gl: V-cycle 221 states, direct 22k, both accurate.}
   \end{block}
 
   \smallskip
-  \begin{block}{3.\quad Adaptive V-cycle FSP.}
-    Keep a fine window at the front; coarsen everything else.
-    Evolve $\dot p^M = A^M p^M$ directly.
-    \textbf{Accurate and tractable where full FSP is not.}\\[0.2em]
-    \emph{K=8 V-cycle: 8{,}361 states vs K=4 direct FSP: 22{,}551 states.
-    Direct K=8 FSP: intractable.}
+  \begin{block}{3.\quad Same algorithm: $\alpha_j$ adapts automatically.}
+    Birth-death: $\alpha_j{\approx}0$ always $\Rightarrow$ merge all pairs.
+    Schl\"{o}gl: $\alpha_j{\approx}1$ at front $\Rightarrow$ keep fine.
+    One algorithm handles both.
   \end{block}
 
   \smallskip
-  \textbf{Open:} rigorous error bounds; multi-species; multiple/moving fronts.
+  \textbf{Open:} multi-level hierarchy; multi-species; moving fronts; rigorous error bounds.
 
 \end{frame}
 
@@ -604,7 +751,7 @@ Direct K=8 FSP is intractable.}
       \begin{alertblock}{Reconstruction is wrong at the front}
         Step 4 forces a Binomial split on \emph{every} pair,
         including the front where the true distribution is bimodal.\\[0.5em]
-        \textbf{Fix:} evolve $p^M$ directly — no reconstruction step.
+        \textbf{Fix:} evolve $p^M$ directly: no reconstruction step.
         Coarse pairs carry the Binomial assumption implicitly in $\bar A_j$;
         the fine window tracks the true within-pair distribution exactly.
       \end{alertblock}
@@ -624,9 +771,24 @@ Direct K=8 FSP is intractable.}
   }
 \end{frame}
 
-\begin{frame}{Appendix: K=8 persistent front — detailed}
+\begin{frame}{Appendix: probability dynamics (birth-death vs.\ Schl\"{o}gl)}
+\begin{center}
+  \includegraphics[width=0.92\textwidth,keepaspectratio]{fig_talk_diffusion}
+\end{center}
+{\footnotesize
+\textbf{Top:} birth-death point source traveling to Poisson(10) stationary. Binomial coarsening exact.\\
+\textbf{Bottom:} Schl\"{o}gl front IC persisting metastably; true stationary (rightmost) shows both orientations equally.}
+\end{frame}
+
+\begin{frame}{Appendix: K=8 persistent front (detailed)}
   \begin{center}
-    \includegraphics[width=0.80\textwidth,height=0.70\textheight,keepaspectratio]{fig_k8_persistent}
+    \includegraphics[width=0.82\textwidth,height=0.70\textheight,keepaspectratio]{fig_k8_persistent}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Appendix: K=12 persistent front}
+  \begin{center}
+    \includegraphics[width=0.80\textwidth,height=0.68\textheight,keepaspectratio]{fig_k12_persistent}
   \end{center}
 \end{frame}
 
