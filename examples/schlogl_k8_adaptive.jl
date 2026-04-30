@@ -235,8 +235,6 @@ let sp = sp_ad, prev_mask = nothing, t_cur = 0.0
         dt_step = min(dt_c, t_max - t_cur)
         sp, prev_mask = two_level_vcycle_adaptive(sp, model, fine_grid, rates, t_cur, dt_step;
                                                    prev_mask,
-                                                   α_lo=0.10, α_hi=0.25,
-                                                   φ_lo=1.5,  φ_hi=3.0,
                                                    krylov_m=30,
                                                    expand_mixed=true,
                                                    mixed_expand_depth=1,

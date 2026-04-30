@@ -64,7 +64,7 @@ function diagnostics(u0; depth=1)
     end
     n_pairs = K8 ÷ 2
     β = [abs(μ[2j]-μ[2j+1])/max(μ[2j]+μ[2j+1],1e-14) for j in 1:n_pairs-1]
-    mask = select_coarsening_mask(sp, rm8, g8; α_lo=0.10, α_hi=0.25)
+    mask = select_coarsening_mask(sp, rm8, g8)
     α, β, mask
 end
 

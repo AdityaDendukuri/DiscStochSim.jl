@@ -1,0 +1,257 @@
+"""
+Persistent mixed-state solver for the K=12 Schlögl RDME.
+
+6 pairs; interface at pair 3 (voxels 5-6), kept fine throughout.
+Pairs 1,2,4,5,6 level-1 coarse.
+
+Run: JULIA_DEPOT_PATH=/tmp/ds_depot julia --project examples/k12_persistent_mixed.jl
+"""
+
+using DiscStochSim
+using CairoMakie
+using Printf
+
+const OUTDIR = joinpath(@__DIR__, "..", "paper", "figures")
+mkpath(OUTDIR)
+
+const SMALL = 8f0; const MED = 9f0; const LW = 1.4f0
+const C_FINE   = RGBf(0.835, 0.369, 0.000)
+const C_COARSE = RGBf(0.000, 0.447, 0.698)
+
+set_theme!(Theme(fontsize=MED,
+    Axis=(spinewidth=0.7, xgridvisible=false, ygridvisible=false,
+          ticksize=3f0, tickwidth=0.6f0)))
+
+# ── Model parameters ──────────────────────────────────────────────────────────
+D = 0.005; K = 12; h = 1.0/K; n_pairs = K ÷ 2
+model = SchloglModel1D(D)
+g     = VoxelGrid(K, h, 0)
+
+fp = schlogl_fixed_points(model; n_max=300)
+n_low, n_uns, n_high = fp
+@printf("n_low=%d  n_uns=%d  n_high=%d\n", n_low, n_uns, n_high); flush(stdout)
+
+n_buf  = 30
+n̄_low  = 2 * n_low
+n̄_high = 2 * n_high
+
+# ── Single-voxel stationary CME ───────────────────────────────────────────────
+let c1=model.c1, c2=model.c2, c3=model.c3, c4=model.c4
+    λ(n) = c3 + c1*n*(n-1)/2
+    μ(n) = c4*n + c2*n*(n-1)*(n-2)/6
+    n_max = n_high + 60
+    log_P = zeros(n_max+1)
+    for n in 0:n_max-1
+        mn1 = μ(n+1)
+        log_P[n+2] = log_P[n+1] + log(λ(n)) - (mn1 > 0 ? log(mn1) : -700.0)
+    end
+    log_P .-= maximum(log_P)
+    P = exp.(log_P); P ./= sum(P)
+    global ns_sv = collect(0:n_max)
+    global ps_sv = P
+end
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Persistent mixed solver — pair 3 fine, pairs 1/2/4/5/6 coarse
+# levels = [1, 1, 0, 1, 1, 1]
+# State tuple: (n̄₁, n̄₂, n₅, n₆, n̄₄, n̄₅, n̄₆)   [KM = 7]
+# ══════════════════════════════════════════════════════════════════════════════
+levels = [1, 1, 0, 1, 1, 1]
+off    = DiscStochSim._mixed_offsets(levels)
+op3    = off[3]    # index of n₅ in tuple; n₆ is at op3+1
+KM     = _mixed_dim(levels)   # = 7
+@printf("\nlevels=%s  KM=%d  pair3 offset=%d\n", string(levels), KM, op3); flush(stdout)
+
+# IC: pair 3 is the interface pair — 50/50 mixture of (n_low,n_high) and (n_high,n_low).
+# Left bulk (pairs 1-2) at n̄_low, right bulk (pairs 4-6) at n̄_high.
+u0a = CartesianIndex(n̄_low, n̄_low, n_low,  n_high, n̄_high, n̄_high, n̄_high)
+u0b = CartesianIndex(n̄_low, n̄_low, n_high, n_low,  n̄_high, n̄_high, n̄_high)
+@printf("u0a = %s  (50%%)\n", string(u0a)); flush(stdout)
+@printf("u0b = %s  (50%%)\n", string(u0b)); flush(stdout)
+
+sp = StateSpace{CartesianIndex{KM}, Float64}()
+add_state!(sp, u0a, 0.5)
+add_state!(sp, u0b, 0.5)
+
+mxsys = build_schlogl_mixed_system(model, g, levels)
+
+n_max_coarse = 2*(n_high + n_buf)
+n_max_fine   = n_high + n_buf
+function bc_mix(s)
+    t = Tuple(s)
+    t[1] ≤ n_max_coarse && t[2] ≤ n_max_coarse &&
+    t[op3]   ≤ n_max_fine  &&
+    t[op3+1] ≤ n_max_fine  &&
+    t[5] ≤ n_max_coarse && t[6] ≤ n_max_coarse && t[7] ≤ n_max_coarse
+end
+expand!(sp, mxsys, bc_mix; depth=1)
+@printf("Initial |S_mix|=%d\n\n", length(sp.states)); flush(stdout)
+
+# ── helper: voxel means and stds ──────────────────────────────────────────────
+function voxel_stats(sp, levels, off)
+    μ  = zeros(K)
+    μ2 = zeros(K)
+    for (i,s) in enumerate(sp.states)
+        t = Tuple(s); p = sp.probs[i]
+        for j in 1:n_pairs
+            o = off[j]
+            if levels[j] > 0
+                h2 = p*t[o]/2
+                μ[2j-1] += h2;             μ[2j] += h2
+                μ2[2j-1] += p*(t[o]/2)^2; μ2[2j] += p*(t[o]/2)^2
+            else
+                μ[2j-1] += p*t[o];    μ[2j] += p*t[o+1]
+                μ2[2j-1] += p*t[o]^2; μ2[2j] += p*t[o+1]^2
+            end
+        end
+    end
+    μ, sqrt.(max.(μ2 .- μ.^2, 0.0))
+end
+
+# ── time loop ─────────────────────────────────────────────────────────────────
+dt = 0.1; n_steps = 60
+snap_steps = [0, 5, 15, 30, 60]
+
+snaps  = Dict{Int, Tuple{Vector{Float64},Vector{Float64}}}()
+snaps[0] = voxel_stats(sp, levels, off)
+
+ts       = Float64[]
+S_sizes  = Int[]
+levelss  = Vector{Int}[]   # levels at each step
+
+cache = MixedSolverCache()
+cache.mixed_systems[levels] = mxsys   # pre-populate so step 1 doesn't rebuild
+sc = Ref(0)
+
+@printf("%-6s  %-8s  %-8s  %-20s\n", "step", "|S_mix|", "Σp", "levels"); flush(stdout)
+@printf("(cache pre-populated, entering time loop)\n"); flush(stdout)
+for step in 1:n_steps
+    global sp, levels, off, op3
+    sp, levels = two_level_step_mixed(sp, levels, model, g, dt;
+                                      cache               = cache,
+                                      step_count          = sc,
+                                      mask_check_interval = 5,
+                                      windowed            = true,
+                                      halo                = 0,
+                                      expand_mixed        = true,
+                                      mixed_expand_depth  = 1,
+                                      mixed_n_max         = n_max_coarse,
+                                      prune_tol           = 1e-5,
+                                      reexpand_depth      = 0,
+                                      krylov_m            = 40)
+    off = DiscStochSim._mixed_offsets(levels)
+    op3 = off[3]
+    sp.probs = max.(sp.probs, 0.0); sp.probs ./= sum(sp.probs)
+    push!(ts, step*dt); push!(S_sizes, length(sp.states)); push!(levelss, copy(levels))
+    step in snap_steps && (snaps[step] = voxel_stats(sp, levels, off))
+    step % 5 == 0 && @printf("%-6d  %-8d  %-8.5f  %s\n",
+        step, S_sizes[end], sum(sp.probs), string(levels)); flush(stdout)
+    if step == 5
+        global mg_n5n6_early = Dict{Tuple{Int,Int}, Float64}()
+        for (i,s) in enumerate(sp.states)
+            tt = Tuple(s); p = sp.probs[i]
+            key = (tt[op3], tt[op3+1])
+            mg_n5n6_early[key] = get(mg_n5n6_early, key, 0.0) + p
+        end
+        @printf("  → saved P(n₅,n₆) at t=0.5: %d unique states\n", length(mg_n5n6_early))
+        flush(stdout)
+    end
+end
+@printf("\nFinal |S_mix|=%d\n\n", length(sp.states)); flush(stdout)
+
+# ── Marginals ─────────────────────────────────────────────────────────────────
+mg_n5n6_plot = mg_n5n6_early
+t_plot = 0.5
+mg_nbar3 = Dict{Int, Float64}()
+for ((n5,n6), p) in mg_n5n6_plot
+    nb = n5 + n6
+    mg_nbar3[nb] = get(mg_nbar3, nb, 0.0) + p
+end
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure
+# ══════════════════════════════════════════════════════════════════════════════
+fig = Figure(size=(820, 460))
+
+# ── (a) Single-voxel P(n) ─────────────────────────────────────────────────────
+ax_a = Axis(fig[1:2, 1];
+    xlabel="n  (molecules / voxel)", ylabel="P_stat(n)",
+    title="(a)  Single-voxel stationary CME", titlesize=MED)
+barplot!(ax_a, ns_sv, ps_sv; color=(C_COARSE,0.7), strokewidth=0, gap=0, width=1)
+vlines!(ax_a, [Float64(n_low), Float64(n_high)]; color=:black, linestyle=:dash, linewidth=0.8)
+vlines!(ax_a, [Float64(n_uns)];                  color=:red,   linestyle=:dot,  linewidth=0.8)
+
+# ── (b) Spatial front profile ─────────────────────────────────────────────────
+ax_b = Axis(fig[1, 2:4];
+    xlabel="voxel k", ylabel="E[nₖ]",
+    title="(b)  K=12 persistent mixed  —  pair 3 (v₅,v₆) always fine",
+    titlesize=MED,
+    xticks=(1:K, ["v$k" for k in 1:K]))
+
+snap_colors = resample_cmap(:viridis, length(snap_steps))
+for (ci, ss) in enumerate(snap_steps)
+    haskey(snaps, ss) || continue
+    μs, σs = snaps[ss]
+    t_val  = ss * dt
+    clr    = snap_colors[ci]
+    errorbars!(ax_b, Float64.(1:K), μs, σs; color=(clr,0.45), linewidth=0.9, whiskerwidth=4)
+    scatterlines!(ax_b, Float64.(1:K), μs; color=clr, linewidth=LW, markersize=6,
+                  label="t=$(round(t_val, digits=1))")
+end
+for j in 1:n_pairs
+    c   = levels[j] > 0 ? C_COARSE : C_FINE
+    lbl = levels[j] > 0 ? "C$j" : "F$j"
+    poly!(ax_b, Rect(2j-1.5, -8.0, 2.0, Float64(n_high)+25); color=(c,0.08), strokewidth=0)
+    text!(ax_b, Float64(2j-0.5), Float64(n_high)+12;
+          text=lbl, fontsize=SMALL-2, color=c, align=(:center,:bottom), font=:bold)
+end
+hlines!(ax_b, [Float64(n_low), Float64(n_high)]; color=:black, linestyle=:dash, linewidth=0.7)
+axislegend(ax_b; position=:rc, framevisible=false, labelsize=SMALL-1, nbanks=length(snap_steps))
+xlims!(ax_b, 0.3, K+1.5); ylims!(ax_b, -5, n_high+30)
+
+# ── (c) Coarse P(n̄₃) ─────────────────────────────────────────────────────────
+ax_c = Axis(fig[2, 2];
+    xlabel="n̄₃ = n₅+n₆", ylabel="probability",
+    title="(c)  Coarse: P(n̄₃)  at t=$(t_plot)", titlesize=MED)
+nb_ks = sort(collect(keys(mg_nbar3)))
+nb_vs = [mg_nbar3[k] for k in nb_ks]
+barplot!(ax_c, Float64.(nb_ks), nb_vs; color=(C_COARSE,0.75), strokewidth=0, gap=0, width=1)
+vlines!(ax_c, [Float64(n̄_low), Float64(n̄_high)]; color=:black, linestyle=:dash, linewidth=0.8)
+
+# ── (d) Fine P(n₅,n₆) ────────────────────────────────────────────────────────
+ax_d = Axis(fig[2, 3:4];
+    xlabel="n₅  (molecules in voxel 5)", ylabel="n₆  (molecules in voxel 6)",
+    title="(d)  Fine: P(n₅,n₆)  at t=$(t_plot)",
+    titlesize=MED)
+
+bin_w  = 4
+n_max_hm = n_high + n_buf
+n_bins = div(n_max_hm, bin_w) + 1
+hm_data = zeros(n_bins, n_bins)
+for ((n5,n6), p) in mg_n5n6_plot
+    i5 = clamp(div(n5, bin_w) + 1, 1, n_bins)
+    i6 = clamp(div(n6, bin_w) + 1, 1, n_bins)
+    hm_data[i5, i6] += p
+end
+bin_ctrs = Float64.(0:bin_w:bin_w*(n_bins-1))
+heatmap!(ax_d, bin_ctrs, bin_ctrs, hm_data;
+         colormap=:hot, colorrange=(0, max(maximum(hm_data)*0.95, 1e-10)))
+vlines!(ax_d, [Float64(n_low), Float64(n_high)]; color=(:white,0.4), linestyle=:dash, linewidth=0.9)
+hlines!(ax_d, [Float64(n_low), Float64(n_high)]; color=(:white,0.4), linestyle=:dash, linewidth=0.9)
+x_diag = Float64.([0, n_low+n_high])
+lines!(ax_d, x_diag, reverse(x_diag); color=RGBf(0.9,0.2,0.2), linestyle=:dot, linewidth=2.0)
+mid = (n_low + n_high) / 2
+text!(ax_d, mid - 12, mid + 8; text="n₅+n₆=$(n_low+n_high)", fontsize=SMALL-1,
+      color=RGBf(1.0,0.5,0.5), align=(:right,:bottom), rotation=Float32(-atan(1)))
+text!(ax_d, Float64(n_low)+3,  Float64(n_high)+3; text="(nₗ,nₕ)", fontsize=SMALL-1,
+      color=:white, align=(:left,:bottom))
+text!(ax_d, Float64(n_high)+3, Float64(n_low)+3;  text="(nₕ,nₗ)", fontsize=SMALL-1,
+      color=:white, align=(:left,:bottom))
+
+rowsize!(fig.layout, 1, Relative(0.50))
+rowsize!(fig.layout, 2, Relative(0.40))
+colsize!(fig.layout, 1, Relative(0.22))
+
+CairoMakie.save(joinpath(OUTDIR, "fig_k12_persistent.pdf"), fig)
+CairoMakie.save(joinpath(OUTDIR, "fig_k12_persistent.png"), fig; px_per_unit=2)
+println("Saved: paper/figures/fig_k12_persistent.{pdf,png}")

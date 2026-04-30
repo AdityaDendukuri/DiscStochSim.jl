@@ -417,36 +417,41 @@ Output dimension K_mixed = K - sum(mask)  (each coarsened pair loses one dim).
 Probabilities are accumulated (exact marginalisation over coarsened splits).
 """
 function partial_restrict(sp_fine::StateSpace{CartesianIndex{K}, T},
-                           mask::BitVector) where {K, T}
+                           levels::Vector{Int}) where {K, T}
     iseven(K) || error("K=$K must be even")
     n_pairs = K ÷ 2
-    length(mask) == n_pairs || error("mask length $(length(mask)) ≠ K/2 = $n_pairs")
-    KM = K - sum(mask)
-    _partial_restrict_val(sp_fine, mask, Val(KM))
+    length(levels) == n_pairs || error("levels length $(length(levels)) ≠ K/2 = $n_pairs")
+    KM = _mixed_dim(levels)
+    _partial_restrict_val(sp_fine, levels, Val(KM))
 end
 
-function _mixed_tuple(t::NTuple{K,Int}, mask::BitVector, ::Val{KM}) where {K, KM}
+function _mixed_tuple(t::NTuple{K,Int}, levels::Vector{Int}, ::Val{KM}) where {K, KM}
     n_pairs = K ÷ 2
     out = Vector{Int}(undef, KM)
     pos = 1
-    for j in 1:n_pairs
+    j = 1
+    while j <= n_pairs
         k1, k2 = 2j-1, 2j
-        if mask[j]
-            out[pos] = t[k1] + t[k2];  pos += 1
-        else
-            out[pos] = t[k1];  out[pos+1] = t[k2];  pos += 2
+        l = levels[j]
+        if l == 0
+            out[pos] = t[k1]; out[pos+1] = t[k2]; pos += 2; j += 1
+        elseif l == 1
+            out[pos] = t[k1] + t[k2]; pos += 1; j += 1
+        else  # level 2: quad total of 4 voxels
+            k3, k4 = 2(j+1)-1, 2(j+1)
+            out[pos] = t[k1] + t[k2] + t[k3] + t[k4]; pos += 1; j += 2
         end
     end
     NTuple{KM,Int}(out)
 end
 
 function _partial_restrict_val(sp_fine::StateSpace{CartesianIndex{K}, T},
-                                mask::BitVector, ::Val{KM}) where {K, T, KM}
+                                levels::Vector{Int}, ::Val{KM}) where {K, T, KM}
     sp_mixed = StateSpace{CartesianIndex{KM}, T}()
     for i in eachindex(sp_fine.states)
         t     = Tuple(sp_fine.states[i])
         p     = sp_fine.probs[i]
-        mt    = _mixed_tuple(t, mask, Val(KM))
+        mt    = _mixed_tuple(t, levels, Val(KM))
         ms    = CartesianIndex(mt)
         idx   = get(sp_mixed.index, ms, 0)
         if idx == 0
@@ -459,35 +464,30 @@ function _partial_restrict_val(sp_fine::StateSpace{CartesianIndex{K}, T},
 end
 
 """
-    partial_prolong(sp_mixed, mask, ::Val{K}; weight_tol, binom_tol)
+    partial_prolong(sp_mixed, levels, ::Val{K}; weight_tol, binom_tol)
         -> StateSpace{CartesianIndex{K}, T}
 
 Partial prolongation: expand a mixed-dimension state space back to K fine voxels.
 
-  - mask[j] = false → fine pair: both dimensions copied through as-is
-  - mask[j] = true  → coarse pair: nc_j split via Binomial(nc_j, 1/2)
+  - levels[j] = 0 → fine pair: both dimensions copied through as-is
+  - levels[j] = 1 → pair-coarse: nc_j split via Binomial(nc_j, 1/2)
+  - levels[j] = 2 → quad-coarse: ñ split via two nested Binomials
+                    (ñ → two pair totals → four fine voxels)
 
 `weight_tol` prunes states with accumulated probability below threshold.
-`binom_tol`  prunes per-pair Binomial fractions below threshold (avoids
- silent mid-recursion truncation for large nc_j).
+`binom_tol`  prunes per-pair Binomial fractions below threshold.
 """
 function partial_prolong(sp_mixed::StateSpace{CartesianIndex{KM}, T},
-                          mask::BitVector,
+                          levels::Vector{Int},
                           ::Val{K};
                           weight_tol::Float64 = 1e-14,
                           binom_tol::Float64  = 0.0) where {KM, K, T}
     iseven(K) || error("K=$K must be even")
     n_pairs = K ÷ 2
-    length(mask) == n_pairs || error("mask length $(length(mask)) ≠ K/2=$n_pairs")
-    KM == K - sum(mask) || error("KM=$KM ≠ K - sum(mask) = $(K - sum(mask))")
+    length(levels) == n_pairs || error("levels length $(length(levels)) ≠ K/2=$n_pairs")
+    KM == _mixed_dim(levels) || error("KM=$KM ≠ _mixed_dim(levels) = $(_mixed_dim(levels))")
 
-    # Starting index in the mixed tuple for each pair
-    mixed_offsets = Vector{Int}(undef, n_pairs)
-    pos = 1
-    for j in 1:n_pairs
-        mixed_offsets[j] = pos
-        pos += mask[j] ? 1 : 2
-    end
+    mixed_offsets = _mixed_offsets(levels)
 
     sp_fine  = StateSpace{CartesianIndex{K}, T}()
     fine_buf = zeros(Int, K)
@@ -496,7 +496,7 @@ function partial_prolong(sp_mixed::StateSpace{CartesianIndex{KM}, T},
         prob = sp_mixed.probs[i]
         prob > weight_tol || continue
         t_mixed = Tuple(sp_mixed.states[i])
-        _partial_prolong_recurse!(sp_fine, t_mixed, mask, mixed_offsets,
+        _partial_prolong_recurse!(sp_fine, t_mixed, levels, mixed_offsets,
                                    prob, fine_buf, 1, n_pairs, weight_tol, binom_tol)
     end
 
@@ -505,7 +505,7 @@ end
 
 function _partial_prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
                                     t_mixed::NTuple{KM, Int},
-                                    mask::BitVector,
+                                    levels::Vector{Int},
                                     mixed_offsets::Vector{Int},
                                     weight::T,
                                     fine_buf::Vector{Int},
@@ -527,16 +527,17 @@ function _partial_prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
     mp = mixed_offsets[pair_idx]
     k1 = 2*pair_idx - 1
     k2 = 2*pair_idx
+    l  = levels[pair_idx]
 
-    if !mask[pair_idx]
+    if l == 0
         # Fine pair: both dims pass through unchanged
         fine_buf[k1] = t_mixed[mp]
         fine_buf[k2] = t_mixed[mp+1]
-        _partial_prolong_recurse!(sp_fine, t_mixed, mask, mixed_offsets,
+        _partial_prolong_recurse!(sp_fine, t_mixed, levels, mixed_offsets,
                                    weight, fine_buf, pair_idx+1, n_pairs,
                                    weight_tol, binom_tol)
-    else
-        # Coarse pair: enumerate Binomial(nc, 1/2) splits
+    elseif l == 1
+        # Level-1: Binomial(nc, 1/2) split
         nj         = t_mixed[mp]
         log_half_n = -nj * log(2.0)
         for m in 0:nj
@@ -548,81 +549,432 @@ function _partial_prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
             binom_weight > weight_tol || continue
             fine_buf[k1] = m
             fine_buf[k2] = nj - m
-            _partial_prolong_recurse!(sp_fine, t_mixed, mask, mixed_offsets,
+            _partial_prolong_recurse!(sp_fine, t_mixed, levels, mixed_offsets,
                                        binom_weight, fine_buf, pair_idx+1, n_pairs,
                                        weight_tol, binom_tol)
+        end
+    else
+        # Level-2: quad total → two pair totals → four fine voxels (two nested Binomials)
+        nq          = t_mixed[mp]  # quad total (shared by pairs j and j+1)
+        k3          = 2*(pair_idx+1) - 1
+        k4          = 2*(pair_idx+1)
+        log_half_nq = -nq * log(2.0)
+        for nb in 0:nq
+            # Outer split: Binomial(nq, 1/2) → (nb, nq-nb) pair totals
+            log_bc_outer = (sum(log(float(i)) for i in (nq-nb+1):nq; init=0.0) -
+                            sum(log(float(i)) for i in 1:nb;          init=0.0))
+            bf_outer = exp(log_half_nq + log_bc_outer)
+            bf_outer > binom_tol  || continue
+            w_outer  = weight * bf_outer
+            w_outer  > weight_tol || continue
+            nb2      = nq - nb
+            log_half_nb  = -nb  * log(2.0)
+            log_half_nb2 = -nb2 * log(2.0)
+            for m1 in 0:nb
+                # Inner split for pair j: Binomial(nb, 1/2)
+                log_bc1 = (sum(log(float(i)) for i in (nb-m1+1):nb; init=0.0) -
+                           sum(log(float(i)) for i in 1:m1;          init=0.0))
+                bf1  = exp(log_half_nb + log_bc1)
+                bf1  > binom_tol  || continue
+                w1   = w_outer * bf1
+                w1   > weight_tol || continue
+                fine_buf[k1] = m1; fine_buf[k2] = nb - m1
+                for m2 in 0:nb2
+                    # Inner split for pair j+1: Binomial(nb2, 1/2)
+                    log_bc2 = (sum(log(float(i)) for i in (nb2-m2+1):nb2; init=0.0) -
+                               sum(log(float(i)) for i in 1:m2;            init=0.0))
+                    bf2  = exp(log_half_nb2 + log_bc2)
+                    bf2  > binom_tol  || continue
+                    w2   = w1 * bf2
+                    w2   > weight_tol || continue
+                    fine_buf[k3] = m2; fine_buf[k4] = nb2 - m2
+                    _partial_prolong_recurse!(sp_fine, t_mixed, levels, mixed_offsets,
+                                               w2, fine_buf, pair_idx+2, n_pairs,
+                                               weight_tol, binom_tol)
+                end
+            end
         end
     end
 end
 
 """
-    select_coarsening_mask(sp, model, grid, prev_mask;
-                           α_lo, α_hi, φ_lo, φ_hi) -> BitVector
+    select_coarsening_mask(sp, model, grid, prev_mask; halo=1) -> Vector{Int}
 
-Hysteretic coarsening-mask update based on pair admissibility diagnostics.
+Compute a level vector using the argmax-α + halo criterion:
 
-Two independent bottleneck criteria are combined:
+  1. Reconstruct voxel means μ from the state.
+  2. Compute α_j = |μ[2j-1] − μ[2j]| / (μ[2j-1] + μ[2j]) for all blocks j.
+  3. Keep the most-imbalanced block j* and its ±halo neighbors fine (level 0);
+     merge everything else (level 1).
 
-  1. Asymmetry  α_eff[j] = max(α_intra[j], β_left[j], β_right[j])
-       α_intra[j]  = |E[n_{2j-1}] − E[n_{2j}]| / (E[n_{2j-1}] + E[n_{2j}])
-       β_right[j]  = |E[n_{2j}]   − E[n_{2j+1}]| / (E[n_{2j}] + E[n_{2j+1}])  (j < n_pairs)
-       β_left[j]   = β_right[j-1]                                                (j > 1)
-
-     Including inter-pair gradients ensures both pairs that touch an active
-     pair-boundary front are forced fine, making refinement
-     partition-independent.
-
-  2. Per-molecule flux φ_norm[j]: low-count bottleneck guard (unchanged).
-
-Decision rule (hysteresis):
-  α_eff[j] > α_hi  OR  φ_norm[j] > φ_hi  →  mask[j] = false  (force fine)
-  α_eff[j] < α_lo  AND φ_norm[j] < φ_lo  →  mask[j] = true   (coarsen)
-  otherwise                               →  keep prev_mask[j]
-
-`prev_mask` is the mask from the previous time step.  Pass `nothing` to
-initialise (treated as all-coarsenable).
-
-Defaults: α_lo=0.10, α_hi=0.25, φ_lo=1.5, φ_hi=3.0.
+`prev_mask` is accepted for interface compatibility but not used.
 """
 function select_coarsening_mask(sp::StateSpace{CartesianIndex{K}, T},
                                  model::RDMEModel1D,
                                  grid::VoxelGrid,
-                                 prev_mask::Union{BitVector, Nothing} = nothing;
-                                 α_lo::Float64 = 0.10,
-                                 α_hi::Float64 = 0.25,
-                                 φ_lo::Float64 = 1.5,
-                                 φ_hi::Float64 = 3.0) where {K, T}
+                                 prev_levels::Union{Vector{Int}, Nothing} = nothing;
+                                 halo::Int = 1) where {K, T}
     @assert iseven(K)
     n_pairs = K ÷ 2
-    α, φ_norm = pair_admissibility(sp, model, grid)
 
-    # Voxel means (needed for inter-pair boundary gradients)
+    # Voxel means
     μ = zeros(K)
     for (i, s) in enumerate(sp.states)
         t = Tuple(s); p = sp.probs[i]
         for k in 1:K; μ[k] += p * t[k]; end
     end
 
-    # β[j] = asymmetry across the boundary between pair j and pair j+1
-    # (right boundary of pair j = left boundary of pair j+1)
-    β = zeros(n_pairs - 1)
-    for j in 1:n_pairs-1
-        total = μ[2j] + μ[2j+1]
-        β[j] = total > 0.0 ? abs(μ[2j] - μ[2j+1]) / total : 0.0
-    end
+    # α_j: within-block imbalance
+    α = [begin tot = μ[2j-1] + μ[2j]; tot > 0.0 ? abs(μ[2j-1] - μ[2j]) / tot : 0.0 end
+         for j in 1:n_pairs]
 
-    mask = isnothing(prev_mask) ? trues(n_pairs) : copy(prev_mask)
-    for j in 1:n_pairs
-        β_left  = j > 1      ? β[j-1] : 0.0
-        β_right = j < n_pairs ? β[j]   : 0.0
-        α_eff   = max(α[j], β_left, β_right)
+    # Fine window: most imbalanced block ± halo; everything else merged.
+    j_hot   = argmax(α)
+    fine_lo = max(1, j_hot - halo)
+    fine_hi = min(n_pairs, j_hot + halo)
+    [fine_lo <= j <= fine_hi ? 0 : 1 for j in 1:n_pairs]
+end
 
-        if α_eff > α_hi || φ_norm[j] > φ_hi
-            mask[j] = false   # clearly inadmissible → force fine
-        elseif α_eff < α_lo && φ_norm[j] < φ_lo
-            mask[j] = true    # clearly admissible  → coarsen
+# ─── mixed-state mask selection and adaptation ───────────────────────────────
+
+"""
+    _mixed_dim(levels) -> Int
+
+Number of coordinates in the mixed-resolution state tuple for a given level vector.
+  level 0 (fine):       2 coords per pair
+  level 1 (pair-coarse): 1 coord per pair
+  level 2 (quad-coarse): 1 coord per *two* consecutive pairs (paired at j, j+1)
+"""
+function _mixed_dim(levels::Vector{Int})
+    n = length(levels)
+    dim = 0
+    j = 1
+    while j <= n
+        l = levels[j]
+        if l == 0;     dim += 2; j += 1
+        elseif l == 1; dim += 1; j += 1
+        else;          dim += 1; j += 2   # level-2: two pairs → one quad coord
         end
-        # else: keep prev_mask[j] (hysteresis band)
     end
-    mask
+    dim
+end
+
+function _mixed_offsets(levels::Vector{Int})
+    n_pairs = length(levels)
+    offsets = Vector{Int}(undef, n_pairs)
+    pos = 1
+    j = 1
+    while j <= n_pairs
+        l = levels[j]
+        if l == 0
+            offsets[j] = pos; pos += 2; j += 1
+        elseif l == 1
+            offsets[j] = pos; pos += 1; j += 1
+        else  # level 2: pairs j and j+1 share one quad coordinate
+            offsets[j] = pos; offsets[j+1] = pos; pos += 1; j += 2
+        end
+    end
+    offsets
+end
+
+"""
+    select_coarsening_mask_mixed(sp_mixed, levels, model, fine_grid; halo) -> Vector{Int}
+
+Compute a new level vector for the mixed-resolution state using a simple
+argmax-α + halo criterion:
+
+  1. Reconstruct voxel means μ from the mixed state.
+  2. Compute α_j = |μ[2j-1] - μ[2j]| / (μ[2j-1] + μ[2j]) for all blocks j.
+  3. Keep the most-imbalanced block j* and its ±halo neighbors fine (level 0);
+     merge everything else (level 1).
+
+This is the complete criterion — no β, no flux guard, no hysteresis thresholds.
+"""
+function select_coarsening_mask_mixed(
+    sp_mixed::StateSpace{CartesianIndex{KM}, T},
+    levels::Vector{Int},
+    model::RDMEModel1D,
+    fine_grid::VoxelGrid;
+    halo::Int = 1,
+) where {KM, T}
+    n_pairs = length(levels)
+    K       = 2 * n_pairs
+    KM == _mixed_dim(levels) || error("KM=$KM inconsistent with levels (expected $(_mixed_dim(levels)))")
+
+    old_off = _mixed_offsets(levels)
+
+    # Reconstruct fine voxel means from mixed state.
+    # Level-1: μ[2j-1] = μ[2j] = E[n̄_j]/2
+    μ = zeros(K)
+    for (i, s) in enumerate(sp_mixed.states)
+        t = Tuple(s); p = sp_mixed.probs[i]
+        j = 1
+        while j <= n_pairs
+            op = old_off[j]
+            l  = levels[j]
+            if l == 0
+                μ[2j-1] += p * t[op]; μ[2j] += p * t[op+1]; j += 1
+            else  # level 1: both voxels share the total equally
+                h = p * t[op] / 2; μ[2j-1] += h; μ[2j] += h; j += 1
+            end
+        end
+    end
+
+    # α_j: within-block imbalance for all blocks.
+    α = [begin tot = μ[2j-1] + μ[2j]; tot > 0.0 ? abs(μ[2j-1] - μ[2j]) / tot : 0.0 end
+         for j in 1:n_pairs]
+
+    # Fine window: most imbalanced block ± halo; everything else merged.
+    j_hot   = argmax(α)
+    fine_lo = max(1, j_hot - halo)
+    fine_hi = min(n_pairs, j_hot + halo)
+    [fine_lo <= j <= fine_hi ? 0 : 1 for j in 1:n_pairs]
+end
+
+"""
+    adapt_mixed_state(sp_mixed, old_mask, new_mask, ::Val{K}; weight_tol, binom_tol)
+        -> StateSpace{CartesianIndex{KM_new}, T}
+
+Transition a mixed-resolution state from `old_mask` to `new_mask` without
+materialising the full fine grid.
+
+For each pair:
+  - fine → fine (mask unchanged False):     copy both dimensions
+  - coarse → coarse (mask unchanged True):  copy the coarse count
+  - fine → coarse:                          marginalize (sum the two fine dims)
+  - coarse → fine:                          Binomial(n̄, 1/2) expansion
+
+Only pairs that change status trigger any state-space growth.  Pairs that
+remain coarse are never expanded.
+"""
+function adapt_mixed_state(
+    sp_mixed::StateSpace{CartesianIndex{KM_old}, T},
+    old_levels::Vector{Int},
+    new_levels::Vector{Int},
+    ::Val{K};
+    weight_tol::Float64    = 1e-14,
+    binom_tol::Float64     = 1e-6,
+    binom_n_sigma::Float64 = Inf,
+) where {KM_old, T, K}
+    n_pairs = K ÷ 2
+    length(old_levels) == n_pairs || error("old_levels length mismatch")
+    length(new_levels) == n_pairs || error("new_levels length mismatch")
+    KM_new = _mixed_dim(new_levels)
+    _adapt_mixed_val(sp_mixed, old_levels, new_levels, Val(K), Val(KM_new);
+                     weight_tol, binom_tol, binom_n_sigma)
+end
+
+function _adapt_mixed_val(
+    sp_mixed::StateSpace{CartesianIndex{KM_old}, T},
+    old_levels::Vector{Int},
+    new_levels::Vector{Int},
+    ::Val{K},
+    ::Val{KM_new};
+    weight_tol::Float64,
+    binom_tol::Float64,
+    binom_n_sigma::Float64,
+) where {KM_old, T, K, KM_new}
+    n_pairs = K ÷ 2
+    old_off = _mixed_offsets(old_levels)
+    new_off = _mixed_offsets(new_levels)
+    sp_new  = StateSpace{CartesianIndex{KM_new}, T}()
+    new_buf = zeros(Int, KM_new)
+
+    for i in eachindex(sp_mixed.states)
+        prob = sp_mixed.probs[i]
+        prob > weight_tol || continue
+        t_old = Tuple(sp_mixed.states[i])
+        _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                               new_buf, 1, n_pairs, T(prob), weight_tol, binom_tol,
+                               binom_n_sigma)
+    end
+    sp_new
+end
+
+# Helper: log-space Binomial coefficient
+@inline function _log_binom_frac(n::Int, m::Int)
+    exp(-n * log(2.0) +
+        sum(log(float(i)) for i in (n-m+1):n; init=0.0) -
+        sum(log(float(i)) for i in 1:m;        init=0.0))
+end
+
+function _adapt_mixed_recurse!(
+    sp_new::StateSpace{CartesianIndex{KM_new}, T},
+    t_old::NTuple{KM_old, Int},
+    old_levels::Vector{Int},
+    new_levels::Vector{Int},
+    old_off::Vector{Int},
+    new_off::Vector{Int},
+    new_buf::Vector{Int},
+    pair_idx::Int,
+    n_pairs::Int,
+    weight::T,
+    weight_tol::Float64,
+    binom_tol::Float64,
+    binom_n_sigma::Float64,
+) where {KM_old, KM_new, T}
+    if pair_idx > n_pairs
+        weight > weight_tol || return
+        t_new = CartesianIndex(NTuple{KM_new, Int}(new_buf))
+        idx = get(sp_new.index, t_new, 0)
+        if idx == 0; add_state!(sp_new, t_new, weight)
+        else;        sp_new.probs[idx] += weight; end
+        return
+    end
+
+    op  = old_off[pair_idx]
+    np  = new_off[pair_idx]
+    old = old_levels[pair_idx]
+    nw  = new_levels[pair_idx]
+
+    # ── level-2 group: process pairs j and j+1 together ─────────────────────
+    if old == 2 || nw == 2
+        op2 = old == 2 ? op : old_off[pair_idx+1]   # second pair offset (same as op if old==2)
+        np2 = nw  == 2 ? np : new_off[pair_idx+1]
+
+        # Determine the quad total and per-pair info for old state
+        if old == 2
+            nq = t_old[op]   # single quad coord
+        elseif old == 1
+            nq = t_old[op] + t_old[op2]   # two pair totals
+        else  # old == 0: two fine pairs
+            nq = t_old[op] + t_old[op+1] + t_old[op2] + t_old[op2+1]
+        end
+
+        if nw == 2
+            # Target is quad-coarse: just store the quad total
+            new_buf[np] = nq
+            _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                                   new_buf, pair_idx+2, n_pairs, weight,
+                                   weight_tol, binom_tol, binom_n_sigma)
+        elseif nw == 1
+            # Quad → two pair totals: Binomial(nq, 1/2) split
+            for nb in 0:nq
+                frac = _log_binom_frac(nq, nb)
+                frac > binom_tol || continue
+                w2 = weight * frac; w2 > weight_tol || continue
+                new_buf[np]  = nb
+                new_buf[np2] = nq - nb
+                _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                                       new_buf, pair_idx+2, n_pairs, w2,
+                                       weight_tol, binom_tol, binom_n_sigma)
+            end
+        else
+            # Quad → four fine voxels: two nested Binomials (same as level-2 prolong)
+            for nb in 0:nq
+                f1 = _log_binom_frac(nq, nb); f1 > binom_tol || continue
+                w1 = weight * f1;               w1 > weight_tol || continue
+                nb2 = nq - nb
+                for m1 in 0:nb
+                    f2 = _log_binom_frac(nb, m1); f2 > binom_tol || continue
+                    w2 = w1 * f2;                  w2 > weight_tol || continue
+                    new_buf[np] = m1; new_buf[np+1] = nb - m1
+                    for m2 in 0:nb2
+                        f3 = _log_binom_frac(nb2, m2); f3 > binom_tol || continue
+                        w3 = w2 * f3;                    w3 > weight_tol || continue
+                        new_buf[np2] = m2; new_buf[np2+1] = nb2 - m2
+                        _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                                               new_buf, pair_idx+2, n_pairs, w3,
+                                               weight_tol, binom_tol, binom_n_sigma)
+                    end
+                end
+            end
+        end
+        return
+    end
+
+    # ── single-pair transitions (old, nw ∈ {0, 1}) ──────────────────────────
+    if old == 0 && nw == 0
+        new_buf[np] = t_old[op]; new_buf[np+1] = t_old[op+1]
+        _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                               new_buf, pair_idx+1, n_pairs, weight,
+                               weight_tol, binom_tol, binom_n_sigma)
+    elseif old == 1 && nw == 1
+        new_buf[np] = t_old[op]
+        _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                               new_buf, pair_idx+1, n_pairs, weight,
+                               weight_tol, binom_tol, binom_n_sigma)
+    elseif old == 0 && nw == 1
+        new_buf[np] = t_old[op] + t_old[op+1]
+        _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                               new_buf, pair_idx+1, n_pairs, weight,
+                               weight_tol, binom_tol, binom_n_sigma)
+    else  # old == 1, nw == 0: Binomial(nc, 1/2) expansion
+        nc = t_old[op]
+        σ  = sqrt(nc) / 2.0
+        m_lo = isinf(binom_n_sigma) ? 0  : max(0,  round(Int, nc/2 - binom_n_sigma*σ))
+        m_hi = isinf(binom_n_sigma) ? nc : min(nc, round(Int, nc/2 + binom_n_sigma*σ))
+        for m in m_lo:m_hi
+            frac = _log_binom_frac(nc, m)
+            frac > binom_tol || continue
+            w2 = weight * frac; w2 > weight_tol || continue
+            new_buf[np] = m; new_buf[np+1] = nc - m
+            _adapt_mixed_recurse!(sp_new, t_old, old_levels, new_levels, old_off, new_off,
+                                   new_buf, pair_idx+1, n_pairs, w2,
+                                   weight_tol, binom_tol, binom_n_sigma)
+        end
+    end
+end
+
+"""
+    mixed_coord_bounds(sp, levels; n_max_per_voxel, c_sigma) -> Vector{Int}
+
+Compute per-coordinate upper bounds for the mixed-resolution FSP state space.
+
+Each coordinate k gets an individual bound:
+
+    bound[k] = max(r[k] * n_max_per_voxel,  ceil(μ[k] + c_sigma * σ[k]))
+
+where:
+  - `r[k]` is the voxel multiplicity of coordinate k:
+       1  for level-0 (fine) coordinates,
+       2  for level-1 (pair-coarse) coordinates,
+       4  for level-2 (quad-coarse) coordinates.
+  - `μ[k]` and `σ[k]` are the marginal mean and standard deviation of
+    coordinate k under the current distribution `sp`.
+  - `n_max_per_voxel` is the per-fine-voxel floor, so bulk level-1 and
+    level-2 coordinates automatically receive proportionally larger floors.
+  - `c_sigma` controls the adaptive slack above the mean.
+
+Setting `c_sigma = 0.0` reduces to purely level-scaled floors.
+The `n_max_per_voxel` floor ensures the bound never falls below the physical
+support even when the distribution is very narrow (e.g., just after IC).
+"""
+function mixed_coord_bounds(
+    sp    ::StateSpace{CartesianIndex{KM}, Float64},
+    levels::Vector{Int};
+    n_max_per_voxel::Int    = 200,
+    c_sigma        ::Float64 = 6.0,
+) where {KM}
+    off = _mixed_offsets(levels)
+
+    # marginal mean and E[n²] for every mixed coordinate
+    μ  = zeros(KM)
+    μ2 = zeros(KM)
+    for (i, s) in enumerate(sp.states)
+        t = Tuple(s); p = sp.probs[i]
+        for k in 1:KM
+            μ[k]  += p * t[k]
+            μ2[k] += p * t[k] * t[k]
+        end
+    end
+    σ = sqrt.(max.(μ2 .- μ .* μ, 0.0))
+
+    # voxel multiplicity r[k] for each mixed coordinate
+    r = ones(Int, KM)
+    j = 1
+    while j <= length(levels)
+        l  = levels[j]
+        op = off[j]
+        if l == 0
+            r[op] = 1; r[op+1] = 1; j += 1
+        elseif l == 1
+            r[op] = 2; j += 1
+        else   # l == 2: pairs j and j+1 share coord op
+            r[op] = 4; j += 2
+        end
+    end
+
+    [max(r[k] * n_max_per_voxel, ceil(Int, μ[k] + c_sigma * σ[k] + 1))
+     for k in 1:KM]
 end

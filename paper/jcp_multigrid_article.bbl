@@ -1,0 +1,82 @@
+\begin{thebibliography}{11}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Briggs et~al.(2000)Briggs, Henson, and McCormick]{Briggs2000}
+William~L Briggs, Van~Emden Henson, and Steve~F McCormick.
+\newblock \emph{A Multigrid Tutorial}.
+\newblock SIAM, Philadelphia, 2nd edition, 2000.
+
+\bibitem[Buchholz(1994)]{Buchholz1994}
+Peter Buchholz.
+\newblock Exact and ordinary lumpability in finite markov chains.
+\newblock \emph{Journal of Applied Probability}, 31\penalty0 (1):\penalty0
+  59--75, 1994.
+
+\bibitem[Cao and Petzold(2008)]{CAO20083472}
+Yang Cao and Linda Petzold.
+\newblock Slow-scale tau-leaping method.
+\newblock \emph{Computer Methods in Applied Mechanics and Engineering},
+  197\penalty0 (43):\penalty0 3472--3479, 2008.
+\newblock ISSN 0045-7825.
+\newblock \doi{https://doi.org/10.1016/j.cma.2008.02.024}.
+\newblock URL
+  \url{https://www.sciencedirect.com/science/article/pii/S0045782508000959}.
+\newblock Stochastic Modeling of Multiscale and Multiphysics Problems.
+
+\bibitem[Cao et~al.(2016)Cao, Liang, Pettigrew, and Kou]{Cao2016}
+Youfang Cao, Jie Liang, Derrick Pettigrew, and S~Kou.
+\newblock Adaptive aggregation of state-space models for the chemical master
+  equation.
+\newblock \emph{Multiscale Modeling \& Simulation}, 14\penalty0 (1):\penalty0
+  28--48, 2016.
+
+\bibitem[Erban et~al.(2007)Erban, Chapman, and Maini]{Erban2009}
+Radek Erban, Jonathan Chapman, and Philip Maini.
+\newblock A practical guide to stochastic simulations of reaction-diffusion
+  processes.
+\newblock \emph{arXiv preprint arXiv:0704.1908}, 2007.
+
+\bibitem[Gillespie(1977)]{Gillespie1977}
+Daniel~T Gillespie.
+\newblock Exact stochastic simulation of coupled chemical reactions.
+\newblock \emph{The Journal of Physical Chemistry}, 81\penalty0 (25):\penalty0
+  2340--2361, 1977.
+
+\bibitem[Kemeny and Snell(1960)]{kemeny_snell_1960}
+John~G Kemeny and J~Laurie Snell.
+\newblock \emph{Finite Markov Chains}.
+\newblock Van Nostrand, Princeton, NJ, 1960.
+
+\bibitem[Munsky and Khammash(2006)]{Munsky2006}
+Brian Munsky and Mustafa Khammash.
+\newblock Finite state projection for the solution of the chemical master
+  equation.
+\newblock \emph{The Journal of Chemical Physics}, 124\penalty0 (4):\penalty0
+  044104, 2006.
+
+\bibitem[Peleš et~al.(2006)Peleš, Munsky, and Khammash]{peles}
+Slaven Peleš, Brian Munsky, and Mustafa Khammash.
+\newblock Reduction and solution of the chemical master equation using time
+  scale separation and finite state projection.
+\newblock \emph{The Journal of Chemical Physics}, 125\penalty0 (20):\penalty0
+  204104, 11 2006.
+\newblock ISSN 0021-9606.
+\newblock \doi{10.1063/1.2397685}.
+\newblock URL \url{https://doi.org/10.1063/1.2397685}.
+
+\bibitem[Simon and Ando(1961)]{Simon1961}
+Herbert~A Simon and Albert Ando.
+\newblock Aggregation of variables in dynamic systems.
+\newblock \emph{Econometrica}, 29\penalty0 (2):\penalty0 111--138, 1961.
+
+\bibitem[Trottenberg et~al.(2001)Trottenberg, Oosterlee, and
+  Sch{\"u}ller]{Trottenberg2001}
+Ulrich Trottenberg, Cornelis~W Oosterlee, and Anton Sch{\"u}ller.
+\newblock \emph{Multigrid}.
+\newblock Academic Press, London, 2001.
+
+\end{thebibliography}

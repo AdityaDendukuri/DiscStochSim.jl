@@ -339,53 +339,54 @@ end
 # ─── adaptive mixed-grid Schlögl system ──────────────────────────────────────
 
 """
-    build_schlogl_mixed_system(model, fine_grid, mask)
+    build_schlogl_mixed_system(model, fine_grid, levels)
         -> DiscreteStochasticSystem{CartesianIndex{K_mixed}}
 
-Build the Schlögl RDME on a mixed-resolution grid defined by a pair-level
-coarsening mask.
+Build the Schlögl RDME on a multi-level mixed-resolution grid.
 
-For each pair j of the K-voxel fine grid:
-  - mask[j] = false → pair kept fine: two voxels with fine-rate reactions and
-    intra-pair diffusion at d_fine = D/h².
-  - mask[j] = true  → pair coarsened: single voxel nc_j with Binomial-corrected
-    reaction rates (as in `build_schlogl_coarse_system`).
+For each pair j:
+  - levels[j] = 0 → fine: two voxels, fine reactions + intra-pair diffusion
+  - levels[j] = 1 → pair-coarse: one voxel nc_j, Binomial-corrected rates (r=2)
+  - levels[j] = 2 → quad-coarse: levels[j] and levels[j+1] must both be 2;
+                    one voxel ñ representing 4 fine voxels, Binomial-corrected
+                    rates (r=4)
 
-**Inter-pair diffusion** (boundary between pairs j and j+1) uses first-moment
-closure at any coarse boundary: propensity = d_fine × nc/2 for a coarse voxel,
-d_fine × n for a fine voxel.
+**Inter-boundary diffusion** uses first-moment closure:
+  fine voxel:      propensity = d_fine × n
+  level-1 voxel:   propensity = d_fine × nc / 2
+  level-2 voxel:   propensity = d_fine × ñ  / 4
 
-Output dimension: K_mixed = K - sum(mask).
+**Level-2 coarse propensities** (Binomial(ñ, 1/4) per fine voxel, r = 4):
+  Production:     4 c3
+  Death:          c4 ñ
+  Autocatalysis:  c1 ñ(ñ-1) / 8
+  Reverse:        c2 ñ(ñ-1)(ñ-2) / 96
 """
 function build_schlogl_mixed_system(model::SchloglModel1D,
                                      fine_grid::VoxelGrid,
-                                     mask::BitVector)
+                                     levels::Vector{Int})
     K = fine_grid.n_voxels
     iseven(K) || error("K=$K must be even")
     n_pairs = K ÷ 2
-    length(mask) == n_pairs || error("mask length $(length(mask)) ≠ K/2=$n_pairs")
+    length(levels) == n_pairs || error("levels length $(length(levels)) ≠ K/2=$n_pairs")
 
     d_fine = diffusion_rate(model.D, fine_grid)
     c1, c2, c3, c4 = model.c1, model.c2, model.c3, model.c4
 
-    KM = K - sum(mask)
-
-    # Starting position of each pair in the mixed tuple
-    mixed_offsets = Vector{Int}(undef, n_pairs)
-    pos = 1
-    for j in 1:n_pairs
-        mixed_offsets[j] = pos
-        pos += mask[j] ? 1 : 2
-    end
+    KM            = _mixed_dim(levels)
+    mixed_offsets = _mixed_offsets(levels)
 
     stoichs      = CartesianIndex{KM}[]
     propensities = Function[]
 
     # ── per-voxel reactions ───────────────────────────────────────────────────
-    for j in 1:n_pairs
+    j = 1
+    while j <= n_pairs
         mp = mixed_offsets[j]
-        if !mask[j]
-            # Fine pair: two independent fine voxels at mp and mp+1
+        l  = levels[j]
+
+        if l == 0
+            # Fine pair: two independent fine voxels
             for p in (mp, mp+1)
                 let p = p
                     ep = _e(p, Val(KM))
@@ -397,14 +398,15 @@ function build_schlogl_mixed_system(model::SchloglModel1D,
                         n=Tuple(x)[p]; c2*max(0,n*(n-1)*(n-2))/6 end)
                 end
             end
-            # Intra-pair diffusion
             let p=mp, p1=mp+1
                 ep=_e(p,Val(KM)); ep1=_e(p1,Val(KM))
                 push!(stoichs,-ep+ep1); push!(propensities,(x,rv,t)->d_fine*max(0,Tuple(x)[p]))
                 push!(stoichs, ep-ep1); push!(propensities,(x,rv,t)->d_fine*max(0,Tuple(x)[p1]))
             end
-        else
-            # Coarse pair: one voxel nc at mp, Binomial-corrected rates
+            j += 1
+
+        elseif l == 1
+            # Level-1 pair: one coarse voxel nc, Binomial-corrected (r=2)
             let p = mp
                 ep = _e(p, Val(KM))
                 push!(stoichs,  ep); push!(propensities, (x,rv,t) -> 2*c3)
@@ -414,31 +416,60 @@ function build_schlogl_mixed_system(model::SchloglModel1D,
                 push!(stoichs, -ep); push!(propensities, (x,rv,t) -> begin
                     nc=Tuple(x)[p]; c2*max(0,nc*(nc-1)*(nc-2))/24 end)
             end
+            j += 1
+
+        else
+            # Level-2 quad: one coarse voxel ñ representing 4 fine voxels (r=4)
+            let p = mp
+                ep = _e(p, Val(KM))
+                push!(stoichs,  ep); push!(propensities, (x,rv,t) -> 4*c3)
+                push!(stoichs, -ep); push!(propensities, (x,rv,t) -> c4*max(0,Tuple(x)[p]))
+                push!(stoichs,  ep); push!(propensities, (x,rv,t) -> begin
+                    nq=Tuple(x)[p]; c1*max(0,nq*(nq-1))/8 end)
+                push!(stoichs, -ep); push!(propensities, (x,rv,t) -> begin
+                    nq=Tuple(x)[p]; c2*max(0,nq*(nq-1)*(nq-2))/96 end)
+            end
+            j += 2  # skip the paired level-2 entry
         end
     end
 
     # ── inter-pair diffusion ──────────────────────────────────────────────────
-    # Boundary between pair j (right side) and pair j+1 (left side).
-    # Fine side: propensity = d_fine * n.
-    # Coarse side: propensity = d_fine * nc/2  (first-moment closure).
-    for j in 1:n_pairs-1
-        p_r = mask[j] ? mixed_offsets[j] : mixed_offsets[j]+1   # rightmost of pair j
-        p_l = mixed_offsets[j+1]                                  # leftmost  of pair j+1
-        let p_r=p_r, p_l=p_l, fine_r=!mask[j], fine_l=!mask[j+1]
-            er=_e(p_r,Val(KM)); el=_e(p_l,Val(KM))
-            push!(stoichs, -er+el)
-            if fine_r
-                push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_r]))
-            else
-                push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_r])/2)
-            end
-            push!(stoichs, er-el)
-            if fine_l
-                push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_l]))
-            else
-                push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_l])/2)
-            end
+    # Iterate over boundaries between adjacent groups.
+    # For each boundary j | j+1, identify the rightmost coord of group j and
+    # leftmost coord of group j+1, and the effective voxel divisor for closure.
+    # Divisor: level-0 → 1, level-1 → 2, level-2 → 4.
+    j = 1
+    while j <= n_pairs
+        l = levels[j]
+        j_next = l == 2 ? j + 2 : j + 1   # index of next group
+        j_next > n_pairs && break
+
+        # Rightmost position and divisor for group j
+        if l == 0
+            p_r   = mixed_offsets[j] + 1   # second fine voxel
+            div_r = 1
+        elseif l == 1
+            p_r   = mixed_offsets[j]
+            div_r = 2
+        else  # level 2: the shared quad coord
+            p_r   = mixed_offsets[j]
+            div_r = 4
         end
+
+        # Leftmost position and divisor for group j_next
+        l_next = levels[j_next]
+        p_l    = mixed_offsets[j_next]
+        div_l  = l_next == 0 ? 1 : l_next == 1 ? 2 : 4
+
+        let p_r=p_r, p_l=p_l, div_r=div_r, div_l=div_l
+            er = _e(p_r, Val(KM)); el = _e(p_l, Val(KM))
+            push!(stoichs, -er+el)
+            push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_r])/div_r)
+            push!(stoichs,  er-el)
+            push!(propensities, (x,rv,t) -> d_fine*max(0,Tuple(x)[p_l])/div_l)
+        end
+
+        j = l == 2 ? j + 2 : j + 1
     end
 
     DiscreteStochasticSystem{CartesianIndex{KM}}(stoichs, propensities)

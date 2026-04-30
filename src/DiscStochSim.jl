@@ -48,8 +48,10 @@ export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
 export restrict, prolong, prolong_multiplicative, prolong_conditional, lumpability_ratio, per_molecule_flux, pair_admissibility, select_coarsening_mask, partial_restrict, partial_prolong
+export select_coarsening_mask_mixed, adapt_mixed_state, mixed_coord_bounds
+export _mixed_dim
 export two_level_vcycle, two_level_vcycle_schlogl, two_level_vcycle_schlogl_injection
-export two_level_vcycle_adaptive
+export two_level_vcycle_adaptive, two_level_step_mixed, MixedSolverCache
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
 
