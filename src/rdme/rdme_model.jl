@@ -143,6 +143,14 @@ function build_rdme_system(model::RDMEModel1D, grid::VoxelGrid)
     DiscreteStochasticSystem{CartesianIndex{K}}(stoichs, propensities)
 end
 
+"""
+    coarsen_model(model, r) -> model
+
+Scale model parameters for a grid coarsened by ratio `r = coarse_dx / fine_dx`.
+"""
+coarsen_model(m::RDMEModel1D, r::Real) = RDMEModel1D(m.D, m.birth_rate * r, m.death_rate)
+coarsen_model(m::SchloglModel1D, r::Real) = SchloglModel1D(m.D, m.c1 / r, m.c2 / r^2, m.c3 * r, m.c4)
+
 # ─── intra-coarse-pair diffusion system (smoother) ────────────────────────────
 
 """
@@ -565,4 +573,240 @@ function build_schlogl_coarse_system_dynamic(model::SchloglModel1D,
     end
 
     DiscreteStochasticSystem{CartesianIndex{K2}}(stoichs, propensities)
+end
+
+# ─── Two-species bottleneck RDME ──────────────────────────────────────────────
+
+"""
+    BottleneckModel1D
+
+1D two-species RDME:  ∅ →(k_prod) A →(k_AB) B →(k_deg) ∅  with diffusion.
+
+State type: `CartesianIndex{2K}` with interleaved layout
+`(nA_1, nB_1, nA_2, nB_2, …, nA_K, nB_K)` where `nA_k` / `nB_k` are the
+A / B molecule counts in voxel `k`.
+
+Analytical steady state (linear kinetics):
+  μ_A = k_prod / k_AB,  μ_B = k_prod / k_deg
+  P(state) = ∏_k Pois(μ_A)(nA_k) · Pois(μ_B)(nB_k)
+"""
+struct BottleneckModel1D
+    D_A::Float64
+    D_B::Float64
+    k_prod::Float64
+    k_AB::Float64
+    k_deg::Float64
+end
+
+coarsen_model(m::BottleneckModel1D, r::Real) =
+    BottleneckModel1D(m.D_A, m.D_B, m.k_prod * r, m.k_AB, m.k_deg)
+
+"""Boundary condition for 2-species RDME: all counts in [0, n_max]."""
+function bottleneck_bc(state::CartesianIndex{N}, n_max::Int) where {N}
+    all(c -> 0 ≤ c ≤ n_max, Tuple(state))
+end
+
+"""
+    build_bottleneck_system(model, grid) -> DiscreteStochasticSystem{CartesianIndex{2K}}
+
+Full RDME for the bottleneck model. State layout: interleaved `(nA_1, nB_1, nA_2, nB_2, …)`.
+"""
+function build_bottleneck_system(model::BottleneckModel1D, grid::VoxelGrid)
+    K  = grid.n_voxels
+    N  = 2 * K
+    dA = diffusion_rate(model.D_A, grid)
+    dB = diffusion_rate(model.D_B, grid)
+    k_prod, k_AB, k_deg = model.k_prod, model.k_AB, model.k_deg
+
+    stoichs      = CartesianIndex{N}[]
+    propensities = Function[]
+
+    for k in 1:K
+        let k = k
+            iA = 2k - 1
+            iB = 2k
+            eA = _e(iA, Val(N))
+            eB = _e(iB, Val(N))
+
+            push!(stoichs, eA);        push!(propensities, (x, rv, t) -> k_prod)
+            push!(stoichs, -eA + eB); push!(propensities, (x, rv, t) -> k_AB * max(0, Tuple(x)[iA]))
+            push!(stoichs, -eB);      push!(propensities, (x, rv, t) -> k_deg * max(0, Tuple(x)[iB]))
+        end
+    end
+
+    for k in 1:(K-1)
+        let k = k
+            iAk  = 2k - 1;  iAk1 = 2k + 1
+            iBk  = 2k;      iBk1 = 2k + 2
+            eAk  = _e(iAk,  Val(N));  eAk1 = _e(iAk1, Val(N))
+            eBk  = _e(iBk,  Val(N));  eBk1 = _e(iBk1, Val(N))
+
+            push!(stoichs, -eAk + eAk1); push!(propensities, (x, rv, t) -> dA * max(0, Tuple(x)[iAk]))
+            push!(stoichs,  eAk - eAk1); push!(propensities, (x, rv, t) -> dA * max(0, Tuple(x)[iAk1]))
+            push!(stoichs, -eBk + eBk1); push!(propensities, (x, rv, t) -> dB * max(0, Tuple(x)[iBk]))
+            push!(stoichs,  eBk - eBk1); push!(propensities, (x, rv, t) -> dB * max(0, Tuple(x)[iBk1]))
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{N}}(stoichs, propensities)
+end
+
+"""
+    build_intra_system_2s(model, fine_grid, coarse_grid) -> DiscreteStochasticSystem{CartesianIndex{2K}}
+
+Within-pair diffusion smoother for 2-species RDME.
+Intra-pair A and B diffusion only; excludes reactions and inter-pair diffusion.
+"""
+function build_intra_system_2s(model::BottleneckModel1D,
+                                fine_grid::VoxelGrid,
+                                coarse_grid::VoxelGrid)
+    K  = fine_grid.n_voxels
+    K2 = coarse_grid.n_voxels
+    @assert K == 2 * K2
+    N  = 2 * K
+    dA = diffusion_rate(model.D_A, fine_grid)
+    dB = diffusion_rate(model.D_B, fine_grid)
+
+    stoichs      = CartesianIndex{N}[]
+    propensities = Function[]
+
+    for j in 1:K2
+        let j = j
+            kL = 2j - 1;  kR = 2j
+            iAL = 2kL - 1;  iAR = 2kR - 1
+            iBL = 2kL;      iBR = 2kR
+            eAL = _e(iAL, Val(N));  eAR = _e(iAR, Val(N))
+            eBL = _e(iBL, Val(N));  eBR = _e(iBR, Val(N))
+
+            push!(stoichs, -eAL + eAR); push!(propensities, (x, rv, t) -> dA * max(0, Tuple(x)[iAL]))
+            push!(stoichs,  eAL - eAR); push!(propensities, (x, rv, t) -> dA * max(0, Tuple(x)[iAR]))
+            push!(stoichs, -eBL + eBR); push!(propensities, (x, rv, t) -> dB * max(0, Tuple(x)[iBL]))
+            push!(stoichs,  eBL - eBR); push!(propensities, (x, rv, t) -> dB * max(0, Tuple(x)[iBR]))
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{N}}(stoichs, propensities)
+end
+
+# ─── 2D two-species bottleneck RDME ──────────────────────────────────────────
+
+"""
+    build_bottleneck_system_2d(model, grid; source_voxels=nothing)
+        -> DiscreteStochasticSystem{CartesianIndex{2*K_x*K_y}}
+
+2D RDME for the bottleneck model on a Grid2D.
+State: CartesianIndex{2K} interleaved (nA_1,nB_1,...,nA_K,nB_K) with K=K_x*K_y,
+       linear index k=(i-1)*K_y+j for voxel (i,j).
+
+source_voxels: Set or Vector of linear voxel indices where ∅→A production occurs.
+               If nothing, production occurs in all voxels.
+"""
+function build_bottleneck_system_2d(model::BottleneckModel1D, grid::Grid2D;
+                                     source_voxels=nothing)
+    K_x, K_y = grid.K_x, grid.K_y
+    K  = K_x * K_y
+    N  = 2 * K
+    dA = diffusion_rate(model.D_A, grid)
+    dB = diffusion_rate(model.D_B, grid)
+    k_prod, k_AB, k_deg = model.k_prod, model.k_AB, model.k_deg
+
+    src = source_voxels === nothing ? (1:K) : source_voxels
+    src_set = Set(src)
+
+    stoichs      = CartesianIndex{N}[]
+    propensities = Function[]
+
+    # ── per-voxel reactions ──────────────────────────────────────────────────
+    for k in 1:K
+        let k = k
+            iA = 2k - 1; iB = 2k
+            eA = _e(iA, Val(N)); eB = _e(iB, Val(N))
+
+            if k in src_set
+                push!(stoichs, eA)
+                push!(propensities, (x, rv, t) -> k_prod)
+            end
+            push!(stoichs, -eA + eB)
+            push!(propensities, (x, rv, t) -> k_AB * max(0, Tuple(x)[iA]))
+            push!(stoichs, -eB)
+            push!(propensities, (x, rv, t) -> k_deg * max(0, Tuple(x)[iB]))
+        end
+    end
+
+    # ── 4-connected diffusion ────────────────────────────────────────────────
+    for i in 1:K_x, j in 1:K_y
+        let i=i, j=j
+            k = (i-1)*K_y + j
+            iAk = 2k-1; iBk = 2k
+            eAk = _e(iAk, Val(N)); eBk = _e(iBk, Val(N))
+
+            # Right neighbor (j+1)
+            if j < K_y
+                k2 = k + 1
+                iAk2=2k2-1; iBk2=2k2
+                eAk2=_e(iAk2, Val(N)); eBk2=_e(iBk2, Val(N))
+                push!(stoichs, -eAk+eAk2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iAk]))
+                push!(stoichs,  eAk-eAk2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iAk2]))
+                push!(stoichs, -eBk+eBk2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iBk]))
+                push!(stoichs,  eBk-eBk2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iBk2]))
+            end
+            # Down neighbor (i+1)
+            if i < K_x
+                k2 = k + K_y
+                iAk2=2k2-1; iBk2=2k2
+                eAk2=_e(iAk2, Val(N)); eBk2=_e(iBk2, Val(N))
+                push!(stoichs, -eAk+eAk2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iAk]))
+                push!(stoichs,  eAk-eAk2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iAk2]))
+                push!(stoichs, -eBk+eBk2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iBk]))
+                push!(stoichs,  eBk-eBk2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iBk2]))
+            end
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{N}}(stoichs, propensities)
+end
+
+"""
+    build_intra_system_2d(model, fine_grid, cmap)
+        -> DiscreteStochasticSystem{CartesianIndex{2*K}}
+
+Within-patch diffusion smoother for 2D 2-species RDME.
+Only includes diffusion between voxels within the same coarse cell.
+"""
+function build_intra_system_2d(model::BottleneckModel1D,
+                                fine_grid::Grid2D,
+                                cmap::CoarseningMap)
+    K  = n_voxels(fine_grid)
+    N  = 2K
+    dA = diffusion_rate(model.D_A, fine_grid)
+    dB = diffusion_rate(model.D_B, fine_grid)
+    K_y = fine_grid.K_y
+
+    # Build adjacency set: (k1,k2) are neighbors if |k1-k2|==1 or |k1-k2|==K_y AND same row check
+    stoichs      = CartesianIndex{N}[]
+    propensities = Function[]
+
+    for J in 1:cmap.n_coarse
+        patch = cmap.coarse_to_fine[J]
+        # Emit diffusion for each adjacent pair within the patch
+        for a in 1:length(patch), b in (a+1):length(patch)
+            k1, k2 = patch[a], patch[b]
+            # Check if k1 and k2 are spatially adjacent (horizontal or vertical)
+            i1, j1 = (k1-1) ÷ K_y + 1, (k1-1) % K_y + 1
+            i2, j2 = (k2-1) ÷ K_y + 1, (k2-1) % K_y + 1
+            adjacent = (i1==i2 && abs(j1-j2)==1) || (j1==j2 && abs(i1-i2)==1)
+            adjacent || continue
+            let k1=k1, k2=k2
+                iA1=2k1-1; iB1=2k1; iA2=2k2-1; iB2=2k2
+                eA1=_e(iA1,Val(N)); eA2=_e(iA2,Val(N))
+                eB1=_e(iB1,Val(N)); eB2=_e(iB2,Val(N))
+                push!(stoichs, -eA1+eA2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iA1]))
+                push!(stoichs,  eA1-eA2); push!(propensities, (x,rv,t)->dA*max(0,Tuple(x)[iA2]))
+                push!(stoichs, -eB1+eB2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iB1]))
+                push!(stoichs,  eB1-eB2); push!(propensities, (x,rv,t)->dB*max(0,Tuple(x)[iB2]))
+            end
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{N}}(stoichs, propensities)
 end

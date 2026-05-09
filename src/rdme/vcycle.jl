@@ -1,390 +1,49 @@
-"""
-    two_level_vcycle(sp_fine, model, fine_grid, coarse_grid, rates, t, dt; kwargs...)
-        -> StateSpace{CartesianIndex{K}, Float64}
+# ─── helpers ─────────────────────────────────────────────────────────────────
 
-Two-level multigrid V-cycle for the RDME (Algorithm 6.1 of the paper).
-
-Executes the following steps:
-
-  1. **Pre-smooth**: evolve only intra-coarse-pair diffusion for time τ_pre.
-     Brings within-pair distributions close to Binomial(n̄ⱼ, 1/2).
-
-  2. **Restrict**: marginalize fine → coarse  (𝓡 operator).
-     Saves p^{2h} = 𝓡 p̃^h (the restricted pre-smoothed distribution).
-
-  3. **Coarse expand** (optional, before solve): add FSP boundary states to the
-     coarse state space so probability can flow into them during the solve.
-
-  4. **Coarse solve**: evolve the full coarse-level RDME for time dt → p̃^{2h}.
-
-  5. **Prolongate correction**: compute the coarse correction δ^{2h} = p̃^{2h} - p^{2h}
-     and inject it into the fine level:
-         p^h_new = p̃^h + 𝓟(δ^{2h})
-     (Algorithm 6.1, step 4).  This is the key difference from the operator-splitting
-     variant: only the *correction* is prolongated, not the full coarse distribution.
-     The fine state space therefore grows only from the small leaked probability, not
-     from the entire (large) coarse support.
-
-  6. **Post-smooth**: re-equilibrate within-pair distributions for time τ_post.
-
-Arguments:
-- `sp_fine`      : fine-level StateSpace{CartesianIndex{K}, Float64}
-- `model`        : RDMEModel1D
-- `fine_grid`    : VoxelGrid (finest)
-- `coarse_grid`  : VoxelGrid (one level coarser, K/2 voxels)
-- `rates`        : rate parameter vector (passed through to propensities)
-- `t`            : current time
-- `dt`           : time step for the coarse solve
-
-Keyword arguments:
-- `τ_pre`             : pre-smoothing time (default 0.0 → skip pre-smooth)
-- `τ_post`            : post-smoothing time (default 0.0 → skip post-smooth)
-- `krylov_m`          : Krylov subspace dimension for expmv (default 30)
-- `weight_tol`        : minimum |δ| for a coarse-state correction to be prolongated
-- `binom_tol`         : drop per-pair Binomial fraction < tol (default 0.0 = keep all)
-- `expand_coarse`     : expand coarse FSP before coarse solve (default true)
-- `coarse_expand_depth` : shell depth for coarse expansion (default 1)
-- `coarse_n_max`      : per-voxel FSP truncation for coarse level (default 80)
-"""
-function two_level_vcycle(sp_fine::StateSpace{CartesianIndex{K}, Float64},
-                           model::RDMEModel1D,
-                           fine_grid::VoxelGrid,
-                           coarse_grid::VoxelGrid,
-                           rates, t::Real, dt::Real;
-                           τ_pre::Real              = 0.0,
-                           τ_post::Real             = 0.0,
-                           krylov_m::Int            = 30,
-                           weight_tol::Float64      = 1e-14,
-                           binom_tol::Float64       = 0.0,
-                           expand_coarse::Bool      = true,
-                           coarse_expand_depth::Int = 1,
-                           coarse_n_max::Int        = 80) where {K}
-    @assert fine_grid.n_voxels  == K
-    @assert coarse_grid.n_voxels == K ÷ 2
-    K2 = K ÷ 2
-
-    # ── 1. Pre-smooth ─────────────────────────────────────────────────────────
-    sp_smoothed = if τ_pre > 0.0
-        intra_sys = build_intra_system(model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine, intra_sys, rates, t)
-        sp_s = _copy_sp(sp_fine)
-        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_fine.probs; m = krylov_m)
-        sp_s
-    else
-        sp_fine
-    end
-
-    # ── 2. Restrict: p^{2h} = 𝓡 p̃^h ─────────────────────────────────────────
-    sp_coarse = restrict(sp_smoothed)
-    n_coarse_pre  = length(sp_coarse)        # number of states before expansion
-    probs_pre     = copy(sp_coarse.probs)    # save p^{2h} for correction computation
-
-    # ── 3. Coarse setup + optional expand (BEFORE solve) ─────────────────────
-    coarse_sys = build_coarse_system(model, coarse_grid, fine_grid)
-
-    if expand_coarse && coarse_expand_depth > 0
-        coarse_bc = state -> rdme_bc(state, coarse_n_max)
-        expand!(sp_coarse, coarse_sys, coarse_bc; depth = coarse_expand_depth)
-    end
-
-    # ── 4. Coarse solve: p̃^{2h} ──────────────────────────────────────────────
-    A_coarse, = build_generator(sp_coarse, coarse_sys, rates, t)
-    sp_coarse.probs .= expv(Float64(dt), A_coarse, sp_coarse.probs; m = krylov_m)
-
-    # ── 5. Prolongate correction: p^h_new = p̃^h + 𝓟(p̃^{2h} - p^{2h}) ───────
-    #
-    # Compute δ^{2h} = p̃^{2h} - p^{2h} for each coarse state.
-    # Split into positive and negative parts (prolong is defined for non-negative
-    # distributions; we handle the signed correction by prolongating each part
-    # separately then combining).
-    #
-    # New coarse states (added by expand!, indices n_coarse_pre+1 .. end) had
-    # p^{2h} = 0, so their correction δ = p̃^{2h} ≥ 0.
-
-    sp_δ_pos = StateSpace{CartesianIndex{K2}, Float64}()   # δ > 0
-    sp_δ_neg = StateSpace{CartesianIndex{K2}, Float64}()   # δ < 0 (stored as |δ|)
-
-    for i in eachindex(sp_coarse.states)
-        prob_before = i ≤ n_coarse_pre ? probs_pre[i] : 0.0
-        δ = sp_coarse.probs[i] - prob_before
-        s = sp_coarse.states[i]
-        if δ > weight_tol
-            add_state!(sp_δ_pos, s, δ)
-        elseif δ < -weight_tol
-            add_state!(sp_δ_neg, s, -δ)   # store absolute value
+# Expand the coarse state space with separate reaction and diffusion BFS depths.
+#
+# Reaction expansion (r_depth): each state reaches neighbors where any single coarse
+# voxel count changes by ±1 (all-stoichiometry-1 reactions of Schlögl/birth-death).
+# This is iterated r_depth times so each nc_j can range ±r from any covered state.
+#
+# Diffusion expansion (d_depth): adjacent pairs (j, j+1) exchange one molecule at a
+# time (nc_j ± 1, nc_{j+1} ∓ 1), iterated d_depth times.
+#
+# Both expansions add new states with p=0; existing states and probabilities are unchanged.
+function _expand_coarse_rd!(sp::StateSpace{CartesianIndex{K2}, T},
+                             n_max::Int,
+                             ::Val{K2};
+                             r_depth::Int = 2,
+                             d_depth::Int = 1) where {K2, T}
+    # BFS over reaction transitions
+    for _ in 1:r_depth
+        frontier = sp.states[begin:end]   # snapshot current states
+        for s in frontier
+            t = Tuple(s)
+            for j in 1:K2, δ in (-1, 1)
+                nj = t[j] + δ
+                (nj >= 0 && nj <= n_max) || continue
+                s_new = CartesianIndex(ntuple(k -> k == j ? nj : t[k], Val(K2)))
+                haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+            end
         end
     end
-
-    # Prolongate each part (non-negative, so standard prolong applies)
-    sp_δ_fine_pos = prolong(sp_δ_pos, Val(K); weight_tol = weight_tol,
-                                               binom_tol  = binom_tol)
-    sp_δ_fine_neg = prolong(sp_δ_neg, Val(K); weight_tol = weight_tol,
-                                               binom_tol  = binom_tol)
-
-    # Inject correction into the pre-smoothed fine distribution
-    sp_fine_new = _copy_sp(sp_smoothed)
-
-    for i in eachindex(sp_δ_fine_pos.states)
-        s = sp_δ_fine_pos.states[i]; δp = sp_δ_fine_pos.probs[i]
-        idx = get(sp_fine_new.index, s, 0)
-        if idx == 0
-            add_state!(sp_fine_new, s, δp)
-        else
-            sp_fine_new.probs[idx] += δp
+    # BFS over diffusion transitions (adjacent pairs exchange ±1)
+    K2 >= 2 || return
+    for _ in 1:d_depth
+        frontier = sp.states[begin:end]
+        for s in frontier
+            t = Tuple(s)
+            for j in 1:(K2-1), δ in (-1, 1)
+                nj  = t[j]   + δ
+                nj1 = t[j+1] - δ
+                (nj >= 0 && nj <= n_max && nj1 >= 0 && nj1 <= n_max) || continue
+                s_new = CartesianIndex(ntuple(k -> k == j ? nj : k == j+1 ? nj1 : t[k], Val(K2)))
+                haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+            end
         end
     end
-
-    for i in eachindex(sp_δ_fine_neg.states)
-        s = sp_δ_fine_neg.states[i]; δp = sp_δ_fine_neg.probs[i]
-        idx = get(sp_fine_new.index, s, 0)
-        if idx == 0
-            add_state!(sp_fine_new, s, -δp)   # may be negative; pruned externally
-        else
-            sp_fine_new.probs[idx] -= δp
-        end
-    end
-
-    # Clip any numerically-negative probabilities to zero
-    # (small negative values arise from splitting-error cancellations)
-    for i in eachindex(sp_fine_new.probs)
-        if sp_fine_new.probs[i] < 0.0
-            sp_fine_new.probs[i] = 0.0
-        end
-    end
-
-    # ── 6. Post-smooth ────────────────────────────────────────────────────────
-    if τ_post > 0.0
-        intra_sys = build_intra_system(model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine_new, intra_sys, rates, t)
-        sp_fine_new.probs .= expv(Float64(τ_post), A_intra, sp_fine_new.probs;
-                                   m = krylov_m)
-    end
-
-    sp_fine_new
 end
-
-# ─── Schlögl V-cycle with dynamic-π prolongation ─────────────────────────────
-
-"""
-    two_level_vcycle_schlogl(sp_fine, model, fine_grid, coarse_grid, pi_table,
-                              rates, t, dt; kwargs...)
-        -> StateSpace{CartesianIndex{K}, Float64}
-
-Two-level multigrid V-cycle for the Schlögl RDME using dynamic-π prolongation.
-
-Identical structure to `two_level_vcycle` but uses:
-  - Pre-smooth:  intra-pair **diffusion only** (reactions are handled by the
-    coarse operator).  A proxy `RDMEModel1D(D, 0, 0)` captures only diffusion.
-  - Coarse sys:  `build_schlogl_coarse_system_dynamic(model, …, pi_table)`,
-    with Galerkin rates precomputed from the dynamic-π table.
-  - Prolongation: `prolong_dynamic` — distributes each coarse correction
-    according to pi_table rather than Binomial(nc, 1/2).
-
-The `pi_table` should be precomputed once via `compute_dynamic_pi`.
-
-Keyword arguments are the same as `two_level_vcycle`.
-"""
-function two_level_vcycle_schlogl(sp_fine::StateSpace{CartesianIndex{K}, Float64},
-                                   model::SchloglModel1D,
-                                   fine_grid::VoxelGrid,
-                                   coarse_grid::VoxelGrid,
-                                   pi_table::Vector{Vector{Float64}},
-                                   rates, t::Real, dt::Real;
-                                   τ_pre::Real              = 0.0,
-                                   τ_post::Real             = 0.0,
-                                   krylov_m::Int            = 30,
-                                   weight_tol::Float64      = 1e-14,
-                                   binom_tol::Float64       = 0.0,
-                                   use_dynamic_pi::Bool     = true,
-                                   expand_coarse::Bool      = true,
-                                   coarse_expand_depth::Int = 1,
-                                   coarse_n_max::Int        = 80) where {K}
-    @assert fine_grid.n_voxels   == K
-    @assert coarse_grid.n_voxels == K ÷ 2
-    K2 = K ÷ 2
-    n_max_fine = coarse_n_max ÷ 2   # per-voxel fine truncation
-
-    # ── 1. Pre-smooth: intra-pair diffusion only ──────────────────────────────
-    sp_smoothed = if τ_pre > 0.0
-        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)   # diffusion only
-        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine, intra_sys, rates, t)
-        sp_s = _copy_sp(sp_fine)
-        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_fine.probs; m = krylov_m)
-        sp_s
-    else
-        sp_fine
-    end
-
-    # ── 2. Restrict ───────────────────────────────────────────────────────────
-    sp_coarse    = restrict(sp_smoothed)
-    n_coarse_pre = length(sp_coarse)
-    probs_pre    = copy(sp_coarse.probs)
-
-    # ── 3. Coarse system + optional expand ────────────────────────────────────
-    coarse_sys = if use_dynamic_pi
-        build_schlogl_coarse_system_dynamic(model, coarse_grid, fine_grid, pi_table)
-    else
-        build_schlogl_coarse_system(model, coarse_grid, fine_grid)
-    end
-    if expand_coarse && coarse_expand_depth > 0
-        coarse_bc = state -> rdme_bc(state, coarse_n_max)
-        expand!(sp_coarse, coarse_sys, coarse_bc; depth = coarse_expand_depth)
-    end
-
-    # ── 4. Coarse solve ───────────────────────────────────────────────────────
-    A_coarse, = build_generator(sp_coarse, coarse_sys, rates, t)
-    sp_coarse.probs .= expv(Float64(dt), A_coarse, sp_coarse.probs; m = krylov_m)
-
-    # ── 5. Prolongate correction ───────────────────────────────────────────────
-    sp_δ_pos = StateSpace{CartesianIndex{K2}, Float64}()
-    sp_δ_neg = StateSpace{CartesianIndex{K2}, Float64}()
-
-    for i in eachindex(sp_coarse.states)
-        prob_before = i ≤ n_coarse_pre ? probs_pre[i] : 0.0
-        δ = sp_coarse.probs[i] - prob_before
-        s = sp_coarse.states[i]
-        if δ > weight_tol
-            add_state!(sp_δ_pos, s, δ)
-        elseif δ < -weight_tol
-            add_state!(sp_δ_neg, s, -δ)
-        end
-    end
-
-    sp_δ_fine_pos = if use_dynamic_pi
-        prolong_dynamic(sp_δ_pos, pi_table, n_max_fine; weight_tol = weight_tol)
-    else
-        prolong(sp_δ_pos, Val(K); weight_tol = weight_tol, binom_tol = binom_tol)
-    end
-    sp_δ_fine_neg = if use_dynamic_pi
-        prolong_dynamic(sp_δ_neg, pi_table, n_max_fine; weight_tol = weight_tol)
-    else
-        prolong(sp_δ_neg, Val(K); weight_tol = weight_tol, binom_tol = binom_tol)
-    end
-
-    # ── 6. Inject correction ──────────────────────────────────────────────────
-    sp_fine_new = _copy_sp(sp_smoothed)
-
-    for i in eachindex(sp_δ_fine_pos.states)
-        s = sp_δ_fine_pos.states[i]; δp = sp_δ_fine_pos.probs[i]
-        idx = get(sp_fine_new.index, s, 0)
-        if idx == 0; add_state!(sp_fine_new, s,  δp)
-        else;        sp_fine_new.probs[idx] += δp; end
-    end
-    for i in eachindex(sp_δ_fine_neg.states)
-        s = sp_δ_fine_neg.states[i]; δp = sp_δ_fine_neg.probs[i]
-        idx = get(sp_fine_new.index, s, 0)
-        if idx == 0; add_state!(sp_fine_new, s, -δp)
-        else;        sp_fine_new.probs[idx] -= δp; end
-    end
-    for i in eachindex(sp_fine_new.probs)
-        sp_fine_new.probs[i] < 0.0 && (sp_fine_new.probs[i] = 0.0)
-    end
-
-    # ── 7. Post-smooth ────────────────────────────────────────────────────────
-    if τ_post > 0.0
-        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)
-        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine_new, intra_sys, rates, t)
-        sp_fine_new.probs .= expv(Float64(τ_post), A_intra, sp_fine_new.probs;
-                                   m = krylov_m)
-    end
-
-    sp_fine_new
-end
-
-# ─── Schlögl V-cycle with injection prolongation ─────────────────────────────
-
-"""
-    two_level_vcycle_schlogl_injection(sp_fine, model, fine_grid, coarse_grid,
-                                        pi_table, rates, t, dt; kwargs...)
-        -> StateSpace{CartesianIndex{K}, Float64}
-
-Two-level V-cycle for the Schlögl RDME using **injection prolongation** (Fix 1).
-
-Instead of prolongating a signed correction δ = p̄^{2h} - p^{2h} via Binomial or
-dynamic-π splits, the fine distribution is rescaled multiplicatively:
-
-    p^h_new(x) = p̃^h(x) · p̄^{2h}(x̄) / p^{2h}(x̄)
-
-This preserves asymmetry in the fine distribution: a fine state concentrated at
-(n_low, n_high) stays there after the coarse update rather than bleeding into the
-symmetric (n_high, n_low) mode.
-
-Keyword arguments are the same as `two_level_vcycle_schlogl`.
-"""
-function two_level_vcycle_schlogl_injection(
-    sp_fine::StateSpace{CartesianIndex{K}, Float64},
-    model::SchloglModel1D,
-    fine_grid::VoxelGrid,
-    coarse_grid::VoxelGrid,
-    pi_table::Vector{Vector{Float64}},
-    rates, t::Real, dt::Real;
-    τ_pre::Real              = 0.0,
-    τ_post::Real             = 0.0,
-    krylov_m::Int            = 30,
-    weight_tol::Float64      = 1e-14,
-    use_dynamic_pi::Bool     = true,
-    expand_coarse::Bool      = true,
-    coarse_expand_depth::Int = 1,
-    coarse_n_max::Int        = 80
-) where {K}
-    @assert fine_grid.n_voxels   == K
-    @assert coarse_grid.n_voxels == K ÷ 2
-    K2 = K ÷ 2
-
-    # ── 1. Pre-smooth: intra-pair diffusion only ──────────────────────────────
-    sp_smoothed = if τ_pre > 0.0
-        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)
-        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine, intra_sys, rates, t)
-        sp_s = _copy_sp(sp_fine)
-        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_fine.probs; m = krylov_m)
-        sp_s
-    else
-        sp_fine
-    end
-
-    # ── 2. Restrict ───────────────────────────────────────────────────────────
-    sp_coarse     = restrict(sp_smoothed)
-    sp_coarse_pre = _copy_sp(sp_coarse)     # save p^{2h} before coarse solve for multiplicative correction
-
-    # ── 3. Coarse system + optional expand ────────────────────────────────────
-    coarse_sys = if use_dynamic_pi
-        build_schlogl_coarse_system_dynamic(model, coarse_grid, fine_grid, pi_table)
-    else
-        build_schlogl_coarse_system(model, coarse_grid, fine_grid)
-    end
-    if expand_coarse && coarse_expand_depth > 0
-        coarse_bc = state -> rdme_bc(state, coarse_n_max)
-        expand!(sp_coarse, coarse_sys, coarse_bc; depth = coarse_expand_depth)
-    end
-
-    # ── 4. Coarse solve ───────────────────────────────────────────────────────
-    A_coarse, = build_generator(sp_coarse, coarse_sys, rates, t)
-    sp_coarse.probs .= expv(Float64(dt), A_coarse, sp_coarse.probs; m = krylov_m)
-
-    # ── 5. Multiplicative prolongation with conditional extension ─────────────
-    #
-    # Covered coarse states: exact multiplicative correction (preserves asymmetry).
-    # Newly-expanded coarse states: carry over the fine conditional from the
-    # nearest covered neighbor, shifted to match the new pair count.
-    sp_fine_new = prolong_conditional(sp_smoothed, sp_coarse_pre, sp_coarse;
-                                           prob_tol = weight_tol)
-
-    # ── 6. Post-smooth ────────────────────────────────────────────────────────
-    if τ_post > 0.0
-        proxy_model = RDMEModel1D(model.D, 0.0, 0.0)
-        intra_sys   = build_intra_system(proxy_model, fine_grid, coarse_grid)
-        A_intra, = build_generator(sp_fine_new, intra_sys, rates, t)
-        sp_fine_new.probs .= expv(Float64(τ_post), A_intra, sp_fine_new.probs;
-                                   m = krylov_m)
-    end
-
-    sp_fine_new
-end
-
-# ─── helper: copy a StateSpace (states + probs, fresh index/ids) ─────────────
 
 function _copy_sp(sp::StateSpace{E, T}) where {E, T}
     sp2 = StateSpace{E, T}()
@@ -394,280 +53,567 @@ function _copy_sp(sp::StateSpace{E, T}) where {E, T}
     sp2
 end
 
-# ─── Adaptive two-level V-cycle ───────────────────────────────────────────────
+# Return a new StateSpace containing only states with prob > tol.
+function _filter_positive(sp::StateSpace{E, T}, tol::Float64) where {E, T}
+    sp2 = StateSpace{E, T}()
+    for i in eachindex(sp.states)
+        sp.probs[i] > tol && add_state!(sp2, sp.states[i], sp.probs[i])
+    end
+    sp2
+end
+
+# Build the 2-voxel Schlögl stationary distribution table for dynamic-π prolongation.
+function _compute_schlogl_pi_table(model::SchloglModel1D, grid::VoxelGrid, n_max::Int)
+    sp2  = StateSpace{CartesianIndex{2}, Float64}()
+    sys2 = build_schlogl_rdme_system(model, VoxelGrid(2, grid.dx, grid.level))
+    bc2  = s -> rdme_bc(s, n_max)
+    add_state!(sp2, CartesianIndex(0, 0), 1.0)
+    expand!(sp2, sys2, bc2; depth = n_max)
+    A2, = build_generator(sp2, sys2, Float64[], 0.0)
+    compute_dynamic_pi(sp2, A2; n_max = n_max)
+end
+
 """
-    two_level_vcycle_adaptive(sp_fine, model, fine_grid, rates, t, dt; kwargs...)
+    multi_level_vcycle(sp_fine, model, hierarchy, rates, t, dt; kwargs...)
+        -> StateSpace{CartesianIndex{K}, Float64}
 
-Adaptive V-cycle: selects a coarsening mask, restricts to mixed space, solves
-the mixed CME, then prolongs back to the fine space.
+N-level recursive multigrid V-cycle for the RDME.
 
-Returns `(sp_fine_new, mask)` so the caller can pass `mask` as `prev_mask` on
-the next time step (hysteresis).
+Arguments:
+- `sp_fine`      : StateSpace at current level
+- `model`        : RDMEModel1D or SchloglModel1D
+- `hierarchy`    : Vector{VoxelGrid} from current level down to coarsest
+- `rates`        : rate parameter vector
+- `t`            : current time
+- `dt`           : time step
 
 Keyword arguments:
-- `prev_mask`        : mask from previous step (nothing = first step)
-- `halo`             : fine-window half-width around most imbalanced block (default 1)
-- `krylov_m`         : Krylov subspace dimension for expv
-- `weight_tol`       : probability weight cutoff for partial_prolong
-- `binom_tol`        : Binomial truncation threshold for partial_prolong
-- `expand_mixed`     : whether to expand the mixed state space before solving
-- `mixed_expand_depth` : depth for expand!
-- `mixed_n_max`      : per-voxel upper bound for mixed boundary condition
+- `τ_pre`             : pre-smoothing time
+- `τ_post`            : post-smoothing time
+- `krylov_m`          : Krylov subspace dimension
+- `weight_tol`        : correction prolongation weight threshold
+- `binom_tol`         : correction prolongation binomial threshold
+- `expand_coarse`     : expand coarse FSP before solve/recursion
+- `coarse_r_depth`    : reaction expansion depth — each coarse voxel count expands by ±r
+- `coarse_d_depth`    : diffusion expansion depth — adjacent pairs exchange ±d molecules
+- `coarse_n_max`      : per-voxel FSP truncation (scales by 2 each level)
+- `max_states`        : emergency abort if |S| exceeds this (default 10^6)
+- `pi_tables`         : reserved for future use; currently unused.
 """
-function two_level_vcycle_adaptive(
-    sp_fine::StateSpace{CartesianIndex{K}, Float64},
-    model::SchloglModel1D,
-    fine_grid::VoxelGrid,
-    rates,
-    t::Real,
-    dt::Real;
-    prev_mask::Union{Vector{Int}, Nothing} = nothing,
-    halo::Int     = 1,
-    krylov_m::Int = 30,
-    weight_tol::Float64 = 1e-14,
-    binom_tol::Float64 = 1e-6,
-    expand_mixed::Bool = true,
-    mixed_expand_depth::Int = 1,
-    mixed_n_max::Int = 400,
-) where {K}
+function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
+                             model::Union{RDMEModel1D, SchloglModel1D},
+                             hierarchy::Vector{VoxelGrid},
+                             rates, t::Real, dt::Real;
+                             τ_pre::Real              = 0.0,
+                             τ_post::Real             = 0.0,
+                             krylov_m::Int            = 30,
+                             weight_tol::Float64      = 1e-14,
+                             binom_tol::Float64       = 0.0,
+                             expand_coarse::Bool      = true,
+                             coarse_r_depth::Int      = 2,
+                             coarse_d_depth::Int      = 1,
+                             coarse_n_max::Int        = 80,
+                             max_states::Int          = 1_000_000,
+                             prune_tol::Float64       = 0.0,
+                             pi_tables::Vector{Vector{Vector{Float64}}} = Vector{Vector{Vector{Float64}}}()) where {K}
+    length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
 
-    # ── 1. Select coarsening levels ───────────────────────────────────────────
-    rdme_model = RDMEModel1D(model.D, 0.0, 0.0)   # diffusion-only for admissibility
-    levels = select_coarsening_mask(sp_fine, rdme_model, fine_grid, prev_mask;
-                                    halo)
-
-    # If nothing is coarsened, skip the mixed machinery and solve directly.
-    if !any(l > 0 for l in levels)
-        fine_sys = build_schlogl_rdme_system(model, fine_grid)
-        A_fine, = build_generator(sp_fine, fine_sys, rates, t)
-        sp_out = _copy_sp(sp_fine)
-        sp_out.probs .= expv(Float64(dt), A_fine, sp_fine.probs; m = krylov_m)
-        return sp_out, levels
+    # ── Coarsest level: solve directly ───────────────────────────────────────
+    if length(hierarchy) == 1
+        grid_c = hierarchy[1]
+        sys_c  = model isa RDMEModel1D ? build_rdme_system(model, grid_c) :
+                                         build_schlogl_rdme_system(model, grid_c)
+        A_c, = build_generator(sp_h, sys_c, rates, t)
+        sp_h.probs .= expv(Float64(dt), A_c, sp_h.probs; m = krylov_m)
+        return sp_h
     end
 
-    KM = _mixed_dim(levels)
+    grid_h  = hierarchy[1]
+    grid_2h = hierarchy[2]
+    K2 = grid_2h.n_voxels
 
-    # ── 2. Partial restriction: fine → mixed ──────────────────────────────────
-    sp_mixed = _partial_restrict_val(sp_fine, levels, Val(KM))
+    # Extract this level's pi_table; fall back to auto-compute if not provided.
+    # pi_tables[2:end] are forwarded to the recursive call so each level uses
+    # the table built from its own (coarsened) model.
+    pi_table = if model isa SchloglModel1D
+        if !isempty(pi_tables) && !isempty(pi_tables[1])
+            pi_tables[1]
+        else
+            _compute_schlogl_pi_table(model, grid_h, coarse_n_max ÷ 2)
+        end
+    else
+        Vector{Vector{Float64}}()
+    end
+    pi_tables_next = length(pi_tables) >= 2 ? pi_tables[2:end] : Vector{Vector{Vector{Float64}}}()
 
-    # ── 3. Build mixed-resolution CME system ─────────────────────────────────
-    mixed_sys = build_schlogl_mixed_system(model, fine_grid, levels)
-
-    # ── 4. Optionally expand the mixed state space ────────────────────────────
-    if expand_mixed
-        bc_mixed = s -> all(c -> 0 ≤ c ≤ mixed_n_max, Tuple(s))
-        expand!(sp_mixed, mixed_sys, bc_mixed; depth = mixed_expand_depth)
+    # ── 1. Pre-smooth ─────────────────────────────────────────────────────────
+    sp_smoothed = if τ_pre > 0.0
+        smooth_model = RDMEModel1D(model.D, 0.0, 0.0)
+        intra_sys = build_intra_system(smooth_model, grid_h, grid_2h)
+        A_intra, = build_generator(sp_h, intra_sys, rates, t)
+        sp_s = _copy_sp(sp_h)
+        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_h.probs; m = krylov_m)
+        sp_s
+    else
+        sp_h
     end
 
-    # ── 5. Solve mixed CME ────────────────────────────────────────────────────
-    A_mixed, = build_generator(sp_mixed, mixed_sys, Float64[], Float64(t))
-    sp_mixed.probs .= expv(Float64(dt), A_mixed, sp_mixed.probs; m = krylov_m)
+    # ── 2. Restrict ───────────────────────────────────────────────────────────
+    # Filter positive-prob states: zero-prob expand! boundary states contribute
+    # nothing to the coarse distribution and can be dropped before restricting.
+    sp_for_restrict = _filter_positive(sp_smoothed, weight_tol)
+    sp_coarse = restrict(sp_for_restrict)
+    n_coarse_pre = length(sp_coarse)
+    probs_pre    = copy(sp_coarse.probs)
 
-    # ── 6. Partial prolongation: mixed → fine ─────────────────────────────────
-    sp_fine_new = partial_prolong(sp_mixed, levels, Val(K);
-                                   weight_tol, binom_tol)
+    # ── 3. Coarse model (diffusion rate scales as 1/dx²) ─────────────────────
+    model_2h = coarsen_model(model, 2.0)
 
-    return sp_fine_new, levels
-end
-
-# ─── Mixed-state cache ────────────────────────────────────────────────────────
-"""
-    MixedSolverCache
-
-Persistent cache for the per-mask objects that are expensive to rebuild.
-
-Stores, keyed by `BitVector` mask:
-  - `mixed_systems`: the mixed-grid CME system (reaction propensities + topology)
-
-Pass a single `MixedSolverCache()` instance across time steps so that operators
-for frequently-repeated masks are only built once.
-"""
-mutable struct MixedSolverCache
-    mixed_systems::Dict{Vector{Int}, Any}
-    MixedSolverCache() = new(Dict{Vector{Int}, Any}())
-end
-
-function _get_mixed_system!(cache::MixedSolverCache, levels, model, grid)
-    get!(cache.mixed_systems, levels) do
-        build_schlogl_mixed_system(model, grid, levels)
+    # ── 4. Coarse expand ─────────────────────────────────────────────────────
+    # Controlled expansion: reaction steps change individual coarse counts by ±1
+    # per step (stoichiometry for Schlögl/birth-death); diffusion steps exchange ±1
+    # between adjacent pairs conserving the pair total.  Keeping these separate
+    # avoids the combinatorial explosion from treating all events equally.
+    if expand_coarse && (coarse_r_depth > 0 || coarse_d_depth > 0)
+        _expand_coarse_rd!(sp_coarse, coarse_n_max, Val(K2);
+                           r_depth = coarse_r_depth, d_depth = coarse_d_depth)
+        length(sp_coarse) <= max_states ||
+            error("State space exploded after coarse expand: |S_coarse| = $(length(sp_coarse)) > $max_states")
     end
+
+    # ── 5. Recurse ────────────────────────────────────────────────────────────
+    sp_coarse_post = multi_level_vcycle(sp_coarse, model_2h, hierarchy[2:end], rates, t, dt;
+                                         τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
+                                         expand_coarse, coarse_r_depth, coarse_d_depth,
+                                         coarse_n_max = 2 * coarse_n_max,
+                                         max_states, prune_tol,
+                                         pi_tables = pi_tables_next)
+
+    # ── 6. Prolongate correction ──────────────────────────────────────────────
+    # Part A — Covered coarse states (indices 1..n_coarse_pre):
+    #   Multiplicative correction — scales existing fine states by p̄_post/p̄_pre.
+    #   Symmetric, no new states, no negatives.
+    #
+    # Part B — New coarse states (expand!-added, indices > n_coarse_pre):
+    #   Birth-death: Binomial initialization (Smith & Grima 2016 — exact in fast
+    #                diffusion limit when stable states are near nc/2).
+    #   Schlögl:     Conditional extension from nearest covered neighbor — preserves
+    #                the bimodal distribution structure; Binomial is wrong here since
+    #                the stable states (n_low, n_high) are far from nc/2.
+
+    # Build restricted coarse pre/post (only the n_coarse_pre covered states)
+    sp_c_pre  = StateSpace{CartesianIndex{K2}, Float64}()
+    sp_c_post = StateSpace{CartesianIndex{K2}, Float64}()
+    for i in 1:n_coarse_pre
+        add_state!(sp_c_pre,  sp_coarse_post.states[i], probs_pre[i])
+        add_state!(sp_c_post, sp_coarse_post.states[i], sp_coarse_post.probs[i])
+    end
+
+    if model isa SchloglModel1D
+        # Schlögl: prolong_conditional handles both parts in one call —
+        # Step 1 applies multiplicative correction for covered states (sp_c_pre),
+        # Step 3 applies L1 conditional extension for expand!-added new states.
+        # The bimodal stable states (n_low, n_high) are far from nc/2 so Binomial
+        # would miss them; conditional extension propagates the actual distribution.
+        sp_h_new = prolong_conditional(sp_for_restrict, sp_c_pre, sp_coarse_post;
+                                       prob_tol = weight_tol)
+    else
+        # Birth-death: Part A multiplicative + Part B Binomial for new states.
+        # Smith & Grima (2016) Eq. (6-7): Binomial(nc, 1/2) is exact in the fast-
+        # diffusion limit for convergent (mass-action) propensities.
+        sp_h_new = prolong_multiplicative(sp_for_restrict, sp_c_pre, sp_c_post;
+                                          prob_tol = weight_tol)
+        sp_δ_new = StateSpace{CartesianIndex{K2}, Float64}()
+        for i in (n_coarse_pre + 1):length(sp_coarse_post.states)
+            p = sp_coarse_post.probs[i]
+            p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
+        end
+        if length(sp_δ_new) > 0
+            sp_δf_new = prolong(sp_δ_new, Val(K); weight_tol, binom_tol, max_states)
+            for i in eachindex(sp_δf_new.states)
+                s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
+                idx = get(sp_h_new.index, s, 0)
+                if idx == 0; add_state!(sp_h_new, s, δp) else sp_h_new.probs[idx] += δp end
+            end
+        end
+    end
+
+    for i in eachindex(sp_h_new.probs)
+        sp_h_new.probs[i] < weight_tol && (sp_h_new.probs[i] = 0.0)
+    end
+
+    # ── 7. Post-smooth ────────────────────────────────────────────────────────
+    if τ_post > 0.0
+        smooth_model = RDMEModel1D(model.D, 0.0, 0.0)
+        intra_sys = build_intra_system(smooth_model, grid_h, grid_2h)
+        A_intra, = build_generator(sp_h_new, intra_sys, rates, t)
+        sp_h_new.probs .= expv(Float64(τ_post), A_intra, sp_h_new.probs; m = krylov_m)
+    end
+
+    # ── 8. Prune ──────────────────────────────────────────────────────────────
+    # Remove low-probability states created by prolongation so the returned
+    # state space doesn't grow without bound across steps.
+    prune_tol > 0.0 && prune_threshold!(sp_h_new, prune_tol)
+
+    sp_h_new
 end
-_get_mixed_system!(::Nothing, levels, model, grid) = build_schlogl_mixed_system(model, grid, levels)
 
-# ─── Persistent mixed-state solver ───────────────────────────────────────────
-"""
-    two_level_step_mixed(sp_mixed, mask, model, fine_grid, dt; kwargs...)
-        -> (sp_mixed_new, new_mask)
+# ─── 2-species V-cycle ────────────────────────────────────────────────────────
 
-One time step that keeps the mixed-resolution distribution as the primary state.
+# Coarse expansion for 2-species interleaved states (nA_1,nB_1,…,nA_K,nB_K).
+# Reaction expansion: change any single A or B component by ±1.
+# Diffusion expansion: adjacent coarse voxels exchange ±1 of the same species.
+function _expand_coarse_rd_2s!(sp::StateSpace{CartesianIndex{N2}, T},
+                                n_max::Int,
+                                ::Val{N2};
+                                r_depth::Int = 2,
+                                d_depth::Int = 1) where {N2, T}
+    N2 % 2 == 0 || error("N2=$N2 must be even (2-species interleaved)")
+    K2_vox = N2 ÷ 2
 
-Unlike `two_level_vcycle_adaptive`, this never materialises the full fine grid:
-  1. Conditionally recompute `new_mask` (every `mask_check_interval` steps).
-  2. If the mask changed, adapt `sp_mixed` directly: fine→coarse pairs are
-     marginalised; coarse→fine pairs are Binomial-expanded one pair at a time,
-     optionally bounded to ±`binom_n_sigma` standard deviations.
-  3. Optionally expand the mixed state space, build the mixed generator, and
-     advance by `dt` via Krylov-based matrix exponentiation.
+    for _ in 1:r_depth
+        frontier = sp.states[begin:end]
+        for s in frontier
+            t = Tuple(s)
+            for ci in 1:N2, δ in (-1, 1)
+                nci = t[ci] + δ
+                (nci >= 0 && nci <= n_max) || continue
+                s_new = CartesianIndex(ntuple(k -> k == ci ? nci : t[k], Val(N2)))
+                haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+            end
+        end
+    end
 
-The full fine distribution is never constructed.  Prolong to the fine grid only
-when a fine observable is actually needed (call `partial_prolong` explicitly).
-
-Pass a `MixedSolverCache()` instance via `cache` to reuse mixed-grid operators
-across repeated calls with the same mask.
-
-Keyword arguments:
-  `cache`                 `MixedSolverCache` or `nothing` (default nothing)
-  `mask_check_interval`   recompute mask every N calls; Ref counter is updated (default 1)
-  `step_count`            `Ref{Int}` tracking calls so far (default Ref(0))
-  `halo`                  fine-window half-width (default 1)
-  `krylov_m`              Krylov subspace dimension (default 30)
-  `weight_tol`            probability weight pruning threshold (default 1e-14)
-  `binom_tol`             Binomial fraction pruning threshold (default 1e-6)
-  `binom_n_sigma`         keep ±n_sigma·σ of Binomial support; Inf = full (default Inf)
-  `expand_mixed`          whether to expand the mixed state space before solve (default true)
-  `mixed_expand_depth`    expansion depth (default 1)
-  `mixed_n_max`           uniform per-dimension upper bound; used when `anisotropic_expand=false` (default 400)
-  `anisotropic_expand`    if true, use per-coordinate adaptive bounds from `mixed_coord_bounds` (default false)
-  `n_max_per_voxel`       per-fine-voxel floor for anisotropic bounds; 0 = use `mixed_n_max` (default 0)
-  `c_sigma`               adaptive slack: bound[k] = max(floor[k], μ[k] + c_sigma·σ[k]) (default 6.0)
-  `prune_tol`             remove states with prob < prune_tol after solve; 0 = off (default 0)
-  `reexpand_depth`        after pruning, re-expand by this depth to track outgoing flux (default 1)
-"""
-function two_level_step_mixed(
-    sp_mixed::StateSpace{CartesianIndex{KM}, Float64},
-    levels::Vector{Int},
-    model::SchloglModel1D,
-    fine_grid::VoxelGrid,
-    dt::Real;
-    cache::Union{MixedSolverCache, Nothing} = nothing,
-    mask_check_interval::Int  = 1,
-    step_count::Ref{Int}      = Ref(0),
-    krylov_m::Int             = 30,
-    weight_tol::Float64       = 1e-14,
-    binom_tol::Float64        = 1e-6,
-    binom_n_sigma::Float64    = Inf,
-    expand_mixed::Bool        = true,
-    mixed_expand_depth::Int   = 1,
-    mixed_n_max::Int          = 400,
-    anisotropic_expand::Bool  = false,
-    n_max_per_voxel::Int      = 0,
-    c_sigma::Float64          = 6.0,
-    prune_tol::Float64        = 0.0,
-    reexpand_depth::Int       = 1,
-    halo::Int                 = 1,
-    window_shift_tol::Float64 = 0.5,
-    prev_window_center::Ref{Float64} = Ref(-1.0),
-) where {KM}
-    K       = 2 * length(levels)
-    n_pairs = K ÷ 2
-    rdme_m  = RDMEModel1D(model.D, 0.0, 0.0)
-    step_count[] += 1
-
-    # 1. Conditionally recompute levels.
-    # Cheap center-of-mass pre-check: skip the full diagnostic when the
-    # front hasn't moved by more than window_shift_tol blocks.
-    new_levels = if step_count[] % mask_check_interval == 0
-        skip_full_check = false
-        # Always compute pair center-of-mass (cheap O(|S^M|) scan).
-        let off_cm = _mixed_offsets(levels)
-            μ_pair_cm = zeros(n_pairs)
-            for (i, s) in enumerate(sp_mixed.states)
-                tt = Tuple(s); p = sp_mixed.probs[i]
-                j = 1
-                while j <= n_pairs
-                    l = levels[j]; op = off_cm[j]
-                    if l == 0
-                        μ_pair_cm[j] += p * (tt[op] + tt[op+1])
-                        j += 1
-                    elseif l == 1
-                        μ_pair_cm[j] += p * tt[op]
-                        j += 1
-                    else  # l == 2: pairs j and j+1 share coord op
-                        half = p * tt[op] / 2
-                        μ_pair_cm[j]   += half
-                        μ_pair_cm[j+1] += half
-                        j += 2
-                    end
+    K2_vox >= 2 || return
+    for _ in 1:d_depth
+        frontier = sp.states[begin:end]
+        for s in frontier
+            t = Tuple(s)
+            for j in 1:(K2_vox-1), δ in (-1, 1)
+                # A: coarse voxels j (comp 2j-1) and j+1 (comp 2j+1)
+                nAj = t[2j-1] + δ; nAj1 = t[2j+1] - δ
+                if nAj >= 0 && nAj <= n_max && nAj1 >= 0 && nAj1 <= n_max
+                    s_new = CartesianIndex(ntuple(k -> k==2j-1 ? nAj : k==2j+1 ? nAj1 : t[k], Val(N2)))
+                    haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+                end
+                # B: coarse voxels j (comp 2j) and j+1 (comp 2j+2)
+                nBj = t[2j] + δ; nBj1 = t[2j+2] - δ
+                if nBj >= 0 && nBj <= n_max && nBj1 >= 0 && nBj1 <= n_max
+                    s_new = CartesianIndex(ntuple(k -> k==2j ? nBj : k==2j+2 ? nBj1 : t[k], Val(N2)))
+                    haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
                 end
             end
-            μ_total_cm = sum(μ_pair_cm)
-            curr_center = μ_total_cm > 0.0 ?
-                sum(j * μ_pair_cm[j] for j in 1:n_pairs) / μ_total_cm :
-                (prev_window_center[] >= 0.0 ? prev_window_center[] : 1.0)
-            if prev_window_center[] >= 0.0
-                skip_full_check = abs(curr_center - prev_window_center[]) < window_shift_tol
-            end
-            if !skip_full_check
-                prev_window_center[] = curr_center
-            end
         end
+    end
+end
 
-        if skip_full_check
-            levels
-        else
-            select_coarsening_mask_mixed(sp_mixed, levels, rdme_m, fine_grid;
-                                          halo)
-        end
+"""
+    multi_level_vcycle_2s(sp_fine, model, hierarchy, rates, t, dt; kwargs...)
+        -> StateSpace{CartesianIndex{N}, Float64}
+
+N-level recursive multigrid V-cycle for the 2-species bottleneck RDME.
+State layout: interleaved `(nA_1,nB_1,…,nA_K,nB_K)` with `N = 2K`.
+
+Restriction `restrict2s` sums each species separately over fine voxel pairs.
+Prolongation uses independent Binomial(n̄_species, 1/2) per species per pair.
+"""
+function multi_level_vcycle_2s(sp_h::StateSpace{CartesianIndex{N}, Float64},
+                                model::BottleneckModel1D,
+                                hierarchy::Vector{VoxelGrid},
+                                rates, t::Real, dt::Real;
+                                τ_pre::Real          = 0.0,
+                                τ_post::Real         = 0.0,
+                                krylov_m::Int        = 30,
+                                weight_tol::Float64  = 1e-14,
+                                binom_tol::Float64   = 0.0,
+                                expand_coarse::Bool  = true,
+                                coarse_r_depth::Int  = 2,
+                                coarse_d_depth::Int  = 1,
+                                coarse_n_max::Int    = 80,
+                                max_states::Int      = 1_000_000,
+                                prune_tol::Float64   = 0.0) where {N}
+    length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
+
+    # ── Coarsest level: solve directly ───────────────────────────────────────
+    if length(hierarchy) == 1
+        grid_c = hierarchy[1]
+        sys_c  = build_bottleneck_system(model, grid_c)
+        A_c, = build_generator(sp_h, sys_c, rates, t)
+        sp_h.probs .= expv(Float64(dt), A_c, sp_h.probs; m = krylov_m)
+        return sp_h
+    end
+
+    grid_h  = hierarchy[1]
+    grid_2h = hierarchy[2]
+    N2      = N ÷ 2   # coarse state dimension (still interleaved 2-species)
+
+    # ── 1. Pre-smooth (intra-pair diffusion for both species) ─────────────────
+    sp_smoothed = if τ_pre > 0.0
+        intra_sys = build_intra_system_2s(model, grid_h, grid_2h)
+        A_intra, = build_generator(sp_h, intra_sys, rates, t)
+        sp_s = _copy_sp(sp_h)
+        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_h.probs; m = krylov_m)
+        sp_s
     else
-        levels
+        sp_h
     end
 
-    # 2. Adapt mixed state if the levels changed.
-    sp_cur = if new_levels == levels
-        sp_mixed
+    # ── 2. Restrict ───────────────────────────────────────────────────────────
+    sp_for_restrict = _filter_positive(sp_smoothed, weight_tol)
+    sp_coarse       = restrict2s(sp_for_restrict)
+    n_coarse_pre    = length(sp_coarse)
+    probs_pre       = copy(sp_coarse.probs)
+
+    # ── 3. Coarsen model ─────────────────────────────────────────────────────
+    model_2h = coarsen_model(model, 2.0)
+
+    # ── 4. Coarse expand ─────────────────────────────────────────────────────
+    if expand_coarse && (coarse_r_depth > 0 || coarse_d_depth > 0)
+        _expand_coarse_rd_2s!(sp_coarse, coarse_n_max, Val(N2);
+                              r_depth = coarse_r_depth, d_depth = coarse_d_depth)
+        length(sp_coarse) <= max_states ||
+            error("State space exploded after coarse expand: |S_coarse| = $(length(sp_coarse))")
+    end
+
+    # ── 5. Recurse ────────────────────────────────────────────────────────────
+    sp_coarse_post = multi_level_vcycle_2s(sp_coarse, model_2h, hierarchy[2:end], rates, t, dt;
+                                            τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
+                                            expand_coarse, coarse_r_depth, coarse_d_depth,
+                                            coarse_n_max = 2 * coarse_n_max,
+                                            max_states, prune_tol)
+
+    # ── 6. Prolongate ─────────────────────────────────────────────────────────
+    sp_c_pre  = StateSpace{CartesianIndex{N2}, Float64}()
+    sp_c_post = StateSpace{CartesianIndex{N2}, Float64}()
+    for i in 1:n_coarse_pre
+        add_state!(sp_c_pre,  sp_coarse_post.states[i], probs_pre[i])
+        add_state!(sp_c_post, sp_coarse_post.states[i], sp_coarse_post.probs[i])
+    end
+
+    # Part A: multiplicative correction for covered coarse states
+    sp_h_new = prolong_multiplicative_2s(sp_for_restrict, sp_c_pre, sp_c_post;
+                                          prob_tol = weight_tol)
+
+    # Part B: independent Binomial initialization for expand!-added coarse states
+    sp_δ_new = StateSpace{CartesianIndex{N2}, Float64}()
+    for i in (n_coarse_pre + 1):length(sp_coarse_post.states)
+        p = sp_coarse_post.probs[i]
+        p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
+    end
+    if length(sp_δ_new) > 0
+        sp_δf_new = prolong2s(sp_δ_new, Val(N); weight_tol, binom_tol, max_states)
+        for i in eachindex(sp_δf_new.states)
+            s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
+            idx = get(sp_h_new.index, s, 0)
+            if idx == 0; add_state!(sp_h_new, s, δp) else sp_h_new.probs[idx] += δp end
+        end
+    end
+
+    for i in eachindex(sp_h_new.probs)
+        sp_h_new.probs[i] < weight_tol && (sp_h_new.probs[i] = 0.0)
+    end
+
+    # ── 7. Post-smooth ────────────────────────────────────────────────────────
+    if τ_post > 0.0
+        intra_sys = build_intra_system_2s(model, grid_h, grid_2h)
+        A_intra, = build_generator(sp_h_new, intra_sys, rates, t)
+        sp_h_new.probs .= expv(Float64(τ_post), A_intra, sp_h_new.probs; m = krylov_m)
+    end
+
+    # ── 8. Prune ──────────────────────────────────────────────────────────────
+    prune_tol > 0.0 && prune_threshold!(sp_h_new, prune_tol)
+
+    sp_h_new
+end
+
+# ─── 2D V-cycle ──────────────────────────────────────────────────────────────
+
+# Coarse expansion for 2D 2-species interleaved states using CoarseningMap.
+# Reaction: change any single A or B component by ±1.
+# Diffusion: exchange ±1 of same species between adjacent coarse voxels.
+function _expand_coarse_2d_2s!(sp::StateSpace{CartesianIndex{N2}, T},
+                                n_max::Int,
+                                ::Val{N2},
+                                adj::Vector{Tuple{Int,Int}};   # adjacency list of coarse voxel pairs
+                                r_depth::Int = 2,
+                                d_depth::Int = 1) where {N2, T}
+    for _ in 1:r_depth
+        frontier = sp.states[begin:end]
+        for s in frontier
+            t = Tuple(s)
+            for ci in 1:N2, δ in (-1, 1)
+                nci = t[ci] + δ
+                (nci >= 0 && nci <= n_max) || continue
+                s_new = CartesianIndex(ntuple(k -> k == ci ? nci : t[k], Val(N2)))
+                haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+            end
+        end
+    end
+
+    isempty(adj) && return
+    for _ in 1:d_depth
+        frontier = sp.states[begin:end]
+        for s in frontier
+            t = Tuple(s)
+            for (J1, J2) in adj, δ in (-1, 1)
+                # A species: coarse voxel J1 (comp 2J1-1) and J2 (comp 2J2-1)
+                nA1 = t[2J1-1] + δ; nA2 = t[2J2-1] - δ
+                if nA1 >= 0 && nA1 <= n_max && nA2 >= 0 && nA2 <= n_max
+                    s_new = CartesianIndex(ntuple(k -> k==2J1-1 ? nA1 : k==2J2-1 ? nA2 : t[k], Val(N2)))
+                    haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+                end
+                # B species: coarse voxel J1 (comp 2J1) and J2 (comp 2J2)
+                nB1 = t[2J1] + δ; nB2 = t[2J2] - δ
+                if nB1 >= 0 && nB1 <= n_max && nB2 >= 0 && nB2 <= n_max
+                    s_new = CartesianIndex(ntuple(k -> k==2J1 ? nB1 : k==2J2 ? nB2 : t[k], Val(N2)))
+                    haskey(sp.index, s_new) || add_state!(sp, s_new, zero(T))
+                end
+            end
+        end
+    end
+end
+
+# Build the coarse-level adjacency list from Grid2D dimensions.
+function _coarse_adjacency(K2_x::Int, K2_y::Int)
+    adj = Tuple{Int,Int}[]
+    for I in 1:K2_x, J in 1:K2_y
+        Jc = (I-1)*K2_y + J
+        if J < K2_y; push!(adj, (Jc, Jc+1)); end        # horizontal
+        if I < K2_x; push!(adj, (Jc, Jc+K2_y)); end     # vertical
+    end
+    adj
+end
+
+"""
+    multi_level_vcycle_2d_2s(sp_fine, model, grids, cmaps, rates, t, dt; kwargs...)
+        -> StateSpace{CartesianIndex{N}, Float64}
+
+N-level recursive multigrid V-cycle for the 2D two-species bottleneck RDME.
+
+Arguments:
+- `grids`  : Vector{Grid2D}, grids[1]=finest, grids[end]=coarsest
+- `cmaps`  : Vector{CoarseningMap}, cmaps[ℓ] maps grids[ℓ] → grids[ℓ+1]
+- `source_voxels` : fine-level source voxels for production (passed to each level)
+"""
+function multi_level_vcycle_2d_2s(
+    sp_h::StateSpace{CartesianIndex{N}, Float64},
+    model::BottleneckModel1D,
+    grids::Vector{Grid2D},
+    cmaps::Vector{CoarseningMap},
+    rates, t::Real, dt::Real;
+    τ_pre::Real          = 0.0,
+    τ_post::Real         = 0.0,
+    krylov_m::Int        = 30,
+    weight_tol::Float64  = 1e-14,
+    binom_tol::Float64   = 0.0,
+    expand_coarse::Bool  = true,
+    coarse_r_depth::Int  = 2,
+    coarse_d_depth::Int  = 1,
+    coarse_n_max::Int    = 40,
+    max_states::Int      = 1_000_000,
+    prune_tol::Float64   = 0.0,
+    source_voxels        = nothing
+) where {N}
+    length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
+
+    grid_h = grids[1]
+
+    # ── Coarsest level: solve directly ───────────────────────────────────────
+    if length(grids) == 1
+        # At coarsest level, source_voxels has been propagated through coarsening
+        # — just build system with whatever source_voxels covers this level
+        sys_c = build_bottleneck_system_2d(model, grid_h; source_voxels=source_voxels)
+        A_c, = build_generator(sp_h, sys_c, rates, t)
+        sp_h.probs .= expv(Float64(dt), A_c, sp_h.probs; m = krylov_m)
+        return sp_h
+    end
+
+    grid_2h = grids[2]
+    cmap    = cmaps[1]
+    N2      = 2 * cmap.n_coarse   # coarse state dim: 2 species × coarse voxels
+    N2_val  = Val(N2)
+
+    # ── 1. Pre-smooth ─────────────────────────────────────────────────────────
+    sp_smoothed = if τ_pre > 0.0
+        intra_sys = build_intra_system_2d(model, grid_h, cmap)
+        A_intra, = build_generator(sp_h, intra_sys, rates, t)
+        sp_s = _copy_sp(sp_h)
+        sp_s.probs .= expv(Float64(τ_pre), A_intra, sp_h.probs; m = krylov_m)
+        sp_s
     else
-        adapt_mixed_state(sp_mixed, levels, new_levels, Val(K);
-                          weight_tol, binom_tol, binom_n_sigma)
+        sp_h
     end
 
-    # 3. Retrieve (or build) the mixed system for the new levels.
-    mixed_sys = _get_mixed_system!(cache, new_levels, model, fine_grid)
+    # ── 2. Restrict ───────────────────────────────────────────────────────────
+    sp_for_restrict = _filter_positive(sp_smoothed, weight_tol)
+    sp_coarse       = restrict2s(sp_for_restrict, cmap, N2_val)
+    n_coarse_pre    = length(sp_coarse)
+    probs_pre       = copy(sp_coarse.probs)
 
-    # 4. Optionally expand the mixed state space.
-    if expand_mixed
-        _base_npv = n_max_per_voxel > 0 ? n_max_per_voxel : mixed_n_max
-        bc_mixed = if anisotropic_expand
-            let bnds = mixed_coord_bounds(sp_cur, new_levels;
-                                          n_max_per_voxel = _base_npv, c_sigma)
-                s -> begin t = Tuple(s); all(t[k] ≤ bnds[k] for k in eachindex(t)) end
-            end
-        else
-            s -> all(c -> 0 ≤ c ≤ mixed_n_max, Tuple(s))
+    # ── 3. Coarsen model (scale k_prod by patch_size for volume ratio) ────────
+    model_2h = coarsen_model(model, Float64(cmap.patch_size))
+
+    # ── 4. Coarse expand ──────────────────────────────────────────────────────
+    # Only expand when the NEXT call is the coarsest level (length(grids)==2).
+    # At deeper intermediate levels the Multinomial prolong over many coarse
+    # voxels creates an exponential state-space explosion — skip it there.
+    at_penultimate = (length(grids) == 2)
+    if expand_coarse && at_penultimate && (coarse_r_depth > 0 || coarse_d_depth > 0)
+        adj = _coarse_adjacency(grid_2h.K_x, grid_2h.K_y)
+        _expand_coarse_2d_2s!(sp_coarse, coarse_n_max, N2_val, adj;
+                               r_depth = coarse_r_depth, d_depth = coarse_d_depth)
+        length(sp_coarse) <= max_states ||
+            error("Coarse state space exploded: |S| = $(length(sp_coarse))")
+    end
+
+    # ── 5. Recurse ────────────────────────────────────────────────────────────
+    # Map source_voxels to coarse level
+    source_coarse = source_voxels === nothing ? nothing :
+                    unique(cmap.fine_to_coarse[k] for k in source_voxels)
+    sp_coarse_post = multi_level_vcycle_2d_2s(
+        sp_coarse, model_2h, grids[2:end], cmaps[2:end], rates, t, dt;
+        τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
+        expand_coarse, coarse_r_depth, coarse_d_depth,
+        coarse_n_max = cmap.patch_size * coarse_n_max,
+        max_states, prune_tol,
+        source_voxels = source_coarse)
+
+    # ── 6. Prolongate ─────────────────────────────────────────────────────────
+    sp_c_pre  = StateSpace{CartesianIndex{N2}, Float64}()
+    sp_c_post = StateSpace{CartesianIndex{N2}, Float64}()
+    for i in 1:n_coarse_pre
+        add_state!(sp_c_pre,  sp_coarse_post.states[i], probs_pre[i])
+        add_state!(sp_c_post, sp_coarse_post.states[i], sp_coarse_post.probs[i])
+    end
+
+    sp_h_new = prolong_multiplicative_2s(sp_for_restrict, sp_c_pre, sp_c_post, cmap, N2_val;
+                                          prob_tol = weight_tol)
+
+    sp_δ_new = StateSpace{CartesianIndex{N2}, Float64}()
+    for i in (n_coarse_pre+1):length(sp_coarse_post.states)
+        p = sp_coarse_post.probs[i]
+        p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
+    end
+    if length(sp_δ_new) > 0
+        sp_δf_new = prolong2s(sp_δ_new, cmap, Val(N); weight_tol, binom_tol, max_states)
+        for i in eachindex(sp_δf_new.states)
+            s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
+            idx = get(sp_h_new.index, s, 0)
+            if idx == 0; add_state!(sp_h_new, s, δp) else sp_h_new.probs[idx] += δp end
         end
-        expand!(sp_cur, mixed_sys, bc_mixed; depth = mixed_expand_depth)
     end
 
-    # 5. Solve mixed CME.
-    A, = build_generator(sp_cur, mixed_sys, Float64[], 0.0)
-    sp_cur.probs .= expv(Float64(dt), A, sp_cur.probs; m = krylov_m)
-
-    # 6. Prune low-probability states (adaptive FSP truncation).
-    if prune_tol > 0.0
-        keep_idx = findall(p -> p > prune_tol, sp_cur.probs)
-        if length(keep_idx) < length(sp_cur.states)
-            KM_cur    = length(Tuple(sp_cur.states[1]))
-            sp_pruned = StateSpace{CartesianIndex{KM_cur}, Float64}()
-            for i in keep_idx
-                add_state!(sp_pruned, sp_cur.states[i], sp_cur.probs[i])
-            end
-            sp_pruned.probs ./= sum(sp_pruned.probs)
-            sp_cur = sp_pruned
-        end
+    for i in eachindex(sp_h_new.probs)
+        sp_h_new.probs[i] < weight_tol && (sp_h_new.probs[i] = 0.0)
     end
 
-    # 7. Re-expand around surviving mass to capture outgoing flux next step.
-    if prune_tol > 0.0 && reexpand_depth > 0
-        _base_npv = n_max_per_voxel > 0 ? n_max_per_voxel : mixed_n_max
-        bc_re = if anisotropic_expand
-            let bnds = mixed_coord_bounds(sp_cur, new_levels;
-                                          n_max_per_voxel = _base_npv, c_sigma)
-                s -> begin t = Tuple(s); all(t[k] ≤ bnds[k] for k in eachindex(t)) end
-            end
-        else
-            s -> all(c -> 0 ≤ c ≤ mixed_n_max, Tuple(s))
-        end
-        expand!(sp_cur, mixed_sys, bc_re; depth = reexpand_depth)
+    # ── 7. Post-smooth ────────────────────────────────────────────────────────
+    if τ_post > 0.0
+        intra_sys = build_intra_system_2d(model, grid_h, cmap)
+        A_intra, = build_generator(sp_h_new, intra_sys, rates, t)
+        sp_h_new.probs .= expv(Float64(τ_post), A_intra, sp_h_new.probs; m = krylov_m)
     end
 
-    return sp_cur, new_levels
+    prune_tol > 0.0 && prune_threshold!(sp_h_new, prune_tol)
+    sp_h_new
 end

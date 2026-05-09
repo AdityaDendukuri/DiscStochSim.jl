@@ -93,13 +93,13 @@ println("── V-cycle  (dt=$(dt_vcyc), $(round(Int, dt_vcyc/cfl))× CFL) ─�
 function run_vcycle()
     sp = StateSpace{CartesianIndex{K}, Float64}()
     add_state!(sp, u0, 1.0)
+    hierarchy = build_hierarchy(fine_grid, 1)
     t_cur = 0.0
     for _ in 1:n_steps
         dt_step = min(dt_vcyc, t_max - t_cur)
-        sp = two_level_vcycle(sp, model, fine_grid, coarse_grid,
-                              rates, t_cur, dt_step;
-                              coarse_n_max  = 2 * n_max,
-                              expand_coarse = true)
+        sp = multi_level_vcycle(sp, model, hierarchy, rates, t_cur, dt_step;
+                                coarse_n_max  = 2 * n_max,
+                                expand_coarse = true)
         t_cur += dt_step
         renormalize!(sp)
         prune_threshold!(sp, 1e-12)

@@ -41,17 +41,20 @@ export solve
 export mean_trajectory, marginal, terminal_progress
 
 # RDME exports
-export VoxelGrid, coarsen, build_hierarchy, diffusion_rate
+export VoxelGrid, coarsen, coarsen_model, build_hierarchy, diffusion_rate
+export Grid2D, coarsen2d, build_hierarchy2d, n_voxels
+export CoarseningMap, CoarseningMap1D, CoarseningMap2D
 export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
 export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system, build_schlogl_mixed_system
 export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
-export restrict, prolong, prolong_multiplicative, prolong_conditional, lumpability_ratio, per_molecule_flux, pair_admissibility, select_coarsening_mask, partial_restrict, partial_prolong
-export select_coarsening_mask_mixed, adapt_mixed_state, mixed_coord_bounds
-export _mixed_dim
-export two_level_vcycle, two_level_vcycle_schlogl, two_level_vcycle_schlogl_injection
-export two_level_vcycle_adaptive, two_level_step_mixed, MixedSolverCache
+export restrict, prolong, prolong_multiplicative, prolong_conditional
+export restrict2s, prolong2s, prolong_multiplicative_2s
+export lumpability_ratio, pair_admissibility
+export multi_level_vcycle, multi_level_vcycle_2s, multi_level_vcycle_2d_2s
+export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottleneck_bc
+export build_bottleneck_system_2d, build_intra_system_2d
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
 

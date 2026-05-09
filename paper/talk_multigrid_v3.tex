@@ -45,9 +45,6 @@
 
 \begin{frame}\titlepage\end{frame}
 
-%================================================================
-%  1. THE RDME
-%================================================================
 
 \begin{frame}{The RDME: reactions and diffusion across a spatial grid}
 
@@ -72,7 +69,7 @@
 
       \medskip
       \begin{alertblock}{The computational bottleneck}
-        The state space has $\sim n_{\max}^{SK}$ reachable states —
+        The state space has $\sim n_{\max}^{SK}$ reachable states ---
         \textbf{exponential in $K$}.
         Even $K{=}8$, $S{=}1$ is intractable with a naive FSP.
       \end{alertblock}
@@ -103,9 +100,6 @@
 
 \end{frame}
 
-%================================================================
-%  2. BLOCK-TRIDIAGONAL STRUCTURE
-%================================================================
 
 \begin{frame}{$\dot{p} = Ap$ has block-tridiagonal structure \textnormal{\small(schematic, $K{=}4$, $S{=}1$)}}
 
@@ -182,10 +176,6 @@
 
 \end{frame}
 
-%================================================================
-%  3. BINOMIAL IS EXACT DIFFUSION EQUILIBRIUM
-%================================================================
-
 \begin{frame}{The Binomial is the exact diffusion equilibrium}
 
   \begin{columns}[T]
@@ -253,9 +243,6 @@
 
 \end{frame}
 
-%================================================================
-%  4. MERGING: R AND P OPERATORS
-%================================================================
 
 \begin{frame}{Merging two adjacent voxels: restriction and prolongation}
 
@@ -273,8 +260,7 @@
       \end{block}
 
       \smallskip
-      {\small $\calP$ is accurate when the distribution is near-Binomial
-     : verified at runtime, not assumed globally.}
+      {\small $\calP$ is accurate when the distribution is near-Binomial}
     \end{column}
     \begin{column}{0.46\textwidth}
       \begin{center}
@@ -303,7 +289,6 @@
           \draw[black!30] (3.7+\nb*\cb, 0.35) rectangle
                           (3.7+\nb*\cb+\cb-0.04, 0.35+\ht);
         }
-        % x-axis labels
         \draw[black!35] (3.7,0.35) -- (3.7+9*\cb,0.35);
         \foreach \nb/\lbl in {0/0, 4/4, 8/8} {
           \draw[black!35] (3.7+\nb*\cb+\cb/2,0.35) -- (3.7+\nb*\cb+\cb/2,0.25);
@@ -325,11 +310,8 @@
 
 \end{frame}
 
-%================================================================
-%  5. WHAT MERGING DOES TO THE RATE MATRIX
-%================================================================
 
-\begin{frame}{What merging does to the rate matrix}
+\begin{frame}{Coarsening the RDME Matrix}
 
   \begin{columns}[T]
     \begin{column}{0.44\textwidth}
@@ -370,12 +352,11 @@
         \node[coarsegreen!70!black,font=\tiny,above] at (3*\bs,4*\bs+0.1) {pair 2};
       \end{tikzpicture}
       \end{center}
-      {\footnotesize Size: $n_{\max}^4$}
     \end{column}
     \begin{column}{0.10\textwidth}
       \vspace{2.6cm}
       \begin{center}
-        $\xrightarrow{\;\calR\;}$\\[0.5em]
+        $\xrightarrow{\;\calR\;}$\\[1.0em]
         $\xleftarrow{\;\calP\;}$
       \end{center}
     \end{column}
@@ -402,73 +383,10 @@
         \node[left, font=\small] at (0,0.5*\cs) {$\bar n_2$};
       \end{tikzpicture}
       \end{center}
-      {\footnotesize Size: $n_{\max}^2$ \quad ($\mathbf{10^4\times}$ smaller for $n_{\max}{=}100$)}
-      \begin{itemize}\setlength\itemsep{0.15em}
-        \item $A_k \to \bar A_j$: reactions averaged over Binomial
-        \item Within-pair $D$ disappears: implicit in Binomial
-        \item $\bar D_{12}$: only between-pair diffusion remains
-      \end{itemize}
     \end{column}
   \end{columns}
 
 \end{frame}
-
-%================================================================
-%  ALGORITHM PSEUDOCODE
-%================================================================
-
-\begin{frame}{The multigrid FSP algorithm}
-
-\begin{columns}[T]
-\column{0.54\textwidth}
-
-\textbf{\texttt{multigrid\_fsp}($u_0$, $T$, $\Delta t$)}\\[0.4em]
-
-\begin{enumerate}\setlength\itemsep{0.25em}
-  \item \textbf{Initialise}: $p \leftarrow \delta_{u_0}$;\; expand $\mathcal{S}$ by one shell
-
-  \item \textbf{Detect front}:
-    \[ \alpha_j = \frac{|\mu_{2j-1} - \mu_{2j}|}{\mu_{2j-1}+\mu_{2j}}, \quad
-       j^* = \operatorname{argmax}_j\,\alpha_j \]
-    Keep pairs $j^*\!\pm\!1$ fine; merge rest.
-
-  \item \textbf{Restrict}: $\tilde n_j = n_{2j-1}+n_{2j}$ for merged pairs
-
-  \item \textbf{Solve}: $p \leftarrow e^{\Delta t\,A^M}\,p$\quad (Krylov)
-
-  \item \textbf{Prolong}: $\Bin(\tilde n_j,\tfrac12)$ for merged;
-    dynamic-$\pi$ at fine pairs
-
-  \item \textbf{Expand}: add one-step reachable states to $\mathcal{S}$
-
-  \item \textbf{Prune}: remove $\{x : p(x) < \tau\}$
-
-  \item Repeat from \textbf{2} until $t = T$
-\end{enumerate}
-
-\column{0.42\textwidth}
-\vspace{0.5em}
-\begin{block}{Cost per step}
-  \textbf{Coarse solve}: $|\mathcal{S}^M| \ll N^K$\\
-  \textbf{Expand}: $O(|\mathcal{S}^M| \cdot |\text{reactions}|)$\\
-  \textbf{Prune}: $O(|\mathcal{S}^M|)$\\[0.4em]
-  $\mathcal{S}^M$ tracks only the support of $p$: never the full truncated space.
-\end{block}
-
-\vspace{0.5em}
-\begin{block}{Key decision (step 2)}
-  $\alpha_j \approx 0$: merge pair $j$ (Binom exact)\\
-  $\alpha_j \approx 1$: keep fine (front present)\\[0.3em]
-  Same criterion for birth-death and Schl\"{o}gl.
-\end{block}
-
-\end{columns}
-
-\end{frame}
-
-%================================================================
-%  6. ADAPTIVE FSP ALGORITHM
-%================================================================
 
 \begin{frame}{The adaptive FSP algorithm: expand, solve, prune}
 \begin{center}
@@ -482,10 +400,6 @@
 \textbf{(f)}~After expand $|S|{=}139$: thin boundary shell added (white dots).
 \textbf{(g)}~After solve+prune $|S|{=}117$: compact again.}
 \end{frame}
-
-%================================================================
-%  7. BIRTH-DEATH RESULT
-%================================================================
 
 \begin{frame}{Result: K=8 RDME wavefront via coarsened simulation}
 \begin{center}
@@ -503,221 +417,281 @@ Fine marginals recovered via $\operatorname{Bin}(\tilde{n},\tfrac12)$: \emph{exa
 \end{frame}
 
 %================================================================
-%  TRANSITION TO BISTABILITY
+%  BISTABILITY - THE CHALLENGE
 %================================================================
 
-\begin{frame}{What about bistable reactions?}
+\begin{frame}{Bistable reactions}
 
 \begin{columns}[T]
 \column{0.50\textwidth}
-\textbf{Birth-death: coarsening is exact at stationarity.}\\[0.4em]
-Each voxel has a single stable state.
-Pairs equilibrate to $\Bin(\tilde{n},\tfrac12)$: merging always valid.
+For birth-death, each voxel has one stable state.
+Diffusion wins: the pair is always well-mixed.
+Binomial coarsening is \emph{essentially exact}.
 
 \vspace{0.8em}
 \textbf{But what if reactions are bistable?}\\[0.4em]
-Some systems have \emph{two} stable states per voxel.
-Spatial fronts form where neighbors occupy opposite states.
-These fronts are metastable: persistent for very long times.
+The \textbf{Schl\"{o}gl model} has two stable states per voxel:
+$n_\text{lo} \approx 31$ and $n_\text{hi} \approx 162$.
+
+\vspace{0.4em}
+\begin{center}
+  \includegraphics[width=0.95\textwidth]{fig_talk_bistability}
+\end{center}
 
 \column{0.46\textwidth}
 \vspace{0.3em}
-\begin{block}{The Schl\"{o}gl model}
-Bistable autocatalytic reactions:\\[0.3em]
-\quad $\emptyset \rightleftharpoons X$ \quad (zeroth/first order)\\
-\quad $2X \rightleftharpoons 3X$ \quad (auto-catalysis)\\[0.3em]
-Two stable states: $n_\text{lo} \approx 31$ and $n_\text{hi} \approx 162$.\\[0.3em]
-At a spatial front: joint $P(n_k,n_{k+1})$ is \emph{bimodal} —
-Binomial prolongation is completely wrong.
+\begin{block}{Spatial metastability}
+Neighbors can occupy \emph{different} states.
+A \textbf{spatial front} forms.
 \end{block}
+
+\medskip
+\begin{tikzpicture}[scale=0.7, every node/.style={font=\footnotesize}]
+  \foreach \k in {1,2} {
+    \draw[thick,fill=myblue!22] (\k-1,0) rectangle (\k,0.8);
+    \node at (\k-0.5,0.4) {lo};
+  }
+  \foreach \k in {3,4} {
+    \draw[thick,fill=slowred!22] (\k-1,0) rectangle (\k,0.8);
+    \node at (\k-0.5,0.4) {hi};
+  }
+  \draw[very thick,intercolor,dashed] (2,-0.12) -- (2,0.96);
+\end{tikzpicture}
+
+\medskip
+{\small Reactions ``pull'' voxels apart; diffusion ``pulls'' them together.
+When reactions are fast, the front \textbf{persists for very long times}.}
 \end{columns}
 
 \end{frame}
 
-%================================================================
-%  8. BISTABILITY
-%================================================================
-
-\begin{frame}{Each voxel is bistable: two stable molecular states}
-\begin{center}
-  \includegraphics[width=0.86\textwidth,keepaspectratio]{fig_talk_bistability}
-\end{center}
-\vspace{-0.3em}
-{\small
-\textbf{(a)} Net production rate $f(n)$: three zeros: two stable ($n_\text{lo}$, $n_\text{hi}$), one unstable.
-\quad\textbf{(b)} Stationary distribution is bimodal.\\[0.2em]
-\emph{Think of it as a double-well potential: each voxel wants to be at $n_\text{lo}$ or $n_\text{hi}$.}
-Each spatial configuration: e.g., $(n_\text{lo},n_\text{lo},n_\text{hi},n_\text{hi},\ldots)$: is metastable.}
-\end{frame}
-
-%================================================================
-%  7. MERGING FAILS AT THE FRONT
-%================================================================
-
-\begin{frame}{Bistable fronts: when does Binomial coarsening fail?}
+\begin{frame}{Why Binomial prolongation fails at bistable fronts}
 
   \begin{columns}[T]
-    \begin{column}{0.46\textwidth}
-      \textbf{A spatial front} forms when neighboring voxels occupy opposite stable states.
-      Slow diffusion sustains it indefinitely.
+    \begin{column}{0.50\textwidth}
+      At a spatial interface, the joint distribution $P(n_1, n_2)$
+      is \textbf{bimodal}: mass concentrated at $(n_\text{lo}, n_\text{hi})$
+      and $(n_\text{hi}, n_\text{lo})$.
 
       \medskip
-      \begin{tikzpicture}[scale=0.68, every node/.style={font=\footnotesize}]
-        \foreach \k in {1,2,3,4} {
-          \draw[thick,fill=myblue!22] (\k-1,0) rectangle (\k,0.8);
-          \node at (\k-0.5,0.4) {lo};
-        }
-        \foreach \k in {5,6,7,8} {
-          \draw[thick,fill=slowred!22] (\k-1,0) rectangle (\k,0.8);
-          \node at (\k-0.5,0.4) {hi};
-        }
-        \draw[very thick,intercolor,dashed] (4,-0.12) -- (4,0.96);
-        \node[intercolor,above,font=\scriptsize] at (4,0.96) {front};
+      \begin{alertblock}{Restriction loses orientation}
+        $\calR(n_\text{lo}, n_\text{hi}) = n_\text{lo}+n_\text{hi} = \calR(n_\text{hi}, n_\text{lo})$.\\[0.3em]
+        The total $\bar n = 193$ is the same whether the low-state voxel
+        is on the left or the right.
+        \textbf{The front direction is erased.}
+      \end{alertblock}
+
+      \medskip
+      Binomial prolongation then places the reconstructed mass at
+      $(n_\text{hi}/2{+}n_\text{lo}/2,\;\ldots) \approx (96, 97)$ ---
+      squarely in the \textbf{unstable} region.
+      The metastable front collapses to an unphysical average.
+    \end{column}
+
+    \begin{column}{0.46\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[scale=0.9]
+        \draw[->] (0,0) -- (4.2,0) node[right,font=\small]{$n_1$};
+        \draw[->] (0,0) -- (0,4.2) node[above,font=\small]{$n_2$};
+        % bimodal blobs
+        \fill[slowred!40, opacity=0.8] (0.55,3.55) circle (0.42);
+        \fill[slowred!40, opacity=0.8] (3.55,0.55) circle (0.42);
+        \node[font=\tiny] at (0.55,3.55) {lo$|$hi};
+        \node[font=\tiny] at (3.55,0.55) {hi$|$lo};
+        % constant-total diagonal
+        \draw[coarsegreen!60,dashed,thick] (0.1,3.9) -- (3.9,0.1);
+        \node[coarsegreen!70!black,font=\scriptsize,rotate=-45] at (2.8,1.2) {$\bar n = n_\text{lo}+n_\text{hi}$};
+        % Binomial reconstruction arrow to unstable center
+        \fill[intercolor,opacity=0.7] (2.05,2.05) circle (0.28);
+        \draw[->,thick,intercolor] (1.45,2.8) -- (2.0,2.15)
+          node[above left,font=\scriptsize,intercolor]{Binom$(\bar n,\tfrac12)$};
+        \node[font=\tiny,intercolor] at (2.05,2.05) {$\approx$96};
       \end{tikzpicture}
-
-      \medskip
-      At the interface pair: the joint $P(n_k,n_{k+1})$ is \textbf{bimodal}
-      (two orientations: lo$|$hi and hi$|$lo).
-
-      \vspace{0.5em}
-      Coarsening sums $\tilde n = n_k + n_{k+1}$: both orientations give the \emph{same} total.
-      Binomial prolongation puts both voxels at $\tilde n/2 \approx 97$.
-      \textbf{Wrong.}
-
-    \end{column}
-    \begin{column}{0.50\textwidth}
-      \vspace{0.3em}
-      \begin{block}{The symmetry trap}
-        \[
-          (n_\text{lo},\,n_\text{hi}) \xrightarrow{\calR} \tilde n = 193
-          \xleftarrow{\calR} (n_\text{hi},\,n_\text{lo})
-        \]
-        Both front orientations map to the same coarse state.
-        $\calP$ cannot recover the orientation.
-      \end{block}
-
-      \vspace{0.4em}
-      \begin{block}{Birth-death vs.\ Schl\"{o}gl}
-        \begin{tabular}{@{}lcc@{}}
-          & BD & Schl\"{o}gl front \\
-          \midrule
-          Within-pair dist. & Binomial & Bimodal \\
-          $\calP$ accurate? & yes & no \\
-          $\alpha_j$ & $\approx 0$ & $\approx 1$ \\
-        \end{tabular}
-      \end{block}
+      \end{center}
+      {\footnotesize
+        $\calP$ spreads mass along the diagonal via Binom$(\bar n,\tfrac12)$,
+        placing it at the \textcolor{intercolor}{\textbf{unstable fixed point}} instead of
+        preserving the two bistable modes.
+      }
     \end{column}
   \end{columns}
 
 \end{frame}
 
-%================================================================
-%  8. IMBALANCE CRITERION
-%================================================================
 
-\begin{frame}{When is merging valid? The imbalance criterion}
+\begin{frame}{The $n$-level recursive V-cycle}
 
-  \begin{columns}[T]
-    \begin{column}{0.50\textwidth}
-      Compare mean counts in adjacent voxels $2j{-}1$ and $2j$:
-      \[
-        \alpha_j = \frac{|\mu_{2j-1} - \mu_{2j}|}{\mu_{2j-1}+\mu_{2j}}.
-      \]
+\begin{columns}[T]
+\column{0.54\textwidth}
 
-      \begin{itemize}\setlength\itemsep{0.4em}
-        \item $\alpha_j \approx 0$: voxels balanced
-              $\Rightarrow$ distribution near-Binomial $\Rightarrow$ \textbf{safe to merge}.
-        \item $\alpha_j \approx 1$: voxels in opposite states
-              $\Rightarrow$ front is nearby $\Rightarrow$ \textbf{keep fine}.
-      \end{itemize}
+\textbf{One V-cycle step at level $K$:}\\[0.4em]
 
-      \medskip
-      \begin{block}{Adaptive partitioning}
-        Find $j^* = \operatorname{argmax}_j\,\alpha_j$ (front location).\\[0.2em]
-        Keep $j^*$ and its immediate neighbors fine.\\
-        Merge all other pairs.\\[0.3em]
-        Recheck $\alpha_j$ only when the front moves.
-      \end{block}
-    \end{column}
-    \begin{column}{0.46\textwidth}
+\begin{enumerate}\setlength\itemsep{0.28em}
+  \item \textbf{Pre-smooth}: evolve intra-pair diffusion for $\tau_{\rm pre}$
+        $\to$ drives within-pair distribution toward
+        $\Bin(\bar n_j,\tfrac{1}{2})$
 
-      \textbf{One V-cycle step:}
-      \begin{enumerate}\setlength\itemsep{0.3em}
-        \item \textbf{Detect front} via $\alpha_j$.
-        \item \textbf{Restrict} bulk pairs: $\bar n_j = n_{2j-1}+n_{2j}$.
-        \item \textbf{Coarse solve}: $\dot p^M = A^M p^M$
-              on $K/2$ effective voxels.
-        \item \textbf{Prolong} fine pairs back using dynamic-$\pi$
-              (correct at front; Binomial elsewhere).
-      \end{enumerate}
+  \item \textbf{Restrict}: $\bar n_j = n_{2j-1}+n_{2j}$;
+        save $\bar p^{\,\rm pre} = \calR\,\tilde p$ (pre-solve coarse distribution)
 
-      \medskip
-      {\small\textbf{State space:} $K/2$ coarse voxels $+$ small fine window.
-      Tractable where full $K$-voxel FSP is not.}
+  \item \textbf{Recurse}: V-cycle on $K/2$-voxel system\\
+        (direct FSP at the coarsest level $K/2^L$)
 
-    \end{column}
-  \end{columns}
+  \item \textbf{Prolong}: conditional reconstruction
+        from coarse update $\bar p^{\,\rm post}$
+
+  \item \textbf{Prune}: remove states with $p(x) < \tau$
+\end{enumerate}
+
+\column{0.42\textwidth}
+\vspace{0.4em}
+\begin{block}{Hierarchy}
+  $K \;\to\; K/2 \;\to\; K/4 \;\to\; \cdots \;\to\; K/2^L$\\[0.3em]
+  Coarsest level solved exactly with the FSP.
+  Each level adds one restriction + prolongation step.
+\end{block}
+
+\vspace{0.4em}
+\begin{block}{State space}
+  Grows \emph{only} through prolongation --- no explicit enumeration
+  of the full $n_{\max}^K$ space.
+  Support of $p$ tracked directly; controlled by the prune threshold~$\tau$.
+\end{block}
+
+\end{columns}
 
 \end{frame}
 
-%================================================================
-%  9. RESULTS
-%================================================================
 
-%================================================================
-%  SCHLÖGL RESULT
-%================================================================
+\begin{frame}{Conditional prolongation: reconstructing the fine distribution}
 
-\begin{frame}{Result: adaptive V-cycle correctly tracks the Schl\"{o}gl front}
+\begin{columns}[T]
+\column{0.56\textwidth}
+
+After the coarse solve, $\bar p^{\rm post}$ differs from $\bar p^{\rm pre}$.
+Three types of coarse states arise:
+
+\medskip
+\textbf{1.~Covered states}
+  $\bigl(\bar x \in \mathcal{S}^{\rm pre} = \calR\,\tilde p\bigr)$:
+  \textbf{multiplicative update}
+  \[
+    p^{\rm new}(x) \;=\; \tilde p(x)\cdot
+    \frac{\bar p^{\rm post}(\bar x)}{\bar p^{\rm pre}(\bar x)}.
+  \]
+  Exact and asymmetry-preserving: mass at $(n_{\rm lo},n_{\rm hi})$
+  stays there rather than being forced symmetric.
+
+\medskip
+\textbf{2.~Reaction boundary} ($L_1 = 1$: one pair count changes by ${\pm}1$):\\
+  Extend the nearest covered conditional --- keep $n_{2j-1}$,
+  set $n_{2j} = \bar n_j^{\rm new} - n_{2j-1}$.
+
+\medskip
+\textbf{3.~Diffusion boundary} ($L_1 = 2$: two pair counts each change by ${\pm}1$):\\
+  Coarse diffusion moves a molecule between pairs simultaneously.
+  Shift second voxels of \emph{both} changed pairs.
+
+\column{0.40\textwidth}
+\vspace{0.5em}
+
 \begin{center}
-  \includegraphics[width=0.93\textwidth,keepaspectratio]{fig_talk_schlogl}
+\begin{tikzpicture}[scale=0.78,every node/.style={font=\scriptsize}]
+  % Coarse grid K=2: nc1, nc2
+  \node[above] at (1.0,2.2) {$(\bar n_1,\bar n_2)$ coarse state};
+  % covered state
+  \fill[coarsecolor!30] (0,1) rectangle (2,2);
+  \node at (1,1.5) {covered $\bar x$};
+  % reaction boundary L1=1
+  \fill[coarsegreen!25] (0,0) rectangle (2,1);
+  \node at (1,0.5) {$L_1{=}1$: reaction $(\bar n_1{\pm}1)$};
+  % diffusion boundary L1=2
+  \fill[intercolor!25] (2,0) rectangle (4,1);
+  \node at (3,0.5) {$L_1{=}2$: diffusion};
+  \node[align=center] at (3,1.5) {$(\bar n_1{-}1,\,\bar n_2{+}1)$\\both pairs shift};
+  \fill[intercolor!25] (2,1) rectangle (4,2);
+  \draw[thick] (0,0) rectangle (4,2);
+  \draw[thick] (0,1)--(4,1);
+  \draw[thick] (2,0)--(2,2);
+  % arrow labels
+  \draw[->,thick,coarsecolor] (-0.8,1.5) -- (0,1.5) node[left,pos=0]{$\times$-update};
+  \draw[->,thick,coarsegreen!70!black] (-0.8,0.5) -- (0,0.5) node[left,pos=0]{extend};
+  \draw[->,thick,intercolor] (4,0.5) -- (4.8,0.5) node[right]{shift both};
+\end{tikzpicture}
+\end{center}
+
+\vspace{0.3em}
+\begin{alertblock}{Why $L_1{=}2$ matters}
+  Coarse diffusion $({\bar n}_1,{\bar n}_2)\!\to\!({\bar n}_1{-}1,{\bar n}_2{+}1)$
+  is always $L_1{=}2$.
+  Without this search, \textbf{inter-pair mass transport is invisible} to
+  the V-cycle and molecules never leave pair~1.
+\end{alertblock}
+
+\end{columns}
+
+\end{frame}
+
+
+\begin{frame}{Result: Schl\"{o}gl wavefront spreading via the V-cycle}
+\begin{center}
+  \includegraphics[width=0.93\textwidth,keepaspectratio]{fig_schlogl_wavefront}
 \end{center}
 \vspace{-0.5em}
 {\footnotesize
-K=4 Schl\"{o}gl, IC\,=\,$(n_\text{lo},n_\text{hi},n_\text{hi},n_\text{hi})$, front in pair 1.\quad
-\textbf{Top:} voxel means.
-\textbf{(a)} Direct (22k states), ground truth.
-\textbf{(b)} Coarse Binomial (331 states): front collapses to ${\approx}96$ (wrong).
-\textbf{(c)} V-cycle dyn-$\pi$ (221 states): correct, same cost as coarse.
-\textbf{Bottom:} spatial marginals at $t{=}1$ confirm (b) is wrong, (c) matches (a).}
+$K{=}4$, $D{=}1.0$, IC: all $n_{\rm hi}{=}162$ molecules in $v_1$.
+Conditional prolongation with $L_1{\leq}2$ neighbor search propagates mass from pair~1 to pair~2.
+State space: $|S|{=}7 \to 100{,}888$ over $t{=}0 \to 3$ (controlled growth; no explosion).
+White dashed: stable states ($n{=}31$, $n{=}162$). White dotted: unstable point ($n{=}72$).
+}
 \end{frame}
 
-%================================================================
-%  SUMMARY
-%================================================================
+
+\begin{frame}{Result: splitting from the unstable Schl\"{o}gl fixed point}
+\begin{center}
+  \includegraphics[width=0.93\textwidth,keepaspectratio]{fig_schlogl_splitting}
+\end{center}
+\vspace{-0.5em}
+{\footnotesize
+$K{=}4$, $D{=}5.0$, IC: all voxels at unstable point $n{=}72$.
+By $t{=}12$: 37\% probability in low basin ($n{<}51$), 10\% entering high basin ($n{>}117$).
+Low-basin peak at $n{\approx}41$ approaching stable $n_{\rm lo}{=}31$;
+high-basin peak at $n{\approx}118$ approaching stable $n_{\rm hi}{=}162$.
+Color: $P(n_k{=}n)^{1/3}$ (cube-root scale to reveal low-probability tails).
+}
+\end{frame}
+
 
 \begin{frame}{Summary}
 
-  \begin{block}{1.\quad Fast diffusion enables state-space compression.}
-    When the joint distribution of two adjacent voxels is near $\Bin(\bar n,\tfrac12)$,
-    replacing $(n_1,n_2)$ by $\bar n$ cuts the per-pair state space
-    from $n_{\max}^{2S}$ to $n_{\max}^{S}$.
-    \emph{K=8 birth-death wavefront solved with 30k states (direct: intractable).}
+  \begin{block}{1.\quad Fast diffusion enables state-space compression via restriction.}
+    When the within-pair distribution is near-Binomial, marginalising pairs reduces
+    the state space from $n_{\max}^{2S}$ to $n_{\max}^{S}$ per pair.
+    \emph{$K{=}8$ birth-death wavefront solved with 30k states (direct: intractable).}
   \end{block}
 
   \smallskip
-  \begin{block}{2.\quad Bistable fronts require dynamic-$\pi$ prolongation.}
-    At a front, the within-pair distribution is bimodal: Binomial is wrong.
-    The imbalance $\alpha_j$ detects this at runtime.
-    V-cycle with dynamic-$\pi$ corrects the prolongation.
-    \emph{K=4 Schl\"{o}gl: V-cycle 221 states, direct 22k, both accurate.}
+  \begin{block}{2.\quad Bistable systems require conditional --- not Binomial --- prolongation.}
+    At spatial fronts, the within-pair distribution is bimodal.
+    Conditional prolongation preserves asymmetry: multiplicative update for covered states;
+    $L_1{\leq}2$ neighbor search handles both reaction ($L_1{=}1$) and
+    diffusion ($L_1{=}2$) boundary states.
   \end{block}
 
   \smallskip
-  \begin{block}{3.\quad Same algorithm: $\alpha_j$ adapts automatically.}
-    Birth-death: $\alpha_j{\approx}0$ always $\Rightarrow$ merge all pairs.
-    Schl\"{o}gl: $\alpha_j{\approx}1$ at front $\Rightarrow$ keep fine.
-    One algorithm handles both.
+  \begin{block}{3.\quad The $n$-level V-cycle propagates correct spatial dynamics.}
+    Wavefront spreading (from concentrated IC) and bistable splitting (from unstable IC)
+    are both captured.
+    State-space growth is controlled by pruning: no explosion.
   \end{block}
 
   \smallskip
-  \textbf{Open:} multi-level hierarchy; multi-species; moving fronts; rigorous error bounds.
+  \textbf{Open questions:} error bounds on conditional prolongation;
+  dynamic-$\pi$ for improved within-pair accuracy; multi-species Schl\"{o}gl systems.
 
 \end{frame}
 
-%================================================================
 \appendix
-%================================================================
 
 \begin{frame}{Appendix: why not reconstruct at every step?}
 
@@ -751,7 +725,7 @@ K=4 Schl\"{o}gl, IC\,=\,$(n_\text{lo},n_\text{hi},n_\text{hi},n_\text{hi})$, fro
       \begin{alertblock}{Reconstruction is wrong at the front}
         Step 4 forces a Binomial split on \emph{every} pair,
         including the front where the true distribution is bimodal.\\[0.5em]
-        \textbf{Fix:} evolve $p^M$ directly: no reconstruction step.
+        \textbf{Approach:} evolve $p^M$ directly: no reconstruction step.
         Coarse pairs carry the Binomial assumption implicitly in $\bar A_j$;
         the fine window tracks the true within-pair distribution exactly.
       \end{alertblock}
