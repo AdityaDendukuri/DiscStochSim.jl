@@ -150,7 +150,8 @@ function mixed_vcycle_1d_2s(
     coarse_d_depth::Int = 1,
     coarse_n_max::Int   = 80,
     max_states::Int     = 1_000_000,
-    prune_tol::Float64  = 0.0
+    prune_tol::Float64  = 0.0,
+    patch_qsd::Union{PatchQSD, Nothing} = nothing
 ) where N
     length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
 
@@ -203,9 +204,9 @@ function mixed_vcycle_1d_2s(
         τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
         expand_coarse, coarse_r_depth, coarse_d_depth,
         coarse_n_max = 2 * coarse_n_max,
-        max_states, prune_tol)
+        max_states, prune_tol, patch_qsd)
 
-    # ── 6. Prolongate (multiplicative correction + Binomial for new states) ───
+    # ── 6. Prolongate (multiplicative for covered states, QSD/Binomial for new) ─
     sp_c_pre  = StateSpace{CartesianIndex{N2}, Float64}()
     sp_c_post = StateSpace{CartesianIndex{N2}, Float64}()
     for i in 1:n_coarse_pre
@@ -222,7 +223,9 @@ function mixed_vcycle_1d_2s(
         p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
     end
     if length(sp_δ_new) > 0
-        sp_δf_new = prolong2s(sp_δ_new, Val(N); weight_tol, binom_tol, max_states)
+        sp_δf_new = patch_qsd === nothing ?
+            prolong2s(sp_δ_new, Val(N); weight_tol, binom_tol, max_states) :
+            prolong_patch_qsd(sp_δ_new, Val(N), patch_qsd; weight_tol, prob_tol = weight_tol)
         for i in eachindex(sp_δf_new.states)
             s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
             idx = get(sp_h_new.index, s, 0)

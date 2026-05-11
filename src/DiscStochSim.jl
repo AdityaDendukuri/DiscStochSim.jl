@@ -27,6 +27,7 @@ include("rdme/voxel_grid.jl")
 include("rdme/rdme_model.jl")
 include("rdme/operators.jl")
 include("rdme/dynamic_pi.jl")
+include("rdme/patch_qsd.jl")
 include("rdme/vcycle.jl")
 include("rdme/mixed_vcycle.jl")
 include("rdme/solve.jl")
@@ -62,6 +63,9 @@ export promote_left_1d, promote_right_1d, demote_left_1d, demote_right_1d
 export AnnihilationModel1D
 export build_active_annihilation_1d, update_inactive_means_annihilation_1d!
 export adapt_annihilation_1d
+export PatchQSD, build_patch_qsd, prolong_patch_qsd
+export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
+export patch_qsd_correlation
 export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottleneck_bc
 export build_bottleneck_system_2d, build_intra_system_2d
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid

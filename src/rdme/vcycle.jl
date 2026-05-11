@@ -331,7 +331,8 @@ function multi_level_vcycle_2s(sp_h::StateSpace{CartesianIndex{N}, Float64},
                                 coarse_d_depth::Int  = 1,
                                 coarse_n_max::Int    = 80,
                                 max_states::Int      = 1_000_000,
-                                prune_tol::Float64   = 0.0) where {N}
+                                prune_tol::Float64   = 0.0,
+                                patch_qsd::Union{PatchQSD, Nothing} = nothing) where {N}
     length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
 
     # ── Coarsest level: solve directly ───────────────────────────────────────
@@ -380,7 +381,7 @@ function multi_level_vcycle_2s(sp_h::StateSpace{CartesianIndex{N}, Float64},
                                             τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
                                             expand_coarse, coarse_r_depth, coarse_d_depth,
                                             coarse_n_max = 2 * coarse_n_max,
-                                            max_states, prune_tol)
+                                            max_states, prune_tol, patch_qsd)
 
     # ── 6. Prolongate ─────────────────────────────────────────────────────────
     sp_c_pre  = StateSpace{CartesianIndex{N2}, Float64}()
@@ -390,18 +391,20 @@ function multi_level_vcycle_2s(sp_h::StateSpace{CartesianIndex{N}, Float64},
         add_state!(sp_c_post, sp_coarse_post.states[i], sp_coarse_post.probs[i])
     end
 
-    # Part A: multiplicative correction for covered coarse states
+    # Part A: multiplicative correction for covered coarse states (always exact)
     sp_h_new = prolong_multiplicative_2s(sp_for_restrict, sp_c_pre, sp_c_post;
                                           prob_tol = weight_tol)
 
-    # Part B: independent Binomial initialization for expand!-added coarse states
+    # Part B: physics-informed QSD (or Binomial fallback) for expand!-added states
     sp_δ_new = StateSpace{CartesianIndex{N2}, Float64}()
     for i in (n_coarse_pre + 1):length(sp_coarse_post.states)
         p = sp_coarse_post.probs[i]
         p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
     end
     if length(sp_δ_new) > 0
-        sp_δf_new = prolong2s(sp_δ_new, Val(N); weight_tol, binom_tol, max_states)
+        sp_δf_new = patch_qsd === nothing ?
+            prolong2s(sp_δ_new, Val(N); weight_tol, binom_tol, max_states) :
+            prolong_patch_qsd(sp_δ_new, Val(N), patch_qsd; weight_tol, prob_tol = weight_tol)
         for i in eachindex(sp_δf_new.states)
             s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
             idx = get(sp_h_new.index, s, 0)
@@ -512,7 +515,8 @@ function multi_level_vcycle_2d_2s(
     coarse_n_max::Int    = 40,
     max_states::Int      = 1_000_000,
     prune_tol::Float64   = 0.0,
-    source_voxels        = nothing
+    source_voxels        = nothing,
+    patch_qsd::Union{PatchQSD, Nothing} = nothing
 ) where {N}
     length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
 
@@ -576,7 +580,7 @@ function multi_level_vcycle_2d_2s(
         expand_coarse, coarse_r_depth, coarse_d_depth,
         coarse_n_max = cmap.patch_size * coarse_n_max,
         max_states, prune_tol,
-        source_voxels = source_coarse)
+        source_voxels = source_coarse, patch_qsd)
 
     # ── 6. Prolongate ─────────────────────────────────────────────────────────
     sp_c_pre  = StateSpace{CartesianIndex{N2}, Float64}()
@@ -595,7 +599,9 @@ function multi_level_vcycle_2d_2s(
         p > weight_tol && add_state!(sp_δ_new, sp_coarse_post.states[i], p)
     end
     if length(sp_δ_new) > 0
-        sp_δf_new = prolong2s(sp_δ_new, cmap, Val(N); weight_tol, binom_tol, max_states)
+        sp_δf_new = patch_qsd === nothing ?
+            prolong2s(sp_δ_new, cmap, Val(N); weight_tol, binom_tol, max_states) :
+            prolong_patch_qsd(sp_δ_new, cmap, Val(N), patch_qsd; weight_tol, prob_tol = weight_tol)
         for i in eachindex(sp_δf_new.states)
             s = sp_δf_new.states[i]; δp = sp_δf_new.probs[i]
             idx = get(sp_h_new.index, s, 0)
