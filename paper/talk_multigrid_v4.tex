@@ -725,6 +725,28 @@ White dashed: stable states ($n{=}31$, $n{=}162$). White dotted: unstable point 
 
 
 % ================================================================
+\begin{frame}{2D Schl\"{o}gl: bistable front as a spatial wave}
+\begin{center}
+  \includegraphics[width=0.96\textwidth,keepaspectratio]{schlogl_2d}
+\end{center}
+\vspace{-0.4em}
+{\footnotesize
+\textbf{Left (4 panels):} Mean-field ODE on $40{\times}40$ grid.
+IC: bottom half $n_{\rm hi}{=}162$ (red), top half $n_{\rm lo}{=}31$ (blue).
+$\int f(n)\,dn > 0$: $n_{\rm hi}$ state thermodynamically favored --- front sweeps upward.
+White overlay = active FSP strip ($n_{\rm lo} < \mu_k < n_{\rm hi}$).\\[0.2em]
+\textbf{Right panel:} Single-voxel stationary distribution $P(n)$.
+\textbf{Bimodal}: mass at $n_{\rm lo}{=}31$ and $n_{\rm hi}{=}162$, nothing near $n_{\rm unstable}{=}72$.
+Mean-field sees only $E[n]$ --- it places a single mode at the current mean
+and completely misses the two-state structure.
+\textbf{FSP is required at the front to capture this bimodal distribution.}
+Column-product: each of the $K_y$ columns gets an independent 1D FSP at the front ---
+tractable regardless of $K_y$.
+}
+\end{frame}
+
+
+% ================================================================
 %  11. NEW: A+B → ∅  2D front
 % ================================================================
 \begin{frame}{Two-species A+B$\to\emptyset$: mixed-resolution reaction front}
