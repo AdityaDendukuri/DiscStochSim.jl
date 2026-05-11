@@ -725,6 +725,29 @@ White dashed: stable states ($n{=}31$, $n{=}162$). White dotted: unstable point 
 
 
 % ================================================================
+%  NEW: Mixed-resolution for bistable Schlögl
+% ================================================================
+\begin{frame}{Mixed-resolution FSP: adaptive active strip for bistable wavefront}
+\begin{center}
+  \includegraphics[width=0.96\textwidth,keepaspectratio]{schlogl_1d_mixed}
+\end{center}
+\vspace{-0.5em}
+{\footnotesize
+$K{=}16$ voxels, $D{=}1$, IC: left half $n_{\rm hi}{=}162$, right half $n_{\rm lo}{=}31$.
+\textbf{Inactive voxels} (white overlay absent): mean-field ODE $ \dot\mu_k = f(\mu_k) + D\Delta\mu_k$; exact near fixed points.
+\textbf{Active strip} (white overlay, $K_{\rm act}{\leq}3$): joint FSP tracks the transition zone exactly.\\[0.2em]
+\textbf{Center}: state-space cost.
+Full FSP scales as $n_{\rm eff}^K$ (red, exponential).
+Mixed-resolution cost stays $\leq\!115{,}026$ states regardless of $K$ (green dashed, constant).\\[0.2em]
+\textbf{Right}: why FSP is essential.
+The exact single-voxel $P(n)$ is \textbf{bimodal} (mass at $n_{\rm lo}$ and $n_{\rm hi}$, white solid).
+Mean-field tracks only $E[n]$, predicting a single unimodal peak at the mean (red dashed) ---
+the two-state bistable structure is invisible.
+}
+\end{frame}
+
+
+% ================================================================
 \begin{frame}{2D Schl\"{o}gl: bistable front as a spatial wave}
 \begin{center}
   \includegraphics[width=0.96\textwidth,keepaspectratio]{schlogl_2d}

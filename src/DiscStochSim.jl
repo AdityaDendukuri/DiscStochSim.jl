@@ -30,6 +30,7 @@ include("rdme/dynamic_pi.jl")
 include("rdme/patch_qsd.jl")
 include("rdme/vcycle.jl")
 include("rdme/mixed_vcycle.jl")
+include("rdme/schlogl_mixed_1d.jl")
 include("rdme/solve.jl")
 
 # Exports
@@ -60,6 +61,10 @@ export ActiveVoxelSet1D, n_active, left_inactive, right_inactive
 export build_active_bottleneck_1d, mixed_vcycle_1d_2s
 export update_inactive_means_1d!, adapt_active_1d, active_bc
 export promote_left_1d, promote_right_1d, demote_left_1d, demote_right_1d
+export build_active_schlogl_1d, update_inactive_means_schlogl_1d!
+export promote_left_schlogl, promote_right_schlogl
+export demote_left_schlogl, demote_right_schlogl
+export adapt_schlogl_1d, schlogl_mixed_bc
 export AnnihilationModel1D
 export build_active_annihilation_1d, update_inactive_means_annihilation_1d!
 export adapt_annihilation_1d
