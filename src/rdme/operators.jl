@@ -1,4 +1,228 @@
 """
+    PatchPropensity
+
+Describes the per-voxel propensities for a single species in a 2-voxel patch.
+
+Each propensity is a function `n::Int -> Float64` giving the rate of that
+channel firing in a voxel holding `n` molecules.  The sign convention for the
+change in *total* patch count determines how the channel couples to the QSD
+computation:
+
+  - `conserving`   : Δ(n₁+n₂) = 0  (e.g. isomerisation A⇌B)
+  - `absorbing_pos`: Δ(n₁+n₂) = +1 (e.g. birth  ∅→A)
+  - `absorbing_neg`: Δ(n₁+n₂) = -1 (e.g. death  A→∅, or bimolecular A+A→…)
+
+`absorbing_pos` and `absorbing_neg` channels contribute to the *absorption
+rate* that defines the QSD: the system is absorbed whenever a molecule enters
+or leaves the patch.  The QSD is the stationary distribution conditioned on
+staying in the N-particle subspace.
+
+Fields
+------
+- `conserving_fwd(n)` : rate of n → n+1 *within a voxel* (N-conserving half-step)
+- `conserving_rev(n)` : rate of n → n-1 *within a voxel* (N-conserving half-step)
+- `absorbing_pos(n)`  : per-voxel absorption rate that increases total N by 1
+- `absorbing_neg(n)`  : per-voxel absorption rate that decreases total N by 1
+"""
+struct PatchPropensity
+    conserving_fwd::Function   # n -> rate  (n → n+1 in this voxel, partner n→n-1)
+    conserving_rev::Function   # n -> rate  (n → n-1 in this voxel, partner n→n+1)
+    absorbing_pos::Function    # n -> rate  (birth-like, leaves N-subspace upward)
+    absorbing_neg::Function    # n -> rate  (death-like, leaves N-subspace downward)
+end
+
+PatchPropensity() = PatchPropensity(_ -> 0.0, _ -> 0.0, _ -> 0.0, _ -> 0.0)
+
+"""
+    QSDProlongTable
+
+Precomputed quasi-stationary distributions for a 2-voxel patch at each
+total count N ∈ {0, …, N_max}.
+
+`table[n1+1, N+1]` = P(n₁ = n1 | n₁+n₂ = N) under the local patch QSD.
+
+Constructed via [`build_qsd_table`](@ref).
+"""
+struct QSDProlongTable
+    table::Matrix{Float64}   # (N_max+1) × (N_max+1)
+    N_max::Int
+    d::Float64               # internal diffusion rate used to build the table
+end
+
+"""
+    build_qsd_table(N_max, d; propensity, tol) -> QSDProlongTable
+
+Precompute the quasi-stationary prolongation distribution for every total
+count N ∈ {0, …, N_max} in a symmetric 2-voxel patch.
+
+# Arguments
+- `N_max`       : maximum total molecule count to tabulate.
+- `d`           : internal diffusion rate  D / dx²  between the two voxels.
+- `propensity`  : a [`PatchPropensity`](@ref) describing per-voxel reactions.
+  Defaults to `PatchPropensity()` (pure diffusion → recovers Binomial).
+- `tol`         : entries of the QSD below this threshold are zeroed.
+
+# Algorithm
+For each N, build the (N+1)×(N+1) CME generator restricted to the
+N-molecule subspace, treating channels that change total count as absorbing.
+When the absorption rates are *state-independent* (e.g. symmetric birth-death),
+the QSD equals the ordinary stationary distribution of the conserved dynamics
+and is found as the null vector of Q_local.  When absorption is state-dependent
+(bimolecular, Schlögl), we solve for the leading eigenvector of Q_local - Λ,
+where Λ(n₁) is the total absorption rate from state n₁.
+
+# Notes
+- Pure diffusion (no propensity) recovers `Binomial(N, 1/2)` exactly.
+- For the Schlögl model pass `absorbing_pos(n) = c3` and
+  `absorbing_neg(n) = c4*n + c1*n*(n-1)/2 + c2*n*(n-1)*(n-2)/6`.
+"""
+function build_qsd_table(N_max::Int, d::Float64;
+                         propensity::PatchPropensity = PatchPropensity(),
+                         tol::Float64 = 1e-14)::QSDProlongTable
+    table = zeros(Float64, N_max + 1, N_max + 1)
+
+    for N in 0:N_max
+        if N == 0
+            table[1, 1] = 1.0
+            continue
+        end
+
+        # Build (N+1)×(N+1) local generator.
+        # Index i corresponds to n₁ = i-1, n₂ = N-(i-1).
+        n_states = N + 1
+        Q = zeros(n_states, n_states)
+
+        for i in 1:n_states
+            n1 = i - 1
+            n2 = N - n1
+
+            # ── internal diffusion ─────────────────────────────────────────
+            if n1 < N          # hop: voxel 2 → voxel 1  (n₁ increases)
+                r = d * n2
+                Q[i+1, i] += r;  Q[i, i] -= r
+            end
+            if n1 > 0          # hop: voxel 1 → voxel 2  (n₁ decreases)
+                r = d * n1
+                Q[i-1, i] += r;  Q[i, i] -= r
+            end
+
+            # ── N-conserving reactions (shift between voxels) ──────────────
+            # Forward: molecule "produced" in voxel 1 balanced by "consumed" in voxel 2
+            if n1 < N && n2 > 0
+                r = propensity.conserving_fwd(n2)   # voxel 2 acts as source
+                Q[i+1, i] += r;  Q[i, i] -= r
+            end
+            if n1 > 0 && n2 < N
+                r = propensity.conserving_rev(n1)   # voxel 1 acts as source
+                Q[i-1, i] += r;  Q[i, i] -= r
+            end
+
+            # ── absorption: channels that change total N ───────────────────
+            # These leave the N-subspace; subtract from diagonal only (QSD formulation).
+            abs_rate = propensity.absorbing_pos(n1) + propensity.absorbing_pos(n2) +
+                       propensity.absorbing_neg(n1) + propensity.absorbing_neg(n2)
+            Q[i, i] -= abs_rate
+        end
+
+        # ── find leading eigenvector of Q ──────────────────────────────────
+        # If absorption is state-independent, Q has a null vector (ordinary ss).
+        # If absorption is state-dependent, the leading (least-negative) eigenvector
+        # is the QSD.  We use a unified path: find the eigenvector for the eigenvalue
+        # closest to zero.
+        vals, vecs = eigen(Q)                       # sorted ascending (most negative first)
+        idx_lead   = argmax(real.(vals))            # eigenvalue closest to 0
+        π          = real.(vecs[:, idx_lead])
+        π          = abs.(π)                        # eigenvector sign is arbitrary
+        π_sum      = sum(π)
+        if π_sum > 0.0
+            π ./= π_sum
+        else
+            π .= 1.0 / n_states                    # degenerate fallback: uniform
+        end
+        π[π .< tol] .= 0.0
+        s = sum(π)
+        s > 0.0 && (π ./= s)
+
+        table[1:n_states, N+1] .= π
+    end
+
+    QSDProlongTable(table, N_max, d)
+end
+
+"""
+    prolong_qsd(sp_coarse, ::Val{K}, qt; weight_tol, prob_tol) -> StateSpace
+
+QSD prolongation 𝓟_QSD: coarse → fine using a precomputed [`QSDProlongTable`](@ref).
+
+Replaces the Binomial assumption in [`prolong`](@ref) with the local
+quasi-stationary distribution, which is exact in the fast-diffusion limit
+(recovers Binomial) and captures reaction-induced asymmetry at arbitrary
+Damköhler numbers.
+
+# Arguments
+- `sp_coarse`  : coarse-level `StateSpace{CartesianIndex{K2}}`.
+- `::Val{K}`   : fine-level dimensionality (K = 2·K2).
+- `qt`         : a `QSDProlongTable` built with [`build_qsd_table`](@ref).
+- `weight_tol` : skip coarse states with probability below this.
+- `prob_tol`   : skip fine states whose QSD weight is below this.
+"""
+function prolong_qsd(sp_coarse::StateSpace{CartesianIndex{K2}, T},
+                     ::Val{K},
+                     qt::QSDProlongTable;
+                     weight_tol::Float64 = 1e-14,
+                     prob_tol::Float64   = 0.0) where {K2, K, T}
+    K == 2 * K2 || error("K=$K must equal 2*K2 for one-level QSD prolongation")
+
+    sp_fine  = StateSpace{CartesianIndex{K}, T}()
+    fine_buf = zeros(Int, K)
+
+    for i in eachindex(sp_coarse.states)
+        prob = sp_coarse.probs[i]
+        prob > weight_tol || continue
+        coarse_tup = Tuple(sp_coarse.states[i])
+        _prolong_qsd_recurse!(sp_fine, coarse_tup, prob, fine_buf, 1, K2, qt,
+                              weight_tol, prob_tol)
+    end
+
+    sp_fine
+end
+
+function _prolong_qsd_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
+                                coarse_tup::NTuple{K2, Int},
+                                weight::T,
+                                fine_buf::Vector{Int},
+                                pair_idx::Int,
+                                n_pairs::Int,
+                                qt::QSDProlongTable,
+                                weight_tol::Float64,
+                                prob_tol::Float64) where {K, K2, T}
+    if pair_idx > n_pairs
+        fine_state = CartesianIndex(NTuple{K, Int}(fine_buf))
+        idx = get(sp_fine.index, fine_state, 0)
+        if idx == 0
+            add_state!(sp_fine, fine_state, weight)
+        else
+            sp_fine.probs[idx] += weight
+        end
+        return
+    end
+
+    N = coarse_tup[pair_idx]
+    col = N + 1   # column in QSD table
+
+    for n1 in 0:min(N, qt.N_max)
+        qsd_w = qt.table[n1 + 1, col]
+        qsd_w > prob_tol || continue
+        fine_weight = weight * qsd_w
+        fine_weight > weight_tol || continue
+        fine_buf[2*pair_idx - 1] = n1
+        fine_buf[2*pair_idx]     = N - n1
+        _prolong_qsd_recurse!(sp_fine, coarse_tup, fine_weight, fine_buf,
+                              pair_idx + 1, n_pairs, qt, weight_tol, prob_tol)
+    end
+end
+
+"""
     restrict(sp_fine) -> StateSpace{CartesianIndex{K÷2}, T}
 
 Restriction operator  𝓡: fine → coarse.

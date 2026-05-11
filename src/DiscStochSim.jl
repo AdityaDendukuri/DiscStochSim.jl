@@ -28,6 +28,7 @@ include("rdme/rdme_model.jl")
 include("rdme/operators.jl")
 include("rdme/dynamic_pi.jl")
 include("rdme/vcycle.jl")
+include("rdme/mixed_vcycle.jl")
 include("rdme/solve.jl")
 
 # Exports
@@ -50,9 +51,17 @@ export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
 export restrict, prolong, prolong_multiplicative, prolong_conditional
+export PatchPropensity, QSDProlongTable, build_qsd_table, prolong_qsd
 export restrict2s, prolong2s, prolong_multiplicative_2s
 export lumpability_ratio, pair_admissibility
 export multi_level_vcycle, multi_level_vcycle_2s, multi_level_vcycle_2d_2s
+export ActiveVoxelSet1D, n_active, left_inactive, right_inactive
+export build_active_bottleneck_1d, mixed_vcycle_1d_2s
+export update_inactive_means_1d!, adapt_active_1d, active_bc
+export promote_left_1d, promote_right_1d, demote_left_1d, demote_right_1d
+export AnnihilationModel1D
+export build_active_annihilation_1d, update_inactive_means_annihilation_1d!
+export adapt_annihilation_1d
 export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottleneck_bc
 export build_bottleneck_system_2d, build_intra_system_2d
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
