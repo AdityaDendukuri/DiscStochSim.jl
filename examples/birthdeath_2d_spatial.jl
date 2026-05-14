@@ -72,11 +72,11 @@ function record!(s, step)
     push!(n_empty_hist,    n_empty(s))
     push!(total_mean_hist,
           sum(voxel_mean(p) for (_, p) in s.dists; init=0.0) +
-          sum(values(s.equil_means); init=0.0))
+          sum(voxel_mean(p) for (_, p) in s.equil_dists; init=0.0))
     # Center mean: active → from dist, equilibrated → μ_ss, empty → 0
     push!(center_mean_hist,
           haskey(s.dists, center)      ? voxel_mean(s.dists[center]) :
-          haskey(s.equil_means, center) ? get(s.equil_means, center, μ_ss) : 0.0)
+          haskey(s.equil_dists, center) ? voxel_mean(s.equil_dists[center]) : 0.0)
     if step ∈ snap_steps
         snap_status[step] = status_grid(s)
         snap_means[step]  = mean_grid(s)   # includes equil means — used for heatmap

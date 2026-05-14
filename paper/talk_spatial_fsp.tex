@@ -440,16 +440,18 @@ As active neighbours equilibrate, $\mu_k^{\rm loc} \to k_b/k_d$ (global SS).
       \textbf{Spatial adaptive FSP} (this work):
       \begin{enumerate}\setlength\itemsep{0.3em}
         \item \textit{Evolve}: CME step on active (fine) voxels.
-        \item \textit{Restrict}: active $\to$ equilibrated (coarse: $\Pois(\mu)$).
-        \item \textit{Coarse update}: evolve $\mu_k^{\rm loc}$ algebraically.
-        \item \textit{Prolong}: flux threshold $\to$ activate (coarse $\to$ fine).
+        \item \textit{Restrict} $\calR$: active $\to$ equil; store $p_k$ as $p_k^{\rm eq}$.
+        \item \textit{Coarse update} ($A_c = \calR A \calP$, Galerkin):
+              boundary equil $\to$ expv; interior equil $\to$ algebraic.
+        \item \textit{Prolong} $\calP$: flux threshold $\to$ activate.
       \end{enumerate}
 
       \medskip
-      \begin{block}{Key difference: adaptive scheduling}
-        In classical MG the cycle is \emph{prescribed} (fixed iteration).\\
-        Here it is \emph{physics-driven}: prolong fires when molecules arrive;
-        restrict fires when the distribution equilibrates.
+      \begin{block}{What makes step 3 Galerkin?}
+        $A_c$ is obtained by marginalising $A_{\rm RDME}$ over independent
+        neighbours (mean-field).  For birth-death this is
+        $\calR A \calP$ with Poisson prolongation --- exactly what
+        \texttt{build\_coarse\_system} computes.
       \end{block}
     \end{column}
     \begin{column}{0.46\textwidth}
@@ -465,11 +467,16 @@ As active neighbours equilibrate, $\mu_k^{\rm loc} \to k_b/k_d$ (global SS).
         \node at (2.1,3.55) {ACTIVE: full CME dist.\ ($n_{\max}$ states)};
         \node[right] at (4.4,3.55) {\textcolor{activecolor!80!black}{\textbf{Fine}}};
 
-        % medium
-        \draw[fill=equilcolor!20,draw=equilcolor!80!black,thick,rounded corners=2pt]
-          (0,1.9) rectangle (4.2,2.6);
-        \node at (2.1,2.25) {EQUILIBRATED: $\Pois(\mu)$ (1 parameter)};
-        \node[right] at (4.4,2.25) {\textcolor{equilcolor!80!black}{\textbf{Coarse}}};
+        % medium-hi: boundary equil
+        \draw[fill=equilcolor!30,draw=equilcolor!80!black,thick,rounded corners=2pt]
+          (0,2.25) rectangle (4.2,2.85);
+        \node at (2.1,2.56) {BOUNDARY equil: $p_k^{\rm eq}$ via Galerkin expv};
+        \node[right] at (4.4,2.56) {\textcolor{equilcolor!80!black}{\textbf{Coarse}}};
+        % medium-lo: interior equil
+        \draw[fill=equilcolor!12,draw=equilcolor!50,thick,rounded corners=2pt,dashed]
+          (0,1.55) rectangle (4.2,2.15);
+        \node at (2.1,1.85) {INTERIOR equil: $\Pois(\mu_k^{\rm loc})$ algebraic};
+        \node[right] at (4.4,1.85) {\textcolor{equilcolor!50}{\textbf{Coarser}}};
 
         % coarsest
         \draw[fill=emptycolor!20,draw=emptycolor!50,thick,rounded corners=2pt]
@@ -479,27 +486,30 @@ As active neighbours equilibrate, $\mu_k^{\rm loc} \to k_b/k_d$ (global SS).
 
         % restrict arrows
         \draw[->,very thick,equilcolor!80!black]
-          (1.5,3.2) -- (1.5,2.6)
-          node[midway,left,align=right]{Restrict\\$\calR$};
+          (1.4,3.2) -- (1.4,2.85)
+          node[midway,left,align=right]{\tiny Restrict\\$\calR$};
+        \draw[->,very thick,equilcolor!60]
+          (1.4,2.25) -- (1.4,2.15)
+          node[midway,left,align=right]{\tiny merge};
         \draw[->,very thick,emptycolor!70!black]
-          (1.5,1.9) -- (1.5,1.3)
-          node[midway,left,align=right]{Restrict\\(deactivate)};
+          (1.4,1.55) -- (1.4,1.3)
+          node[midway,left,align=right]{\tiny deactivate};
 
         % prolong arrows
         \draw[->,very thick,activecolor!80!black]
-          (2.7,2.6) -- (2.7,3.2)
-          node[midway,right,align=left]{Prolong\\$\calP$};
+          (2.8,2.85) -- (2.8,3.2)
+          node[midway,right,align=left]{\tiny Prolong\\$\calP$};
         \draw[->,very thick,equilcolor!80!black]
-          (2.7,1.3) -- (2.7,1.9)
-          node[midway,right,align=left]{Prolong\\(activate)};
+          (2.8,1.3) -- (2.8,1.55)
+          node[midway,right,align=left]{\tiny activate};
       \end{tikzpicture}
       \end{center}
 
-      \vspace{0.4em}
+      \vspace{0.2em}
       {\scriptsize
-        Three levels of representation with adaptive transitions.
-        Akin to \emph{algebraic} multigrid: the coarsening is
-        driven by the solution (equilibration), not the geometry.
+        Four levels: active / boundary-equil / interior-equil / empty.
+        Galerkin coarse operator $A_c{=}\calR A\calP$ used for boundary equil;
+        algebraic mean for interior (no matrix exp).
       }
     \end{column}
   \end{columns}
@@ -515,47 +525,56 @@ As active neighbours equilibrate, $\mu_k^{\rm loc} \to k_b/k_d$ (global SS).
 \vspace{-0.1cm}
 \begin{columns}[T]
   \begin{column}{0.54\textwidth}
-    \begin{enumerate}\setlength\itemsep{0.30em}
+    \begin{enumerate}\setlength\itemsep{0.28em}
       \item \textbf{Compute effective means.}\\
-            Active: $\mu_k = \langle p_k \rangle$.
-            Equilibrated: $\mu_k = \mu_k^{\rm loc}$ (stored).
+            Active: $\mu_k {=} \langle p_k \rangle$.
+            Equil: $\mu_k {=} \langle p_k^{\rm eq} \rangle$ (from stored dist.).
 
-      \item \textbf{Evolve active voxels.}\\
-            For each active $k$: build $Q_k(\{\mu_\ell\}_{\ell\sim k})$
-            and advance $p_k \leftarrow e^{Q_k \Delta t} p_k$
-            (matrix exponential, Krylov method).
+      \item \textbf{Evolve active voxels} (full CME, Krylov $m$).\\
+            $p_k \leftarrow e^{Q_k \Delta t} p_k$,\;
+            $Q_k = Q(k_b {+} d\sum_{\ell} \mu_\ell,\; k_d {+} d|\text{nb}|)$.
 
-      \item \textbf{Update equilibrated means.}\\
-            $\mu_k^{\rm loc} \leftarrow
-            (k_b + d\sum_{\ell\sim k}\mu_\ell)/(k_d + d|\text{nbrs}|)$.
+      \item \textbf{Update equilibrated voxels} (Galerkin $A_c{=}\calR A\calP$).\\
+            \textcolor{equilcolor!80!black}{\textit{Boundary}} ($\exists$ active nb):
+            $p_k^{\rm eq} \leftarrow e^{Q_k^{\rm eq}\Delta t}p_k^{\rm eq}$,
+            small Krylov $m_{\rm eq} \ll m$.\\
+            \textcolor{equilcolor!50}{\textit{Interior}} (all nb equil/empty):
+            $p_k^{\rm eq} \leftarrow \Pois(\mu_k^{\rm loc})$, algebraic.
 
-      \item \textbf{Accumulate flux into empty voxels.}\\
-            $\Phi_k \mathrel{+}= d\,\mu_\ell\,\Delta t$ for each active/equil.\ $\ell$ adjacent
-            to empty $k$.
+      \item \textbf{Accumulate flux} into empty voxels from active+equil.\\
+            $\Phi_k \mathrel{+}= d\,\mu_\ell\,\Delta t$.
 
-      \item \textbf{Prolong (activate).}\\
-            If $\Phi_k \ge \varepsilon_{\rm exp}$: set $p_k = \delta_0$, activate.
+      \item \textbf{Prolong (activate).}
+            $\Phi_k \ge \varepsilon_{\rm exp} \Rightarrow p_k = \delta_0$.
 
-      \item \textbf{Restrict (deactivate).}\\
-            If $|\mu_k - \mu_k^{\rm loc}|/\mu_k^{\rm loc} < \varepsilon_{\rm eq}$ \textbf{and}
-            $d_{\rm TV}(p_k,\,\Pois(\mu_k^{\rm loc})) < \varepsilon_{\rm TV}$:
-            deactivate, store $\mu_k^{\rm loc}$.
+      \item \textbf{Restrict (deactivate).}
+            $|\mu_k {-} \mu_k^{\rm loc}|/\mu_k^{\rm loc} < \varepsilon_{\rm eq}$
+            \textbf{and} $d_{\rm TV}(p_k,\Pois(\mu_k^{\rm loc})) < \varepsilon_{\rm TV}$:
+            set $p_k^{\rm eq} \leftarrow p_k$ (no information lost).
     \end{enumerate}
   \end{column}
   \begin{column}{0.42\textwidth}
-    \begin{block}{Computational cost per step}
-      \vspace{0.2em}
-      Let $K_{\rm act}$ = active voxels,
-      $K_{\rm eq}$ = equilibrated voxels.\\[0.4em]
-      \textbf{Dominant cost:} $K_{\rm act}$ independent CME solves,
-      each of size $(n_{\max}+1) \times (n_{\max}+1)$.\\[0.3em]
-      At any time $K_{\rm act} \ll K$: only the \textbf{wavefront ring}
-      is active simultaneously.
+    \begin{block}{Cost per step (three tiers)}
+      \vspace{0.1em}
+      \begin{tabular}{@{}llc@{}}
+        \toprule
+        Tier & Count & Work \\
+        \midrule
+        Active & $K_{\rm act}$ & expv$(n_{\max},m)$ \\
+        Boundary equil & $O(\sqrt{K})$ & expv$(n_{\rm eq},m_{\rm eq})$ \\
+        Interior equil & $O(K_{\rm eq})$ & $O(n_{\rm eq})$ algebraic \\
+        \bottomrule
+      \end{tabular}\\[0.3em]
+      {\scriptsize
+        $K_{\rm act} \ll K$ (wavefront ring only).
+        $m_{\rm eq} \ll m$ (near-Poisson $\Rightarrow$ fast Krylov).
+        Interior equil: no matrix exp at all.
+      }
     \end{block}
 
-    \vspace{0.5em}
+    \vspace{0.3em}
     \begin{block}{State-space comparison}
-      \vspace{0.2em}
+      \vspace{0.1em}
       \begin{tabular}{@{}lc@{}}
         \toprule
         Method & States tracked \\
@@ -563,9 +582,125 @@ As active neighbours equilibrate, $\mu_k^{\rm loc} \to k_b/k_d$ (global SS).
         Full FSP & $n_{\max}^{SK}$ \\
         Spatial adaptive FSP & $K_{\rm act} \cdot n_{\max}^{S}$ \\
         \bottomrule
-      \end{tabular}\\[0.3em]
-      {\scriptsize $K_{\rm act} \ll K$: exponential reduction.}
+      \end{tabular}
     \end{block}
+  \end{column}
+\end{columns}
+
+\end{frame}
+
+
+% ================================================================
+% 7b. Galerkin coarse operator — boundary vs interior
+% ================================================================
+\begin{frame}{Galerkin coarse operator: boundary vs.\ interior equilibrated voxels}
+
+\begin{columns}[T]
+  \begin{column}{0.50\textwidth}
+    \textbf{The Galerkin coarse operator} for a single voxel $k$:\\[0.3em]
+    Marginalise $A_{\rm RDME}$ over all other voxels assuming independence
+    (mean-field $n_\ell \to \mu_\ell$):
+    \[
+      A_c^{(k)} = \underbrace{Q(k_b {+} d\textstyle\sum_\ell\mu_\ell,\; k_d {+} d|\text{nb}|)}_{
+        \text{single-voxel birth-death CME with eff.\ rates}}.
+    \]
+    This is \emph{exactly} what \texttt{build\_coarse\_system} derives
+    for one voxel of the coarsened RDME.
+
+    \bigskip
+    \textbf{Two update rules depending on neighbourhood:}
+
+    \medskip
+    \begin{tabular}{@{}p{0.42\textwidth}p{0.52\textwidth}@{}}
+      \textcolor{equilcolor!80!black}{\textbf{Boundary}} &
+      \textcolor{equilcolor!50!black}{\textbf{Interior}} \\[0.2em]
+      $\ge 1$ active nb & all nb equil/empty \\[0.2em]
+      $p_k^{\rm eq} \!\leftarrow e^{A_c^{(k)}\Delta t}p_k^{\rm eq}$ &
+      $p_k^{\rm eq} \leftarrow \Pois(\mu_k^{\rm loc})$ \\[0.2em]
+      Krylov $m_{\rm eq}{=}8$ & algebraic, $O(n_{\rm eq})$ \\[0.2em]
+      Rates change fast & Rates change slowly \\[0.2em]
+      Near wavefront & Deep interior \\
+    \end{tabular}
+  \end{column}
+  \begin{column}{0.46\textwidth}
+    \begin{center}
+    \begin{tikzpicture}[scale=0.68, every node/.style={font=\scriptsize}]
+      % Grid snapshot: 5×5
+      \def\G{5}
+      % Colors: 0=empty, 1=active, 2=boundary-equil, 3=interior-equil
+      % Pattern (approx): interior=3, boundary=2, active=1, empty=0
+      % Row 5 (top): 0 0 0 0 0
+      % Row 4:       0 0 2 0 0
+      % Row 3:       0 2 1 2 0
+      % Row 2:       0 2 3 2 0  -- wait let me think
+      % Actually: interior equil = fully surrounded by equil/empty
+      %           boundary equil = adjacent to active
+      % Let active be at (3,3) i.e. center
+      % boundary equil: (3,2),(3,4),(2,3),(4,3)
+      % interior equil: (2,2),(2,4),(4,2),(4,4) -- not adjacent to active
+      % Actually interior equil requires ALL neighbors equil/empty, so:
+      % (2,2): neighbors are (1,2),(3,2),(2,1),(2,3) -- (3,2) is boundary equil...
+      % So (2,2) IS adjacent to boundary equil which is equil, not active -> interior OK
+      % Let me define a cleaner pattern:
+      % Active: (3,3)
+      % Boundary equil (adj to active): (2,3),(4,3),(3,2),(3,4)
+      % Interior equil (not adj to active): (1,3),(5,3),(3,1),(3,5),(2,2),(2,4),(4,2),(4,4),(1,1),(1,2),(2,1)...
+      % Empty: rest
+      % Simplified for 5x5:
+
+      \foreach \row in {1,...,\G} {
+        \foreach \col in {1,...,\G} {
+          % Determine state: 0=empty,1=active,2=bnd-equil,3=int-equil
+          \pgfmathtruncatemacro{\state}{
+            (\row==3 && \col==3) ? 1 :
+            ((\row==2 && \col==3)||(\row==4 && \col==3)||(\row==3 && \col==2)||(\row==3 && \col==4)) ? 2 :
+            ((\row>=2 && \row<=4) && (\col>=2 && \col<=4)) ? 3 :
+            0
+          }
+          \ifnum\state=0
+            \fill[emptycolor!20] (\col-1,\row-1) rectangle (\col,\row);
+            \draw[emptycolor!40,thin] (\col-1,\row-1) rectangle (\col,\row);
+          \fi
+          \ifnum\state=1
+            \fill[activecolor!40] (\col-1,\row-1) rectangle (\col,\row);
+            \draw[activecolor!80!black,thick] (\col-1,\row-1) rectangle (\col,\row);
+            \node[activecolor!80!black,font=\tiny\bfseries] at (\col-0.5,\row-0.5) {A};
+          \fi
+          \ifnum\state=2
+            \fill[equilcolor!30] (\col-1,\row-1) rectangle (\col,\row);
+            \draw[equilcolor!80!black,thick] (\col-1,\row-1) rectangle (\col,\row);
+            \node[equilcolor!70!black,font=\tiny] at (\col-0.5,\row-0.5) {B};
+          \fi
+          \ifnum\state=3
+            \fill[equilcolor!12] (\col-1,\row-1) rectangle (\col,\row);
+            \draw[equilcolor!40,thin,dashed] (\col-1,\row-1) rectangle (\col,\row);
+            \node[equilcolor!50!black,font=\tiny] at (\col-0.5,\row-0.5) {I};
+          \fi
+        }
+      }
+
+      % Legend
+      \node[right] at (5.3,4.5) {\textcolor{activecolor!80!black}{\textbf{A}} = Active};
+      \node[right] at (5.3,3.5) {\textcolor{equilcolor!80!black}{\textbf{B}} = Boundary equil};
+      \node[right] at (5.3,2.5) {\textcolor{equilcolor!50!black}{\textbf{I}} = Interior equil};
+      \node[right] at (5.3,1.5) {\textcolor{emptycolor!60}{\textbf{·}} = Empty};
+
+      % Cost annotation
+      \draw[<-,equilcolor!80!black,thick]  (2.5,3.0) -- (3.8,5.4)
+        node[above,align=center,equilcolor!80!black]
+          {expv\\$m_{\rm eq}{=}8$};
+      \draw[<-,equilcolor!50!black,thick] (2.5,2.5) -- (0.2,5.4)
+        node[above,align=center,equilcolor!50!black]
+          {algebraic\\$O(n_{\rm eq})$};
+    \end{tikzpicture}
+    \end{center}
+
+    \vspace{0.2em}
+    {\scriptsize
+      At any instant, \textbf{boundary equil} $=O(\sqrt{K})$ voxels
+      (wavefront circumference).  Interior equil $=O(K)$ but costs
+      only $O(n_{\rm eq})$ each --- no matrix exponential.
+    }
   \end{column}
 \end{columns}
 

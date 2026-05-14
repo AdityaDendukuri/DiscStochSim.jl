@@ -77,7 +77,7 @@ export patch_qsd_correlation
 # Spatial adaptive FSP exports
 export BirthDeathRDME, SpatialFSP, set_ic!, step!, n_active
 export n_equilibrated, n_empty, status_grid, mean_grid
-export total_distribution, equilibration_fraction, collapsed_cme_generator
+export total_distribution, equilibration_fraction
 export poisson_pmf_vec, jump_rate, ss_mean, voxel_mean
 
 export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottleneck_bc
