@@ -155,15 +155,35 @@ end
 
 dt_fsp = 0.1;  prune_tol = 1e-9;  rebuild_every = 10;  save_every = 60
 
+# Count fine voxels in each label at a given mf_state
+function voxel_label_counts(mf, K_x, K_y, θ_lo, θ_hi)
+    n_empty = n_front = n_settled = 0
+    for i in 1:K_x, j in 1:K_y
+        μ = mf[i,j]
+        if μ ≤ θ_lo;   n_empty   += 1
+        elseif μ ≥ θ_hi; n_settled += 1
+        else;           n_front   += 1
+        end
+    end
+    n_empty, n_front, n_settled
+end
+
 saved_t       = Float64[0.0]
 ss_sizes      = Int[length(sp_c)]
 keff_hist     = Int[K_eff]
-n_remaps      = Int[0]
 col_mean_hist = [[sum(mf_state[i,j] for j in 1:K_y) for i in 1:K_x]]
+
+# Fine voxel label counts over time (parallel to birthdeath_2d_spatial arcs)
+let (ne, nf, ns) = voxel_label_counts(mf_state, K_x, K_y, θ_lo_2d, θ_hi_2d)
+    global n_empty_hist   = Int[ne]
+    global n_front_hist   = Int[nf]
+    global n_settled_hist = Int[ns]
+end
 
 function run_adaptive_fsp!(sp_init, sys_init, bc_init, cm_init, Ke_init,
                             mf_state, A_mf, μ_ss,
                             saved_t, ss_sizes, keff_hist, col_mean_hist,
+                            n_empty_hist, n_front_hist, n_settled_hist,
                             model_2d, fine_grid, dt_fsp, t_final, prune_tol,
                             rebuild_every, save_every, n_max_region, K_x, K_y,
                             θ_lo_2d, θ_hi_2d)
@@ -210,7 +230,10 @@ function run_adaptive_fsp!(sp_init, sys_init, bc_init, cm_init, Ke_init,
         if s % save_every == 0 || t ≥ t_final
             push!(saved_t, t); push!(ss_sizes, length(sp)); push!(keff_hist, Ke)
             push!(col_mean_hist, [sum(mf_state[i,j] for j in 1:K_y) for i in 1:K_x])
-            @printf("  t=%5.1f  K_eff=%d  |S|=%d\n", t, Ke, length(sp))
+            ne, nf, ns = voxel_label_counts(mf_state, K_x, K_y, θ_lo_2d, θ_hi_2d)
+            push!(n_empty_hist, ne); push!(n_front_hist, nf); push!(n_settled_hist, ns)
+            @printf("  t=%5.1f  K_eff=%d  |S|=%d  empty=%d front=%d settled=%d\n",
+                    t, Ke, length(sp), ne, nf, ns)
             flush(stdout)
         end
     end
@@ -224,6 +247,7 @@ println("\nRunning adaptive FSP on $(K_x)×$(K_y) grid..."); flush(stdout)
 @time run_adaptive_fsp!(sp_c, sys_c, bc_c, cmap, K_eff,
                          mf_state, A_mf, μ_ss_val,
                          saved_t, ss_sizes, keff_hist, col_mean_hist,
+                         n_empty_hist, n_front_hist, n_settled_hist,
                          model_2d, fine_grid, dt_fsp, t_final, prune_tol,
                          rebuild_every, save_every, n_max_region, K_x, K_y,
                          θ_lo_2d, θ_hi_2d)
@@ -287,22 +311,39 @@ Label(fig[0, 1:5],
       fontsize=11, tellwidth=false)
 
 # ── Row 2: diagnostics ────────────────────────────────────────────────────────
-# K_eff and |S|
-ax_k = Axis(fig[2, 1:2]; xlabel="time", ylabel="K_eff",
-            title="Super-regions over time  ($(K_x)×$(K_y) = $(K_x*K_y) voxels → ≤ K_eff regions)",
-            titlesize=10)
-lines!(ax_k, saved_t, Float64.(keff_hist); color=:firebrick4, linewidth=2.5)
-scatter!(ax_k, saved_t, Float64.(keff_hist); color=:firebrick4, markersize=7)
-hlines!(ax_k, [1.0,2.0,3.0,4.0]; color=(:gray60,0.35), linewidth=0.8, linestyle=:dash)
-ylims!(ax_k, 0.3, maximum(keff_hist)+1.0)
+# Arc: fine voxel label counts (like birthdeath_2d_spatial)
+ax_arc = Axis(fig[2, 1:2];
+              xlabel="time", ylabel="# fine voxels  (out of $(K_x*K_y))",
+              title="Fine-voxel states — $(K_x)×$(K_y) = $(K_x*K_y) voxels tracked via K_eff ≤ 3 super-regions",
+              titlesize=10)
+band!(ax_arc, saved_t, zeros(length(saved_t)), Float64.(n_settled_hist);
+      color=(:royalblue, 0.25))
+band!(ax_arc, saved_t, Float64.(n_settled_hist),
+      Float64.(n_settled_hist) .+ Float64.(n_front_hist); color=(:tomato, 0.25))
+# Compute label counts from the dense mf snapshots for smooth arc
+mf_ne = Int[]; mf_nf = Int[]; mf_ns = Int[]
+for snap in mu_mf
+    ne, nf, ns = voxel_label_counts(snap, K_x, K_y, θ_lo_2d, θ_hi_2d)
+    push!(mf_ne, ne); push!(mf_nf, nf); push!(mf_ns, ns)
+end
+band!(ax_arc, t_mf, zeros(length(t_mf)), Float64.(mf_ns); color=(:royalblue,0.25))
+band!(ax_arc, t_mf, Float64.(mf_ns), Float64.(mf_ns).+Float64.(mf_nf); color=(:tomato,0.25))
+lines!(ax_arc, t_mf, Float64.(mf_ns);
+       color=:royalblue, linewidth=2.5, label="Settled (n̄ > θ_hi=$(round(θ_hi_2d,digits=2)))")
+lines!(ax_arc, t_mf, Float64.(mf_nf);
+       color=:tomato, linewidth=2.5, label="Front (θ_lo < n̄ < θ_hi)")
+lines!(ax_arc, t_mf, Float64.(mf_ne);
+       color=:gray50, linewidth=2, linestyle=:dash, label="Empty (n̄ < θ_lo=$(round(θ_lo_2d,digits=2)))")
+hlines!(ax_arc, [Float64(K_x*K_y)]; color=(:black,0.3), linewidth=1, linestyle=:dot)
+axislegend(ax_arc; position=:rc, labelsize=9, framevisible=false)
+ylims!(ax_arc, -5, K_x*K_y + 20)
 
 ax_s = Axis(fig[2, 3]; xlabel="time", ylabel="|S|",
-            title="|S| vs full FSP", titlesize=10)
+            title="|S|: adaptive FSP vs full FSP scaling", titlesize=10)
 lines!(ax_s, saved_t, Float64.(ss_sizes); color=:steelblue4, linewidth=2.5)
 scatter!(ax_s, saved_t, Float64.(ss_sizes); color=:steelblue4, markersize=7)
-n_full_lower = K_x * K_y * round(Int, n_ss * 5)
-text!(ax_s, saved_t[2], maximum(ss_sizes) * 1.1;
-      text="peak |S| = $(maximum(ss_sizes))\nfull FSP: ~$(n_full_lower)+ states per voxel",
+text!(ax_s, saved_t[2], maximum(ss_sizes) * 1.08;
+      text="peak |S| = $(maximum(ss_sizes))\n(full FSP: n_max^K — astronomical)",
       fontsize=9, color=:steelblue4)
 
 # Total-count distribution at final time from FSP marginals

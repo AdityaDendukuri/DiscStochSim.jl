@@ -24,6 +24,7 @@ include("adaptive_fsp/terminal_progress.jl")
 
 # Spatially adaptive FSP (new approach)
 include("spatial_adaptive/bd_spatial_fsp.jl")
+include("spatial_adaptive/flux_vcycle.jl")
 
 # RDME multigrid FSP
 include("rdme/voxel_grid.jl")
@@ -82,6 +83,7 @@ export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
 export patch_qsd_correlation
 # Spatial adaptive FSP exports
 export BirthDeathRDME, BranchingDeathRDME, SpatialFSP, set_ic!, step!, n_active
+export FluxGraph, build_flux_graph, update_flux!, evolve_flux_vcycle!
 export n_equilibrated, n_empty, status_grid, mean_grid
 export total_distribution, equilibration_fraction
 export poisson_pmf_vec, jump_rate, ss_mean, voxel_mean
