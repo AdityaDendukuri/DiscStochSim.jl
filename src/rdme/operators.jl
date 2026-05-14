@@ -937,3 +937,63 @@ function prolong_multiplicative_2s(
     end
     sp_fine_new
 end
+
+# ─── Adaptive coarsening: marginal reconstruction ─────────────────────────────
+
+"""
+    fine_marginals_from_coarse(sp_coarse, cmap, n_max_fine) → Vector{Vector{Float64}}
+
+Compute K_fine per-voxel marginal distributions from a coarse StateSpace,
+using uniform Multinomial(n̄_j, 1/Mⱼ, …) splitting within each coarse region j.
+
+Returns `marginals[k][n+1]` = P(nₖ = n) for k = 1…K_fine, n = 0…n_max_fine.
+
+Valid in the fast-diffusion limit: within each merged region the distribution
+is near-Multinomial, so marginalising over the Binomial/Multinomial split is
+exact for birth-death and a good approximation for Schlögl with fast diffusion.
+The key advantage over full prolongation: no joint fine state space is constructed.
+Cost is O(K_c × n̄_max × n_max_fine) instead of O(n_max_fine^K_fine).
+"""
+function fine_marginals_from_coarse(
+    sp_coarse::StateSpace{CartesianIndex{K_c}, T},
+    cmap::CoarseningMap,
+    n_max_fine::Int
+) where {K_c, T}
+    K_c == cmap.n_coarse || error("K_c=$K_c ≠ cmap.n_coarse=$(cmap.n_coarse)")
+    K_f  = cmap.n_fine
+    marg = [zeros(Float64, n_max_fine + 1) for _ in 1:K_f]
+
+    for i in eachindex(sp_coarse.states)
+        p_c = sp_coarse.probs[i]
+        p_c > 0.0 || continue
+        tc = Tuple(sp_coarse.states[i])
+
+        for j in 1:K_c
+            n̄    = tc[j]
+            patch = cmap.coarse_to_fine[j]
+            M     = length(patch)
+            q     = 1.0 / M
+
+            log_q   = M == 1 ? 0.0  : log(q)
+            log_1mq = M == 1 ? -Inf : log(1.0 - q)
+
+            for n in 0:min(n̄, n_max_fine)
+                if M == 1
+                    bw = n == n̄ ? 1.0 : 0.0
+                else
+                    # log Bin(n̄, q)(n) = log C(n̄,n) + n log q + (n̄-n) log(1-q)
+                    lc = 0.0
+                    for ii in 1:n;     lc += log(Float64(n̄ - n + ii)) - log(Float64(ii)); end
+                    lp = lc + n * log_q + (n̄ - n) * log_1mq
+                    bw = exp(lp)
+                end
+                bw > 1e-15 || continue
+                contrib = p_c * bw
+                for k in patch
+                    marg[k][n + 1] += contrib
+                end
+            end
+        end
+    end
+    marg
+end

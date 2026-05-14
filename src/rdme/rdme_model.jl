@@ -274,6 +274,174 @@ function build_schlogl_rdme_system(model::SchloglModel1D, grid::VoxelGrid)
 end
 
 """
+    build_schlogl_adaptive_system(model, fine_grid, cmap, ::Val{K_eff};
+                                   region_birth=nothing)
+        -> DiscreteStochasticSystem{CartesianIndex{K_eff}}
+
+Build a K_eff-voxel Schlögl system for an adaptive CoarseningMap with
+heterogeneous patch sizes M_j = length(cmap.coarse_to_fine[j]).
+
+Reactions within region j use Binomial-corrected rates:
+  production:    M_j · c3   (or region_birth[j] if supplied)
+  death:         c4 · n̄_j
+  autocatalysis: (c1/M_j) · n̄_j(n̄_j-1)/2
+  reverse:       (c2/M_j²) · n̄_j(n̄_j-1)(n̄_j-2)/6
+
+Diffusion between adjacent regions j and j+1 uses the boundary-molecule
+approximation (fast within-patch equilibrium):
+  j → j+1:  (d/M_j)   · n̄_j    [right boundary of patch j]
+  j+1 → j:  (d/M_{j+1}) · n̄_{j+1} [left boundary of patch j+1]
+
+`region_birth`: optional length-K_eff vector of per-region production rates.
+  Use to implement localized sources (set rate=0 for non-source regions).
+  When nothing, defaults to M_j·c3 for each region.
+
+For M_j=1 (a fine voxel) all rates reduce to the standard Schlögl RDME.
+"""
+function build_schlogl_adaptive_system(
+    model::SchloglModel1D,
+    fine_grid::VoxelGrid,
+    cmap::CoarseningMap,
+    ::Val{K_eff};
+    region_birth::Union{Nothing, Vector{Float64}} = nothing
+) where {K_eff}
+    K_eff == cmap.n_coarse || error("K_eff=$K_eff ≠ cmap.n_coarse=$(cmap.n_coarse)")
+    d            = diffusion_rate(model.D, fine_grid)
+    c1, c2, c3, c4 = model.c1, model.c2, model.c3, model.c4
+    patch_sizes  = [length(cmap.coarse_to_fine[j]) for j in 1:K_eff]
+    birth_rates  = region_birth === nothing ?
+                   [Float64(patch_sizes[j]) * c3 for j in 1:K_eff] :
+                   region_birth
+
+    stoichs      = CartesianIndex{K_eff}[]
+    propensities = Function[]
+
+    for j in 1:K_eff
+        let j = j, Mj = patch_sizes[j], bj = birth_rates[j]
+            ej = _e(j, Val(K_eff))
+
+            # Production: ∅ →(bj)→ n̄_j + 1
+            push!(stoichs, ej)
+            push!(propensities, (x, rates, t) -> bj)
+
+            # Death: n̄_j →(c4·n̄_j)→ n̄_j - 1
+            push!(stoichs, -ej)
+            push!(propensities, (x, rates, t) -> c4 * max(0, Tuple(x)[j]))
+
+            # Autocatalysis: (c1/Mj)·n̄_j(n̄_j-1)/2
+            push!(stoichs, ej)
+            push!(propensities, (x, rates, t) -> begin
+                n = Tuple(x)[j]; (c1/Mj) * max(0, n*(n-1)) / 2
+            end)
+
+            # Reverse: (c2/Mj²)·n̄_j(n̄_j-1)(n̄_j-2)/6
+            push!(stoichs, -ej)
+            push!(propensities, (x, rates, t) -> begin
+                n = Tuple(x)[j]; (c2/Mj^2) * max(0, n*(n-1)*(n-2)) / 6
+            end)
+        end
+    end
+
+    for j in 1:K_eff-1
+        let j = j, Mj = patch_sizes[j], Mj1 = patch_sizes[j+1]
+            ej  = _e(j,   Val(K_eff))
+            ej1 = _e(j+1, Val(K_eff))
+
+            # j → j+1: boundary-molecule rate (d/Mj)·n̄_j
+            push!(stoichs, ej1 - ej)
+            push!(propensities, (x, rates, t) -> (d/Mj) * max(0, Tuple(x)[j]))
+
+            # j+1 → j: boundary-molecule rate (d/Mj1)·n̄_{j+1}
+            push!(stoichs, ej - ej1)
+            push!(propensities, (x, rates, t) -> (d/Mj1) * max(0, Tuple(x)[j+1]))
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{K_eff}}(stoichs, propensities)
+end
+
+"""
+    build_rdme_adaptive_2d(model, grid2d, cmap, ::Val{K_eff}; region_birth=nothing)
+        -> DiscreteStochasticSystem{CartesianIndex{K_eff}}
+
+Build a K_eff-region birth-death RDME system for an adaptive 2D CoarseningMap.
+
+Reactions within region J use patch-size-corrected rates:
+  production:    birth_J  (defaults to M_J · c3, or region_birth[J] if supplied)
+  death:         c4 · n̄_J
+
+Diffusion between adjacent regions uses the boundary-molecule approximation:
+  J → J':  (d · n_adj(J,J') / M_J)  · n̄_J
+where n_adj(J,J') is the number of fine voxel pairs crossing the J–J' boundary.
+This generalises `build_schlogl_adaptive_system` to arbitrary 2D patch shapes.
+"""
+function build_rdme_adaptive_2d(
+    model::SchloglModel1D,
+    grid::Grid2D,
+    cmap::CoarseningMap,
+    ::Val{K_eff};
+    region_birth::Union{Nothing, Vector{Float64}} = nothing
+) where {K_eff}
+    K_eff == cmap.n_coarse || error("K_eff=$K_eff ≠ cmap.n_coarse=$(cmap.n_coarse)")
+    d   = diffusion_rate(model.D, grid)
+    c3, c4 = model.c3, model.c4
+    K_y = grid.K_y
+    patch_sizes = [length(cmap.coarse_to_fine[j]) for j in 1:K_eff]
+    birth_rates = region_birth === nothing ?
+                  [Float64(patch_sizes[j]) * c3 for j in 1:K_eff] :
+                  region_birth
+
+    stoichs      = CartesianIndex{K_eff}[]
+    propensities = Function[]
+
+    # ── per-region reactions ──────────────────────────────────────────────────
+    for j in 1:K_eff
+        let j=j, bj=birth_rates[j]
+            ej = _e(j, Val(K_eff))
+            push!(stoichs, ej)
+            push!(propensities, (x, rates, t) -> bj)
+            push!(stoichs, -ej)
+            push!(propensities, (x, rates, t) -> c4 * max(0, Tuple(x)[j]))
+        end
+    end
+
+    # ── inter-region diffusion via boundary-molecule approximation ────────────
+    # Count shared boundary fine-voxel pairs for every ordered pair (J, J').
+    # Two fine voxels k=(i-1)*K_y+j and k'=(i'-1)*K_y+j' are adjacent iff
+    # they differ by exactly 1 in one coordinate.
+    K_y_grid = grid.K_y
+    n_adj = zeros(Int, K_eff, K_eff)
+    for k in 1:cmap.n_fine
+        i = (k - 1) ÷ K_y_grid + 1
+        j = (k - 1) % K_y_grid + 1
+        Jk = cmap.fine_to_coarse[k]
+        # right neighbour
+        if j < K_y_grid
+            k2 = k + 1;  Jk2 = cmap.fine_to_coarse[k2]
+            if Jk != Jk2; n_adj[Jk, Jk2] += 1; n_adj[Jk2, Jk] += 1; end
+        end
+        # down neighbour
+        if i < grid.K_x
+            k2 = k + K_y_grid;  Jk2 = cmap.fine_to_coarse[k2]
+            if Jk != Jk2; n_adj[Jk, Jk2] += 1; n_adj[Jk2, Jk] += 1; end
+        end
+    end
+
+    for ja in 1:K_eff, jb in (ja+1):K_eff
+        n_adj[ja,jb] == 0 && continue
+        let ja=ja, jb=jb, na=Float64(n_adj[ja,jb]), Ma=Float64(patch_sizes[ja]), Mb=Float64(patch_sizes[jb])
+            eja = _e(ja, Val(K_eff)); ejb = _e(jb, Val(K_eff))
+            push!(stoichs, ejb - eja)
+            push!(propensities, (x, rates, t) -> (d * na / Ma) * max(0, Tuple(x)[ja]))
+            push!(stoichs, eja - ejb)
+            push!(propensities, (x, rates, t) -> (d * na / Mb) * max(0, Tuple(x)[jb]))
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{K_eff}}(stoichs, propensities)
+end
+
+"""
     build_schlogl_coarse_system(model, coarse_grid, fine_grid)
         -> DiscreteStochasticSystem{CartesianIndex{K2}}
 

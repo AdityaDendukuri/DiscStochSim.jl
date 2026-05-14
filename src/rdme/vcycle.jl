@@ -62,16 +62,6 @@ function _filter_positive(sp::StateSpace{E, T}, tol::Float64) where {E, T}
     sp2
 end
 
-# Build the 2-voxel Schlögl stationary distribution table for dynamic-π prolongation.
-function _compute_schlogl_pi_table(model::SchloglModel1D, grid::VoxelGrid, n_max::Int)
-    sp2  = StateSpace{CartesianIndex{2}, Float64}()
-    sys2 = build_schlogl_rdme_system(model, VoxelGrid(2, grid.dx, grid.level))
-    bc2  = s -> rdme_bc(s, n_max)
-    add_state!(sp2, CartesianIndex(0, 0), 1.0)
-    expand!(sp2, sys2, bc2; depth = n_max)
-    A2, = build_generator(sp2, sys2, Float64[], 0.0)
-    compute_dynamic_pi(sp2, A2; n_max = n_max)
-end
 
 """
     multi_level_vcycle(sp_fine, model, hierarchy, rates, t, dt; kwargs...)
@@ -98,7 +88,6 @@ Keyword arguments:
 - `coarse_d_depth`    : diffusion expansion depth — adjacent pairs exchange ±d molecules
 - `coarse_n_max`      : per-voxel FSP truncation (scales by 2 each level)
 - `max_states`        : emergency abort if |S| exceeds this (default 10^6)
-- `pi_tables`         : reserved for future use; currently unused.
 """
 function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
                              model::Union{RDMEModel1D, SchloglModel1D},
@@ -114,8 +103,7 @@ function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
                              coarse_d_depth::Int      = 1,
                              coarse_n_max::Int        = 80,
                              max_states::Int          = 1_000_000,
-                             prune_tol::Float64       = 0.0,
-                             pi_tables::Vector{Vector{Vector{Float64}}} = Vector{Vector{Vector{Float64}}}()) where {K}
+                             prune_tol::Float64       = 0.0) where {K}
     length(sp_h) <= max_states || error("State space exploded: |S| = $(length(sp_h)) > $max_states")
 
     # ── Coarsest level: solve directly ───────────────────────────────────────
@@ -132,19 +120,6 @@ function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
     grid_2h = hierarchy[2]
     K2 = grid_2h.n_voxels
 
-    # Extract this level's pi_table; fall back to auto-compute if not provided.
-    # pi_tables[2:end] are forwarded to the recursive call so each level uses
-    # the table built from its own (coarsened) model.
-    pi_table = if model isa SchloglModel1D
-        if !isempty(pi_tables) && !isempty(pi_tables[1])
-            pi_tables[1]
-        else
-            _compute_schlogl_pi_table(model, grid_h, coarse_n_max ÷ 2)
-        end
-    else
-        Vector{Vector{Float64}}()
-    end
-    pi_tables_next = length(pi_tables) >= 2 ? pi_tables[2:end] : Vector{Vector{Vector{Float64}}}()
 
     # ── 1. Pre-smooth ─────────────────────────────────────────────────────────
     sp_smoothed = if τ_pre > 0.0
@@ -186,8 +161,7 @@ function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
                                          τ_pre, τ_post, krylov_m, weight_tol, binom_tol,
                                          expand_coarse, coarse_r_depth, coarse_d_depth,
                                          coarse_n_max = 2 * coarse_n_max,
-                                         max_states, prune_tol,
-                                         pi_tables = pi_tables_next)
+                                         max_states, prune_tol)
 
     # ── 6. Prolongate correction ──────────────────────────────────────────────
     # Part A — Covered coarse states (indices 1..n_coarse_pre):
@@ -211,16 +185,16 @@ function multi_level_vcycle(sp_h::StateSpace{CartesianIndex{K}, Float64},
 
     if model isa SchloglModel1D
         # Schlögl: prolong_conditional handles both parts in one call —
-        # Step 1 applies multiplicative correction for covered states (sp_c_pre),
-        # Step 3 applies L1 conditional extension for expand!-added new states.
-        # The bimodal stable states (n_low, n_high) are far from nc/2 so Binomial
-        # would miss them; conditional extension propagates the actual distribution.
+        # Part A: multiplicative correction for covered states (preserves bistable orientation).
+        # Part B: L1 neighbor conditional extension for expand!-added states.
+        #   The L1 search bootstraps from the nearest covered coarse neighbor's current
+        #   fine distribution, which correctly seeds the bistable front via the actual
+        #   in-progress distribution rather than a fixed precomputed table.
         sp_h_new = prolong_conditional(sp_for_restrict, sp_c_pre, sp_coarse_post;
                                        prob_tol = weight_tol)
     else
         # Birth-death: Part A multiplicative + Part B Binomial for new states.
-        # Smith & Grima (2016) Eq. (6-7): Binomial(nc, 1/2) is exact in the fast-
-        # diffusion limit for convergent (mass-action) propensities.
+        # Smith & Grima (2016): Binomial(nc, 1/2) is exact in fast-diffusion limit.
         sp_h_new = prolong_multiplicative(sp_for_restrict, sp_c_pre, sp_c_post;
                                           prob_tol = weight_tol)
         sp_δ_new = StateSpace{CartesianIndex{K2}, Float64}()

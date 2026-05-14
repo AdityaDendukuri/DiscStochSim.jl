@@ -46,7 +46,6 @@ Base.@kwdef struct RDMEMultigridFSP
     save_every::Int                = 1
     weight_tol::Float64       = 1e-13
     binom_tol::Float64        = 1e-10
-    use_dynamic_pi::Bool      = false   # precompute 2-voxel Schlögl π and use in prolong
 end
 
 """
@@ -95,19 +94,6 @@ function solve_rdme_multigrid(model::Union{RDMEModel1D, SchloglModel1D},
     # ── Build grid hierarchy ──────────────────────────────────────────────────
     hierarchy = build_hierarchy(fine_grid, alg.n_levels)
 
-    # ── Precompute dynamic-π tables for Schlögl, one per hierarchy level ──────
-    # Each level needs a table built from its own coarsened model so prolongation
-    # uses the correct 2-voxel stationary distribution at that resolution.
-    pi_tables = if model isa SchloglModel1D
-        m = model
-        map(1:alg.n_levels) do lev
-            tbl = _compute_schlogl_pi_table(m, hierarchy[lev], alg.n_max * 2^(lev - 1))
-            m   = coarsen_model(m, 2.0)
-            tbl
-        end
-    else
-        Vector{Vector{Vector{Float64}}}()
-    end
 
     # ── Build full RDME system (used for expansion) ───────────────────────────
     full_sys = model isa RDMEModel1D ? build_rdme_system(model, fine_grid) :
@@ -146,7 +132,7 @@ function solve_rdme_multigrid(model::Union{RDMEModel1D, SchloglModel1D},
                                  coarse_n_max       = 2 * alg.n_max,
                                  max_states         = alg.max_states,
                                  prune_tol          = alg.prune_tol,
-                                 pi_tables          = pi_tables)
+)
 
         t    += dt_step
         step += 1

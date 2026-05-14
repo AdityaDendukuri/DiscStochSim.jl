@@ -49,9 +49,13 @@ export mean_trajectory, marginal, terminal_progress
 # RDME exports
 export VoxelGrid, coarsen, coarsen_model, build_hierarchy, diffusion_rate
 export Grid2D, coarsen2d, build_hierarchy2d, n_voxels
-export CoarseningMap, CoarseningMap1D, CoarseningMap2D
+export CoarseningMap, CoarseningMap1D, CoarseningMap2D, CoarseningMapFull, CoarseningMapRegions
+export build_adaptive_cmap_1d, build_adaptive_cmap_2d
+export fine_marginals_from_coarse
 export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
-export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_coarse_system, build_schlogl_mixed_system
+export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_adaptive_system
+export build_rdme_adaptive_2d
+export build_schlogl_coarse_system, build_schlogl_mixed_system
 export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
 export compute_dynamic_pi, prolong_dynamic
@@ -75,7 +79,7 @@ export PatchQSD, build_patch_qsd, prolong_patch_qsd
 export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
 export patch_qsd_correlation
 # Spatial adaptive FSP exports
-export BirthDeathRDME, SpatialFSP, set_ic!, step!, n_active
+export BirthDeathRDME, BranchingDeathRDME, SpatialFSP, set_ic!, step!, n_active
 export n_equilibrated, n_empty, status_grid, mean_grid
 export total_distribution, equilibration_fraction
 export poisson_pmf_vec, jump_rate, ss_mean, voxel_mean
