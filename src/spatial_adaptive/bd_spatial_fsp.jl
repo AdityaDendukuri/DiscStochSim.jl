@@ -98,6 +98,9 @@ mutable struct SpatialFSP
     block_expand_depth :: Int
     block_pre_frac   :: Float64
     block_post_frac  :: Float64
+    use_joint_vcycle    :: Bool     # V-cycle on the joint active region
+    joint_vcycle_τ_pre  :: Float64  # pre-smooth time (intra-pair diffusion)
+    joint_vcycle_τ_post :: Float64  # post-smooth time
 end
 
 function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
@@ -117,7 +120,10 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                     block_max_states::Int = 50_000,
                     block_expand_depth::Int = 1,
                     block_pre_frac::Float64 = 0.35,
-                    block_post_frac::Float64 = 0.15)
+                    block_post_frac::Float64 = 0.15,
+                    use_joint_vcycle::Bool = false,
+                    joint_vcycle_τ_pre::Float64 = 0.0,
+                    joint_vcycle_τ_post::Float64 = 0.0)
     n_max_eq_val = n_max_eq > 0 ? n_max_eq :
                    has_finite_local_ss(model) ? max(12, round(Int, 4 * ss_mean(model)) + 4) :
                    max(12, n_max)
@@ -132,7 +138,8 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                use_joint_active, joint_state_tol, joint_max_states, joint_expand_depth,
                joint_expand_threshold,
                use_block_vcycle, block_state_tol, block_max_states,
-               block_expand_depth, block_pre_frac, block_post_frac)
+               block_expand_depth, block_pre_frac, block_post_frac,
+               use_joint_vcycle, joint_vcycle_τ_pre, joint_vcycle_τ_post)
 end
 
 function set_ic!(s::SpatialFSP, idx::CartesianIndex{2}, n0::Int)
@@ -242,8 +249,12 @@ function _product_state_from_dists(dists::Vector{Vector{Float64}},
                                    max_states::Int,
                                    ::Val{K}) where {K}
     supports = [_positive_support(p, tol) for p in dists]
-    support_prod = prod(length(supp) for supp in supports)
-    support_prod <= max_states || return nothing
+    # Overflow-safe product: use Int128 then compare
+    support_prod = Int128(1)
+    for supp in supports
+        support_prod *= length(supp)
+        support_prod > max_states && return nothing
+    end
 
     sp = StateSpace{CartesianIndex{K}, Float64}()
     buf = zeros(Int, K)
@@ -479,11 +490,262 @@ function _joint_active_bc(state, n_max::Int)
     all(0 <= n <= n_max for n in Tuple(state))
 end
 
+# ─── Joint active V-cycle ─────────────────────────────────────────────────────
+
+"""
+Intra-pair diffusion system: diffusion only within consecutive pairs
+(active_voxels[1],active_voxels[2]), (active_voxels[3],active_voxels[4]), ...
+Used as the pre/post-smooth operator. Pairs that are not spatially adjacent on
+the 2D grid are silently skipped (no smoothing needed if fast mixing doesn't apply).
+"""
+function _build_joint_intra_pair_system(
+    model::AbstractSpatialRDMEModel,
+    active_voxels::Vector{CartesianIndex{2}},
+    K_x::Int, K_y::Int,
+    ::Val{K_FINE}
+) where K_FINE
+    d = jump_rate(model)
+    stoichs      = CartesianIndex{K_FINE}[]
+    propensities = Function[]
+    for j in 1:(K_FINE ÷ 2)
+        v1 = active_voxels[2j-1]; v2 = active_voxels[2j]
+        any(==(v2), grid_neighbors(v1, K_x, K_y)) || continue
+        let p = 2j-1, q = 2j
+            ep = _eu_local(p, K_FINE); eq = _eu_local(q, K_FINE)
+            push!(stoichs, -ep + eq); push!(propensities, (x, rv, t) -> d * max(0, Tuple(x)[p]))
+            push!(stoichs,  ep - eq); push!(propensities, (x, rv, t) -> d * max(0, Tuple(x)[q]))
+        end
+    end
+    DiscreteStochasticSystem{CartesianIndex{K_FINE}}(stoichs, propensities)
+end
+
+"""
+Coarse system for K_COARSE super-voxels, each covering 2 consecutive fine voxels.
+Rates are derived from the fine-grid 2D geometry assuming fast intra-pair mixing
+(each molecule is at each of the 2 fine positions with probability 1/2).
+
+  Birth:  2·local_birth_rate per super-voxel  (2 fine voxels)
+  Death:  k_d per molecule
+  Diffusion j→k:  d·(edge_count_jk / 2)·N_j  (averaged over uniform pair distribution)
+  Outflow to inactive:  d·(ext_edges_j / 2)·N_j
+  Inflow from inactive: d·Σ μ_nb  (summed over all inactive neighbours of either fine voxel)
+"""
+function _build_joint_pair_coarse_system(
+    model::AbstractSpatialRDMEModel,
+    active_voxels::Vector{CartesianIndex{2}},
+    means::Dict{CartesianIndex{2}, Float64},
+    K_x::Int, K_y::Int,
+    ::Val{K_COARSE}
+) where K_COARSE
+    K_FINE = 2 * K_COARSE
+    length(active_voxels) == K_FINE || error("Need $(K_FINE) fine voxels, got $(length(active_voxels))")
+    d = jump_rate(model)
+    stoichs      = CartesianIndex{K_COARSE}[]
+    propensities = Function[]
+
+    active_set      = Set(active_voxels)
+    fine_to_coarse  = Dict(active_voxels[k] => div(k-1, 2) + 1 for k in 1:K_FINE)
+
+    # ── Reactions ──────────────────────────────────────────────────────────────
+    for j in 1:K_COARSE
+        let j = j
+            ej = _eu_local(j, K_COARSE)
+            push!(stoichs,  ej)
+            push!(propensities, (x, rv, t) -> 2 * local_birth_rate(model, Tuple(x)[j]))
+            push!(stoichs, -ej)
+            push!(propensities, (x, rv, t) -> model.k_d * max(0, Tuple(x)[j]))
+        end
+    end
+
+    # ── Inter-pair diffusion (count boundary edges between pairs) ─────────────
+    pair_edges = Dict{Tuple{Int,Int}, Int}()
+    for k_fine in 1:K_FINE
+        v = active_voxels[k_fine]; j = div(k_fine - 1, 2) + 1
+        for nb in grid_neighbors(v, K_x, K_y)
+            nb ∈ active_set || continue
+            l = fine_to_coarse[nb]
+            l == j && continue
+            key = (min(j, l), max(j, l))
+            pair_edges[key] = get(pair_edges, key, 0) + 1
+        end
+    end
+    for ((j, k), n_edges) in pair_edges
+        let j = j, k = k, r = d * n_edges / 2   # 1/pair_size = 1/2
+            ej = _eu_local(j, K_COARSE); ek = _eu_local(k, K_COARSE)
+            push!(stoichs, -ej + ek); push!(propensities, (x, rv, t) -> r * max(0, Tuple(x)[j]))
+            push!(stoichs,  ej - ek); push!(propensities, (x, rv, t) -> r * max(0, Tuple(x)[k]))
+        end
+    end
+
+    # ── Boundary with inactive neighbours ─────────────────────────────────────
+    out_rate = zeros(K_COARSE)
+    in_rate  = zeros(K_COARSE)
+    for k_fine in 1:K_FINE
+        v = active_voxels[k_fine]; j = div(k_fine - 1, 2) + 1
+        for nb in grid_neighbors(v, K_x, K_y)
+            nb ∈ active_set && continue
+            out_rate[j] += d / 2                        # per-molecule outflow
+            in_rate[j]  += d * get(means, nb, 0.0)     # inflow (not per-molecule)
+        end
+    end
+    for j in 1:K_COARSE
+        let j = j, r_out = out_rate[j], r_in = in_rate[j]
+            ej = _eu_local(j, K_COARSE)
+            r_out > 0 && (push!(stoichs, -ej); push!(propensities, (x, rv, t) -> r_out * max(0, Tuple(x)[j])))
+            r_in  > 0 && (push!(stoichs,  ej); push!(propensities, (x, rv, t) -> r_in))
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{K_COARSE}}(stoichs, propensities)
+end
+
+"""
+    _binomial_split_marginal(p_N, n_max_out, tol) -> Vector{Float64}
+
+Given the coarse total-count distribution P(N=n), compute the marginal
+P(n_1 = k) assuming n_1 ~ Binomial(N, 1/2). By symmetry P(n_2) is identical.
+Valid when fast intra-pair diffusion has equilibrated the within-pair positions.
+"""
+function _binomial_split_marginal(p_N::Vector{Float64}, n_max_out::Int, tol::Float64)
+    p_out = zeros(n_max_out + 1)
+    for N in 0:length(p_N)-1
+        p_N[N+1] > tol || continue
+        log_half_N = -N * log(2.0)
+        for k in 0:min(N, n_max_out)
+            log_bc = (sum(log(Float64(i)) for i in (N-k+1):N; init=0.0) -
+                      sum(log(Float64(i)) for i in 1:k;      init=0.0))
+            w = p_N[N+1] * exp(log_half_N + log_bc)
+            w > tol && (p_out[k+1] += w)
+        end
+    end
+    s = sum(p_out); s > 0.0 && (p_out ./= s)
+    p_out
+end
+
+"""
+    _evolve_joint_active_vcycle!(s, means, dt; krylov_m)
+
+Coarse-first marginal V-cycle — no fine CartesianIndex state is ever formed.
+
+  1. Coarse marginals: convolve consecutive pairs → K_act/2 1-D distributions
+  2. Coarse product state: CartesianIndex{K_act/2}, ≈(2·n_max)^(K_act/2) states
+  3. Coarse solve: expand! + expv under the pair coarse generator
+  4. Extract coarse 1-D marginals from coarse joint state
+  5. Binomial-split each coarse marginal → two per-voxel marginals P(n_1), P(n_2)
+     [Optional: 2-voxel post-smooth via intra-pair CME when τ_post > 0]
+  6. Write per-voxel marginals back to s.dists
+
+State space at coarse level: (2·n_max+1)^(K_act/2) — tractable up to K_act ≈ 16
+with n_max = 10. Falls back to _evolve_joint_active! for odd K_act or < 2.
+"""
+function _evolve_joint_active_vcycle!(s::SpatialFSP,
+                                       means::Dict{CartesianIndex{2}, Float64},
+                                       dt::Float64;
+                                       krylov_m::Int)
+    active_voxels = _active_voxels(s)
+    K_act = length(active_voxels)
+
+    # Fallback: odd or too-small → direct joint expv (cheap for K_act ≤ 3)
+    (K_act >= 2 && iseven(K_act)) || return _evolve_joint_active!(s, means, dt; krylov_m)
+
+    K_coarse = K_act ÷ 2
+    n_max_c  = 2 * s.n_max
+
+    # ── 1. Coarse marginals: convolve pairs ───────────────────────────────────
+    coarse_marginals = Vector{Float64}[]
+    for j in 1:K_coarse
+        p1 = s.dists[active_voxels[2j-1]]
+        p2 = s.dists[active_voxels[2j]]
+        p_pair = zeros(length(p1) + length(p2) - 1)
+        for i1 in eachindex(p1), i2 in eachindex(p2)
+            p_pair[i1 + i2 - 1] += p1[i1] * p2[i2]
+        end
+        push!(coarse_marginals, p_pair)
+    end
+
+    # ── 2. Coarse product state ───────────────────────────────────────────────
+    sp_coarse = _product_state_from_dists(coarse_marginals, s.joint_state_tol, s.joint_max_states)
+    sp_coarse === nothing && return _evolve_joint_active!(s, means, dt; krylov_m)
+
+    # ── 3. Coarse solve ───────────────────────────────────────────────────────
+    sys_coarse = _build_joint_pair_coarse_system(s.model, active_voxels, means,
+                                                  s.K_x, s.K_y, Val(K_coarse))
+    expand!(sp_coarse, sys_coarse, x -> _joint_active_bc(x, n_max_c); depth = 1)
+    length(sp_coarse) <= s.joint_max_states || return _evolve_joint_active!(s, means, dt; krylov_m)
+    A_c, = build_generator(sp_coarse, sys_coarse, nothing, s.t)
+    sp_coarse.probs .= expv(Float64(dt), A_c, sp_coarse.probs;
+                             m = min(krylov_m, size(A_c, 1)))
+    prune_threshold!(sp_coarse, s.joint_state_tol)
+    renormalize!(sp_coarse) > 0.0 || return false
+
+    # ── 4. Coarse 1-D marginals from joint coarse state ───────────────────────
+    coarse_marg_post = _joint_marginals(sp_coarse, n_max_c)
+
+    # ── 5. Split each coarse marginal → two per-voxel distributions ──────────
+    τ_post = s.joint_vcycle_τ_post
+    d = jump_rate(s.model)
+
+    for j in 1:K_coarse
+        v1 = active_voxels[2j-1]; v2 = active_voxels[2j]
+        p_N = coarse_marg_post[j]
+
+        if τ_post > 0.0 && any(==(v2), grid_neighbors(v1, s.K_x, s.K_y))
+            # 2-voxel post-smooth: build CartesianIndex{2} joint, run intra-pair CME
+            p1_init = _binomial_split_marginal(p_N, s.n_max, s.joint_state_tol)
+            p2_init = copy(p1_init)
+            # Build 2-voxel joint state from product p1 ⊗ p2
+            sp2 = StateSpace{CartesianIndex{2}, Float64}()
+            for i1 in eachindex(p1_init), i2 in eachindex(p2_init)
+                w = p1_init[i1] * p2_init[i2]
+                w > s.joint_state_tol || continue
+                add_state!(sp2, CartesianIndex(i1-1, i2-1), w)
+            end
+            if !isempty(sp2.states)
+                e1 = CartesianIndex(1,0); e2 = CartesianIndex(0,1)
+                stoichs2 = [e2 - e1, e1 - e2]
+                props2   = Function[
+                    (x, rv, t) -> d * max(0, Tuple(x)[1]),
+                    (x, rv, t) -> d * max(0, Tuple(x)[2]),
+                ]
+                intra2 = DiscreteStochasticSystem{CartesianIndex{2}}(stoichs2, props2)
+                A2, = build_generator(sp2, intra2, nothing, s.t)
+                sp2.probs .= expv(Float64(τ_post), A2, sp2.probs; m = min(krylov_m, size(A2,1)))
+                _clean!(sp2.probs, s.ε_prune)
+                p1 = zeros(s.n_max + 1); p2 = zeros(s.n_max + 1)
+                for idx in eachindex(sp2.states)
+                    tup = Tuple(sp2.states[idx]); pr = sp2.probs[idx]
+                    tup[1] <= s.n_max && (p1[tup[1]+1] += pr)
+                    tup[2] <= s.n_max && (p2[tup[2]+1] += pr)
+                end
+                _clean!(p1, 0.0); _clean!(p2, 0.0)
+                s.dists[v1] = p1; s.dists[v2] = p2
+                continue
+            end
+        end
+
+        # Default: symmetric Binomial split
+        p_split = _binomial_split_marginal(p_N, s.n_max, s.joint_state_tol)
+        s.dists[v1] = copy(p_split)
+        s.dists[v2] = copy(p_split)
+    end
+
+    # Joint state not maintained (only marginals): clear to avoid stale cache
+    s.joint_state  = nothing
+    empty!(s.joint_voxels)
+    true
+end
+
 function _sync_joint_state!(s::SpatialFSP, active_voxels::Vector{CartesianIndex{2}})
     isempty(active_voxels) && begin
         s.joint_state = nothing
         empty!(s.joint_voxels)
         return false
+    end
+
+    # Fast cap: if K_act is so large that even the smallest product state would exceed
+    # max_states, bail immediately before computing supports.
+    length(active_voxels) > 60 && begin   # 2^60 >> any max_states
+        s.joint_state = nothing; empty!(s.joint_voxels); return false
     end
 
     if s.joint_state === nothing || isempty(s.joint_voxels)
@@ -877,7 +1139,10 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
     handled = Set{CartesianIndex{2}}()
 
     if s.use_joint_active && !isempty(s.dists)
-        if _evolve_joint_active!(s, means, dt; krylov_m)
+        succeeded = s.use_joint_vcycle ?
+                    _evolve_joint_active_vcycle!(s, means, dt; krylov_m) :
+                    _evolve_joint_active!(s, means, dt; krylov_m)
+        if succeeded
             new_dists = copy(s.dists)
             union!(handled, keys(new_dists))
             empty!(s.block_states)

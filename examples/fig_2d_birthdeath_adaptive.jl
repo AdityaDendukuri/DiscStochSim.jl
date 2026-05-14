@@ -168,12 +168,16 @@ println("Running adaptive 2D FSP ...")
             new_Ke = new_cm.n_coarse
             new_bc = _region_bc(new_cm, mf_state, n_max_c_hard)
             if new_Ke != Ke
-                new_sys   = build_rdme_adaptive_2d(model_2d, fine_grid_2d, new_cm, Val(new_Ke))
-                new_means = [sum(mf_state[k] for k in new_cm.coarse_to_fine[j]) for j in 1:new_Ke]
-                new_u0    = CartesianIndex(ntuple(j->round(Int,new_means[j]), Val(new_Ke)))
-                new_sp    = StateSpace{CartesianIndex{new_Ke}, Float64}()
-                add_state!(new_sp, new_u0, 1.0)
-                expand!(new_sp, new_sys, new_bc; depth=4)
+                new_sys = build_rdme_adaptive_2d(model_2d, fine_grid_2d, new_cm, Val(new_Ke))
+                new_sp  = remap_sp_transition(sp, cm, new_cm, Val(new_Ke); weight_tol=prune_tol)
+                if isempty(new_sp.states)
+                    # Fallback to mean-field point mass if remap produces nothing
+                    new_means = [sum(mf_state[k] for k in new_cm.coarse_to_fine[j]) for j in 1:new_Ke]
+                    new_u0    = CartesianIndex(ntuple(j->round(Int,new_means[j]), Val(new_Ke)))
+                    new_sp    = StateSpace{CartesianIndex{new_Ke}, Float64}()
+                    add_state!(new_sp, new_u0, 1.0)
+                end
+                expand!(new_sp, new_sys, new_bc; depth=2)
                 println("  t=$(round(t,digits=1)) K_eff: $Ke→$new_Ke  |S|=$(length(new_sp))")
                 sp=new_sp; cm=new_cm; sys=new_sys; bc=new_bc; Ke=new_Ke
             else

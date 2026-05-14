@@ -33,6 +33,7 @@ include("rdme/dynamic_pi.jl")
 include("rdme/patch_qsd.jl")
 include("rdme/vcycle.jl")
 include("rdme/mixed_vcycle.jl")
+include("rdme/sp_transition.jl")
 include("rdme/schlogl_mixed_1d.jl")
 include("rdme/solve.jl")
 
@@ -55,6 +56,7 @@ export fine_marginals_from_coarse
 export RDMEModel1D, build_rdme_system, build_intra_system, build_coarse_system, rdme_bc
 export SchloglModel1D, build_schlogl_rdme_system, build_schlogl_adaptive_system
 export build_rdme_adaptive_2d
+export remap_sp_transition
 export build_schlogl_coarse_system, build_schlogl_mixed_system
 export build_schlogl_coarse_system_dynamic
 export schlogl_rate_eq, schlogl_fixed_points
