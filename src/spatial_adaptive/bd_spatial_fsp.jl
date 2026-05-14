@@ -1287,6 +1287,114 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
     return s
 end
 
+"""
+    step!(s, dt, fg; krylov_m=30, flux_max_depth=6)
+
+Flux-vcycle variant of step!: replaces the active-voxel solve with
+`evolve_flux_vcycle!` (adjacency-graph adaptive coarsening), then runs the
+same equilibration/activation/restriction lifecycle as the standard `step!`.
+
+Falls back to per-voxel CME for any active voxel not handled by the vcycle.
+"""
+function step!(s::SpatialFSP, dt::Float64, fg::Any;
+               krylov_m::Int = 30, flux_max_depth::Int = 6)
+    d = jump_rate(s.model)
+
+    # ── 1. Means ─────────────────────────────────────────────────────────────
+    means = Dict{CartesianIndex{2}, Float64}()
+    for (idx, p) in s.dists;       means[idx] = voxel_mean(p); end
+    for (idx, p) in s.equil_dists; means[idx] = voxel_mean(p); end
+
+    # ── 2. Evolve active voxels via flux V-cycle ──────────────────────────────
+    handled = Set{CartesianIndex{2}}()
+    if !isempty(s.dists)
+        ok = evolve_flux_vcycle!(s, fg, means, dt;
+                                 krylov_m = krylov_m, max_depth = flux_max_depth)
+        ok && union!(handled, keys(s.dists))
+    end
+
+    # fallback for any voxel the vcycle didn't cover
+    new_dists = copy(s.dists)
+    for (idx, p_old) in s.dists
+        idx in handled && continue
+        ns        = grid_neighbors(idx, s.K_x, s.K_y)
+        μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+        in_rate   = d * μ_in
+        out_coeff = d * length(ns)
+        Q         = _single_voxel_generator(s.model, in_rate, out_coeff, s.n_max)
+        p_new     = expv(Float64(dt), Q, p_old; m = min(krylov_m, size(Q, 1)))
+        _clean!(p_new, s.ε_prune)
+        new_dists[idx] = p_new
+    end
+    s.dists = new_dists
+    s.joint_state = nothing; empty!(s.joint_voxels); empty!(s.block_states)
+
+    # ── 3. Update equilibrated voxels (identical to standard step!) ───────────
+    if has_finite_local_ss(s.model)
+        new_equil = Dict{CartesianIndex{2}, Vector{Float64}}()
+        for (idx, p_eq) in s.equil_dists
+            ns        = grid_neighbors(idx, s.K_x, s.K_y)
+            μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+            in_rate   = d * μ_in
+            out_coeff = d * length(ns)
+            if any(nb -> haskey(s.dists, nb), ns)
+                Q_eq     = _single_voxel_generator(s.model, in_rate, out_coeff, s.n_max_eq)
+                p_old_eq = _resize_dist(p_eq, s.n_max_eq)
+                p_new_eq = expv(Float64(dt), Q_eq, p_old_eq;
+                                m = min(s.krylov_m_eq, size(Q_eq, 1)))
+                _clean!(p_new_eq, s.ε_prune)
+                new_equil[idx] = p_new_eq
+            else
+                μ_loc = (s.model.k_b + in_rate) / (s.model.k_d + out_coeff)
+                new_equil[idx] = _poisson_pmf(μ_loc, s.n_max_eq)
+            end
+        end
+        s.equil_dists = new_equil
+    else
+        empty!(s.equil_dists)
+    end
+
+    # ── 4. Accumulate flux into empty voxels ──────────────────────────────────
+    for (idx, μ) in means
+        μ > 0.0 || continue
+        for nb in grid_neighbors(idx, s.K_x, s.K_y)
+            haskey(s.dists, nb)       && continue
+            haskey(s.equil_dists, nb) && continue
+            s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * μ * dt
+        end
+    end
+
+    # ── 5. Activate empty voxels ──────────────────────────────────────────────
+    for (nb, fl) in s.pending_flux
+        if fl >= s.ε_expand && !haskey(s.dists, nb) && !haskey(s.equil_dists, nb)
+            p0 = zeros(s.n_max + 1); p0[1] = 1.0
+            s.dists[nb] = p0
+            delete!(s.pending_flux, nb)
+        end
+    end
+
+    # ── 6. Restrict active voxels near local Poisson SS ───────────────────────
+    if has_finite_local_ss(s.model)
+        to_deact = CartesianIndex{2}[]
+        for (idx, p) in s.dists
+            ns      = grid_neighbors(idx, s.K_x, s.K_y)
+            μ_in    = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+            μ_loc   = (s.model.k_b + d * μ_in) / (s.model.k_d + d * length(ns))
+            μ       = voxel_mean(p)
+            abs(μ - μ_loc) / (μ_loc + 1e-10) < s.ε_equil || continue
+            p_loc   = _poisson_pmf(μ_loc, s.n_max)
+            tv      = 0.5 * sum(abs(p[i] - p_loc[i]) for i in eachindex(p_loc))
+            tv < 0.08 || continue
+            push!(to_deact, idx)
+            s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+        end
+        for idx in to_deact; delete!(s.dists, idx); end
+    end
+
+    s.t += dt
+    return s
+end
+
 # ─── Grid views ──────────────────────────────────────────────────────────────
 
 function status_grid(s::SpatialFSP)

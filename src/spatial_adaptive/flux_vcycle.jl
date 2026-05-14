@@ -166,7 +166,7 @@ end
 
 # Convolve a list of 1-D probability vectors (total-count distribution)
 function _convolve_group(ps::Vector{Vector{Float64}})
-    out = ps[1]
+    out = copy(ps[1])
     for i in 2:length(ps)
         p2  = ps[i]
         n1, n2 = length(out), length(p2)
@@ -320,36 +320,38 @@ function _flux_vcycle!(
     grp_means  = [[voxel_mean(dists[k]) for k in g] for g in groups]
     coarse_d   = [_convolve_group([dists[k] for k in g]) for g in groups]
 
+    # Coarse n_max: use actual support of coarse distributions, not 2*n_max.
+    # This prevents exponential blowup at deeper recursion levels.
+    n_max_c = maximum(
+        findlast(>(tol), p) - 1
+        for p in coarse_d
+        if any(>(tol), p);
+        init = 2 * n_max
+    )
+    n_max_c = max(n_max_c, n_max)   # never smaller than fine n_max
+
     # ── Coarsen flux graph ────────────────────────────────────────────────────
     rep_voxels = [fine_voxels[g[1]] for g in groups]
     fg_c       = _coarsen_flux_graph(fg, groups, rep_voxels, K_x, K_y)
 
-    # ── Build coarser fine_voxels (for geometry-aware coarse system) ──────────
-    # We pass the ORIGINAL fine_voxels + groups so inter-group edges are exact.
-    # The coarser level's "fine_voxels" are the group representatives, and
-    # its groups are singletons — handled at the next recursion level if needed.
-
     # ── Recurse ───────────────────────────────────────────────────────────────
-    # Build a mapping from group-local index → super-voxel's fine_voxels (for geometry)
-    # For the coarser system, treat each group as a single super-voxel at this level.
     sys_c = _build_group_coarse_sys(model, fine_voxels, groups, means, K_x, K_y)
-    bc_c  = x -> _joint_active_bc(x, 2 * n_max)
+    bc_c  = x -> _joint_active_bc(x, n_max_c)
 
     sp_c = _product_state_from_dists(coarse_d, tol, max_states)
     sp_c === nothing && return false
     expand!(sp_c, sys_c, bc_c; depth=1)
     length(sp_c) > max_states && return false
 
-    # Recurse on coarser level using the coarser flux graph and coarse dists
     success = _flux_vcycle!(coarse_d, rep_voxels, fg_c, means, model, K_x, K_y,
-                             dt, 2*n_max, tol, ε_prune, krylov_m, max_states, depth-1, t)
+                             dt, n_max_c, tol, ε_prune, krylov_m, max_states, depth-1, t)
 
     if !success
         # Fallback: direct solve at this coarse level
         A_c, = build_generator(sp_c, sys_c, nothing, t)
         sp_c.probs .= expv(Float64(dt), A_c, sp_c.probs; m=min(krylov_m, size(A_c,1)))
         prune_threshold!(sp_c, tol); renormalize!(sp_c)
-        coarse_d = _joint_marginals(sp_c, 2*n_max)
+        coarse_d = _joint_marginals(sp_c, n_max_c)
     end
     # coarse_d now holds the post-solve K_G coarse marginals
 

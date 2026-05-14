@@ -17,20 +17,20 @@ using DiscStochSim
 using CairoMakie, Printf
 
 # ─── Parameters ──────────────────────────────────────────────────────────────
-const K     = 14
+const K     = parse(Int,     get(ENV, "SPATIAL_K",     "14"))
 const k_b   = 1.0
 const k_d   = 0.5         # μ_ss = 2.0
-const D     = 1.0
+const D     = parse(Float64, get(ENV, "SPATIAL_D",     "1.0"))
 const dx    = 1.0
 const N0    = 0
-const dt    = 0.1
-const t_end = 30.0
-const n_max = 20
+const dt    = parse(Float64, get(ENV, "SPATIAL_DT",    "0.1"))
+const t_end = parse(Float64, get(ENV, "SPATIAL_T_END", "30.0"))
+const n_max = parse(Int,     get(ENV, "SPATIAL_N_MAX", "20"))
 
 model = BirthDeathRDME(k_b, k_d, D, dx)
 μ_ss  = ss_mean(model)    # 2.0
 
-@printf("K=%d×%d  μ_ss=%.1f  n_max=%d\n", K, K, μ_ss, n_max)
+@printf("K=%d×%d  D=%.1f  μ_ss=%.1f  n_max=%d  dt=%.2f\n", K, K, D, μ_ss, n_max, dt)
 
 # ─── Compute mean and std from a distribution vector ─────────────────────────
 function dist_mean_std(p::Vector{Float64})
@@ -65,12 +65,18 @@ function border_path(sg::Matrix{Int}, state::Int)
 end
 
 # ─── Run SpatialFSP ──────────────────────────────────────────────────────────
+const USE_FLUX_VCYCLE = get(ENV, "SPATIAL_SOLVER", "voxel") == "flux"
+
 state  = SpatialFSP(model, K, K; n_max, ε_expand=0.3, ε_equil=0.08,
                     use_joint_active=false, use_block_vcycle=false)
 center = CartesianIndex(K÷2+1, K÷2+1)
 set_ic!(state, center, N0)
 
-snap_ts    = [0.0, 4.0, 9.0, 16.0, t_end]
+fg = USE_FLUX_VCYCLE ? build_flux_graph(CartesianIndex{2}[], K, K; α=0.7) : nothing
+solver_label = USE_FLUX_VCYCLE ? "flux-vcycle" : "per-voxel"
+println("Solver: $solver_label")
+
+snap_ts    = unique([0.0; filter(<(t_end), [4.0, 9.0, 16.0]); t_end])
 snap_steps = [max(0, round(Int, t/dt)) for t in snap_ts]
 
 # Probe voxels along the diagonal — track their distributions over time
@@ -113,7 +119,8 @@ record!(state, 0)
 n_steps = round(Int, t_end/dt)
 println("Running $n_steps steps…")
 for step in 1:n_steps
-    step!(state, dt); record!(state, step)
+    USE_FLUX_VCYCLE ? step!(state, dt, fg) : step!(state, dt)
+    record!(state, step)
     step % 50 == 0 && @printf("  t=%5.1f  active=%d  equil=%d\n",
                                 state.t, n_active(state), n_equilibrated(state))
 end
