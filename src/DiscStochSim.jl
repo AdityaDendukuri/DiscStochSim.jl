@@ -22,6 +22,9 @@ include("adaptive_fsp/solve.jl")
 include("adaptive_fsp/krylov_fsp.jl")
 include("adaptive_fsp/terminal_progress.jl")
 
+# Spatially adaptive FSP (new approach)
+include("spatial_adaptive/bd_spatial_fsp.jl")
+
 # RDME multigrid FSP
 include("rdme/voxel_grid.jl")
 include("rdme/rdme_model.jl")
@@ -71,6 +74,12 @@ export adapt_annihilation_1d
 export PatchQSD, build_patch_qsd, prolong_patch_qsd
 export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
 export patch_qsd_correlation
+# Spatial adaptive FSP exports
+export BirthDeathRDME, SpatialFSP, set_ic!, step!, n_active
+export n_equilibrated, n_empty, status_grid, mean_grid
+export total_distribution, equilibration_fraction, collapsed_cme_generator
+export poisson_pmf_vec, jump_rate, ss_mean, voxel_mean
+
 export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottleneck_bc
 export build_bottleneck_system_2d, build_intra_system_2d
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
