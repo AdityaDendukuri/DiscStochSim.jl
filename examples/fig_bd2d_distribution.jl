@@ -80,8 +80,9 @@ snap_ts    = unique([0.0; filter(<(t_end), [4.0, 9.0, 16.0]); t_end])
 snap_steps = [max(0, round(Int, t/dt)) for t in snap_ts]
 
 # Probe voxels along the diagonal — track their distributions over time
-probe_voxels = [CartesianIndex(k, k) for k in [K÷2+1, K÷2+3, K÷2+5]]
-probe_labels = ["center", "+2", "+4"]
+probe_offsets = [0, K÷6, K÷3]
+probe_voxels  = [CartesianIndex(K÷2+1+o, K÷2+1+o) for o in probe_offsets]
+probe_labels  = ["center (+$(probe_offsets[1]))", "+$(probe_offsets[2])", "+$(probe_offsets[3])"]
 
 snap_mean    = Dict{Int, Matrix{Float64}}()
 snap_std     = Dict{Int, Matrix{Float64}}()
