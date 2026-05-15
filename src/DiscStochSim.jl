@@ -38,6 +38,9 @@ include("rdme/sp_transition.jl")
 include("rdme/schlogl_mixed_1d.jl")
 include("rdme/solve.jl")
 
+# Graph-generalised RDME (depends on rdme_model, operators, solve)
+include("rdme/graph_rdme.jl")
+
 # Exports
 export DiscreteStochasticSystem
 export RectLatticeBoundaryCondition
@@ -81,6 +84,11 @@ export adapt_annihilation_1d
 export PatchQSD, build_patch_qsd, prolong_patch_qsd
 export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
 export patch_qsd_correlation
+# Graph RDME exports
+export VoxelGraph, chain, grid_2d, grid_3d, degrees, adjacency_list
+export build_schlogl_graph_system, solve_rdme_graph
+export GraphRDMESolution, config_probs
+
 # Spatial adaptive FSP exports
 export BirthDeathRDME, BranchingDeathRDME, SpatialFSP, set_ic!, step!, n_active
 export FluxGraph, build_flux_graph, update_flux!, evolve_flux_vcycle!
