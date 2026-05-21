@@ -38,19 +38,66 @@ model = SchloglModel1D(D, C1, C2, C3, C4)
 n_lo, n_un, n_hi = schlogl_fixed_points(model)
 @printf("Fixed points:  n_lo=%d  n_unstable=%d  n_hi=%d\n", n_lo, n_un, n_hi)
 
-const K      = 16      # total voxels
-const DX     = 1.0     # voxel size
-const T_END  = 8.0
-const DT     = 0.25
-const N_MAX  = 200     # per-voxel FSP truncation
-const MAX_KA = 4       # hard cap on active voxels
+const K        = 50      # total voxels (active front is independent of K)
+const DX       = 1.0    # voxel size
+const T_END    = 8.0
+const DT       = 0.25
+const N_MAX    = 200    # per-voxel FSP truncation (rstep bounds the actual support)
+const MAX_KA   = 8      # hard cap on active voxels
+const N_LEVELS = 1      # V-cycle levels on the active strip (0 = direct expv)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Mixed-resolution Schlögl runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Type-stable inner evolve: dispatches on StateSpace{CartesianIndex{Ka}} ──────
+# Function barrier: Julia compiles a specialization for each Ka value.
+# V-cycle when Ka is even and ≥ 4 and n_levels ≥ 1; direct expv otherwise.
+function _evolve_active_schlogl!(sp::StateSpace{CartesianIndex{Ka}, Float64},
+                                  model, ga, lbc, rbc, μ, rates,
+                                  t, dt, n_max, prune_tol, krylov_m,
+                                  n_levels, τ_pre_frac) where Ka
+    sys = build_active_schlogl_1d(model, ga, lbc, rbc, μ, Val(Ka))
+    bc  = schlogl_mixed_bc(n_max)
+
+    use_vcycle = n_levels >= 1 && iseven(Ka) && Ka >= 4
+
+    if use_vcycle
+        # Determine actual usable levels (each level halves Ka; stop if Ka/2 is 0)
+        max_l = floor(Int, log2(Ka))
+        nl    = min(n_levels, max_l)
+        hier  = build_hierarchy(ga, nl)
+        τ_pre = τ_pre_frac * dt
+
+        # Expand before V-cycle so boundary states are in the space
+        expand!(sp, sys, bc; depth = 1)
+
+        sp = multi_level_vcycle_schlogl(sp, model, hier, lbc, rbc, μ, rates, t, dt;
+                                         τ_pre, τ_post = τ_pre,
+                                         krylov_m,
+                                         weight_tol  = prune_tol,
+                                         expand_coarse = true,
+                                         coarse_r_depth = 2,
+                                         coarse_d_depth = 1,
+                                         coarse_n_max = 2 * n_max,
+                                         max_states   = 2_000_000,
+                                         prune_tol)
+    else
+        # Direct expv: small Ka or odd Ka
+        expand!(sp, sys, bc; depth = 1)
+        A, = build_generator(sp, sys, rates, t)
+        sp.probs .= expv(dt, A, sp.probs; m = krylov_m)
+    end
+
+    renormalize!(sp)
+    prune_threshold!(sp, prune_tol)
+    sp
+end
+
 function run_schlogl_mixed(K, model, dx, n_max, T_END, DT, n_lo, n_hi;
                             max_k_act    = 4,
+                            n_levels     = 1,        # V-cycle levels (0 = direct expv)
+                            τ_pre_frac   = 0.1,      # pre/post smooth time as fraction of dt
                             promote_margin = 15.0,
                             demote_margin  = 8.0,
                             prune_tol    = 1e-12,
@@ -94,13 +141,12 @@ function run_schlogl_mixed(K, model, dx, n_max, T_END, DT, n_lo, n_hi;
         rbc  = right_inactive(avs)
         ga   = VoxelGrid(Ka, dx, 0)
 
-        # Build generator with current mean-field BCs and run expv
-        sys = build_active_schlogl_1d(model, ga, lbc, rbc, μ, Val(Ka))
-        expand!(sp, sys, schlogl_mixed_bc(n_max); depth = 1)
-        A, = build_generator(sp, sys, rates, t)
-        sp.probs .= expv(DT, A, sp.probs; m = krylov_m)
-        renormalize!(sp)
-        prune_threshold!(sp, prune_tol)
+        # Evolve: V-cycle if Ka is even and ≥ 4, otherwise direct expv.
+        # Function barrier (_evolve_active_schlogl!) makes inner loops type-stable
+        # even though Ka (and thus the StateSpace type) changes between steps.
+        sp = evolve_active_schlogl!(sp, model, ga, lbc, rbc, μ, rates, t, DT,
+                                     n_max, prune_tol, krylov_m,
+                                     n_levels, τ_pre_frac)
 
         # Update inactive means
         update_inactive_means_schlogl_1d!(μ, sp, avs, model, dx, DT)
@@ -138,10 +184,12 @@ end
 # Run
 # ─────────────────────────────────────────────────────────────────────────────
 
-println("Running 1D Schlögl mixed-resolution FSP  (K=$K, D=$D) ...")
+println("Running 1D Schlögl mixed-resolution FSP  (K=$K, D=$D, n_levels=$N_LEVELS) ...")
 @time times, μ_hist, sp_sizes, ka_hist, alo_hist, ahi_hist, marg_snaps =
     run_schlogl_mixed(K, model, DX, N_MAX, T_END, DT, n_lo, n_hi;
-                      max_k_act = MAX_KA, promote_margin = 15.0, demote_margin = 8.0)
+                      max_k_act = MAX_KA, n_levels = N_LEVELS,
+                      τ_pre_frac = 0.1,
+                      promote_margin = 15.0, demote_margin = 8.0)
 println("Done. |S|_max=$(maximum(sp_sizes))  K_act_max=$(maximum(ka_hist))")
 
 # ─────────────────────────────────────────────────────────────────────────────

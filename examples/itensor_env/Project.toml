@@ -1,0 +1,6 @@
+[deps]
+ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
+ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"

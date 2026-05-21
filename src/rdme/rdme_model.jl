@@ -19,7 +19,7 @@ Fields:
 Default parameters give bistability with single-voxel stable states at
 n_low ≈ 31 and n_high ≈ 148 (unstable fixed point at n ≈ 78).
 """
-struct SchloglModel1D
+struct SchloglModel1D <: AbstractSpatialRDMEModel
     D::Float64
     c1::Float64
     c2::Float64

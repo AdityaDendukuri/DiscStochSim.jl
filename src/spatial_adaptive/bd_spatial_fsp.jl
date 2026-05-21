@@ -38,6 +38,7 @@ Benefits over algebraic mean update:
 
 abstract type AbstractSpatialRDMEModel end
 
+
 struct BirthDeathRDME <: AbstractSpatialRDMEModel
     k_b :: Float64
     k_d :: Float64
@@ -192,6 +193,129 @@ function _single_voxel_generator(model::AbstractSpatialRDMEModel,
         end
     end
     Q
+end
+
+"""
+    _single_voxel_generator_range(model, in_rate, out_coeff, n_lo, n_hi)
+
+Build a single-voxel CME generator restricted to molecule counts [n_lo, n_hi].
+Output is (n_hi-n_lo+1) × (n_hi-n_lo+1) — smaller than the full [0, n_max] matrix.
+Used by _expv_voxel to restrict computation to the active support of p.
+"""
+function _single_voxel_generator_range(model::AbstractSpatialRDMEModel,
+                                         in_rate::Float64, out_coeff::Float64,
+                                         n_lo::Int, n_hi::Int;
+                                         n_sites::Int = 1)
+    nv = n_hi - n_lo + 1
+    Q  = zeros(Float64, nv, nv)
+    for col in 1:nv
+        n = col - 1 + n_lo   # actual molecule count
+        up = in_rate + local_total_birth_rate(model, n, n_sites)
+        if col < nv && up > 0
+            Q[col+1, col] += up;  Q[col, col] -= up
+        end
+        down = _voxel_down_rate(model, n, out_coeff)
+        if col > 1 && down > 0
+            Q[col-1, col] += down;  Q[col, col] -= down
+        end
+    end
+    Q
+end
+
+# Per-model downward rate (excludes diffusion-out which is added as out_coeff×n)
+_voxel_down_rate(m::BirthDeathRDME,    n, out_coeff) = (m.k_d + out_coeff) * n
+_voxel_down_rate(m::BranchingDeathRDME, n, out_coeff) = (m.k_d + out_coeff) * n
+# SchloglModel1D dispatch defined in schlogl_spatial_fsp.jl (included after rdme_model.jl)
+
+# ── Sparse Tridiagonal overrides for BD models ────────────────────────────────
+# BirthDeath and BranchingDeath are also birth-death chains (tridiagonal).
+# Returning Tridiagonal instead of a dense matrix reduces expv mv cost
+# from O(n²) to O(n), giving the same speedup as for Schlögl.
+function _single_voxel_generator_range(model::BirthDeathRDME,
+                                         in_rate::Float64, out_coeff::Float64,
+                                         n_lo::Int, n_hi::Int;
+                                         n_sites::Int = 1)
+    nv = n_hi - n_lo + 1
+    dl = zeros(Float64, nv - 1)
+    d  = zeros(Float64, nv)
+    du = zeros(Float64, nv - 1)
+    for col in 1:nv
+        n    = col - 1 + n_lo
+        up   = in_rate + local_total_birth_rate(model, n, n_sites)
+        down = _voxel_down_rate(model, n, out_coeff)
+        if col < nv && up > 0;   dl[col]    = up;   d[col]   -= up;   end
+        if col > 1 && down > 0;  du[col-1]  = down; d[col]   -= down; end
+    end
+    LinearAlgebra.Tridiagonal(dl, d, du)
+end
+
+function _single_voxel_generator_range(model::BranchingDeathRDME,
+                                         in_rate::Float64, out_coeff::Float64,
+                                         n_lo::Int, n_hi::Int;
+                                         n_sites::Int = 1)
+    nv = n_hi - n_lo + 1
+    dl = zeros(Float64, nv - 1)
+    d  = zeros(Float64, nv)
+    du = zeros(Float64, nv - 1)
+    for col in 1:nv
+        n    = col - 1 + n_lo
+        up   = in_rate + local_total_birth_rate(model, n, n_sites)
+        down = _voxel_down_rate(model, n, out_coeff)
+        if col < nv && up > 0;   dl[col]    = up;   d[col]   -= up;   end
+        if col > 1 && down > 0;  du[col-1]  = down; d[col]   -= down; end
+    end
+    LinearAlgebra.Tridiagonal(dl, d, du)
+end
+
+"""
+    _expv_voxel(model, in_rate, out_coeff, p, dt, krylov_m; margin, prune_tol) → p_new
+
+Evolve a per-voxel distribution using expv on the ACTIVE SUPPORT of p only.
+Equivalent to rstep for dense 1D distributions:
+  - Finds [lo, hi] = range where p > prune_tol
+  - Builds generator only for [lo-margin, hi+margin] ← small matrix
+  - Runs expv on that compact system
+  - Returns result in original-length vector
+
+For Schlögl at n_hi=162:  ~40 states instead of 221  (5× speedup)
+For BirthDeath at n≈3:    ~15 states instead of  20  (modest)
+The margin ensures boundary losses are negligible.
+"""
+function _expv_voxel(model::AbstractSpatialRDMEModel,
+                      in_rate::Float64, out_coeff::Float64,
+                      p::Vector{Float64}, dt::Float64,
+                      krylov_m::Int;
+                      n_sites::Int   = 1,
+                      margin::Int    = 8,
+                      n_include::Int = -1,     # force this molecule count into support
+                      lo_override::Int = -1,   # override lower bound of support
+                      hi_override::Int = -1,   # override upper bound of support
+                      prune_tol::Float64 = 1e-10)
+    n_max  = length(p) - 1
+    lo_idx = findfirst(>(prune_tol), p)
+    hi_idx = findlast(>(prune_tol), p)
+    isnothing(lo_idx) && return copy(p)   # zero distribution
+
+    lo_mol = max(0,     lo_idx - 1 - margin)
+    hi_mol = min(n_max, hi_idx - 1 + margin)
+
+    if n_include >= 0
+        lo_mol = min(lo_mol, max(0,     n_include - margin))
+        hi_mol = max(hi_mol, min(n_max, n_include + margin))
+    end
+    # Hard overrides: for bistable models with large drifts, the support must span
+    # the full state space or probability escapes the compact support in one step.
+    if lo_override >= 0; lo_mol = lo_override; end
+    if hi_override >= 0; hi_mol = hi_override; end
+
+    Q_sub  = _single_voxel_generator_range(model, in_rate, out_coeff, lo_mol, hi_mol;
+                                            n_sites)
+    p_sub  = p[lo_mol+1 : hi_mol+1]
+    p_sub_new = expv(Float64(dt), Q_sub, p_sub; m = min(krylov_m, size(Q_sub, 1)))
+
+    p_new = zeros(Float64, n_max + 1)
+    p_new[lo_mol+1 : hi_mol+1] = max.(0.0, p_sub_new)
+    p_new
 end
 
 function _poisson_pmf(λ::Float64, n_max::Int)
@@ -1108,6 +1232,380 @@ function _evolve_block_vcycle(s::SpatialFSP,
     sp_new
 end
 
+# ─── Multi-level stochastic prolongation for pair V-cycle ────────────────────
+#
+# Three-level hierarchy along the split axis n₁|N:
+#   Level 0 (fine):     p(n₁|N)        — exact conditional from pre-smooth
+#   Level 1 (mid):      p(⌊n₁/2⌋|N)   — bin-pair coarsening of split
+#   Level 2 (coarsest): p(N) only      — total count (from 1D CME coarse solve)
+#
+# Prolongation (level 2 → 0):
+#   Existing N (p_pre[N]>0): multiplicative correction on level-0 fiber — exact
+#   New N:  1. propagate level-1 fiber from nearest known N via coarse L/R
+#           2. refine level-1 → level-0 using within-bin weights from nearest
+#              known level-0 fiber (borrowed across N — changes slowly)
+
+# Build level-0 and level-1 fibers from the pre-smooth joint sp.
+# fiber0[N][n₁]   = p(n₁|N)        — exact conditional
+# fiber1[N][⌊n₁/2⌋] = p(⌊n₁/2⌋|N) — coarsened conditional
+function _build_pair_fibers(sp::StateSpace{CartesianIndex{2},Float64},
+                             nmax2::Int, state_tol::Float64)
+    fibers0 = Dict{Int, Dict{Int,Float64}}()
+    fibers1 = Dict{Int, Dict{Int,Float64}}()
+    for (ci, prob) in zip(sp.states, sp.probs)
+        prob < state_tol && continue
+        n1, n2 = Tuple(ci)
+        N = n1 + n2
+        N > nmax2 && continue
+        d0 = get!(fibers0, N, Dict{Int,Float64}())
+        d0[n1] = get(d0, n1, 0.0) + prob
+        d1 = get!(fibers1, N, Dict{Int,Float64}())
+        m  = n1 ÷ 2
+        d1[m] = get(d1, m, 0.0) + prob
+    end
+    for d in values(fibers0); s = sum(values(d)); s > 1e-300 && map!(v -> v/s, values(d)); end
+    for d in values(fibers1); s = sum(values(d)); s > 1e-300 && map!(v -> v/s, values(d)); end
+    fibers0, fibers1
+end
+
+# Lift level-1 fiber from N to N+1 (birth event, coarse L/R operator).
+# Uses uniform within-bin weights — only called for new N values where
+# fine structure is unknown. Accurate when propensities change slowly.
+function _lift_fiber1(fiber1::Dict{Int,Float64}, N::Int,
+                       in1::Float64, in2::Float64,
+                       model::AbstractSpatialRDMEModel, n_max::Int)
+    new_f = Dict{Int,Float64}()
+    for (m, prob) in fiber1
+        prob < 1e-300 && continue
+        for n1 in (2m, 2m+1)           # both fine states in coarse bin m
+            (n1 > min(N, n_max) || N - n1 < 0) && continue
+            n2  = N - n1
+            b1  = local_total_birth_rate(model, n1, 1) + in1
+            b2  = local_total_birth_rate(model, n2, 1) + in2
+            tot = b1 + b2; tot < 1e-300 && continue
+            w   = 0.5 * prob            # uniform within-bin weight
+            if n1 + 1 <= n_max          # born at v1: n₁ → n₁+1
+                m1 = (n1 + 1) ÷ 2
+                new_f[m1] = get(new_f, m1, 0.0) + w * b1/tot
+            end
+            new_f[m] = get(new_f, m, 0.0) + w * b2/tot   # born at v2: n₁ unchanged
+        end
+    end
+    s = sum(values(new_f)); s > 1e-300 && map!(v -> v/s, values(new_f))
+    new_f
+end
+
+# Lower level-1 fiber from N to N-1 (death event, coarse L/R operator).
+function _lower_fiber1(fiber1::Dict{Int,Float64}, N::Int,
+                        out1::Float64, out2::Float64,
+                        model::AbstractSpatialRDMEModel)
+    N <= 0 && return Dict{Int,Float64}()
+    new_f = Dict{Int,Float64}()
+    for (m, prob) in fiber1
+        prob < 1e-300 && continue
+        for n1 in (2m, 2m+1)
+            n1 > N && continue
+            n2  = N - n1
+            d1  = _voxel_down_rate(model, n1, out1)
+            d2  = _voxel_down_rate(model, n2, out2)
+            tot = d1 + d2; tot < 1e-300 && continue
+            w   = 0.5 * prob
+            if n1 > 0                   # death at v1: n₁ → n₁-1
+                m1 = (n1 - 1) ÷ 2
+                new_f[m1] = get(new_f, m1, 0.0) + w * d1/tot
+            end
+            new_f[m] = get(new_f, m, 0.0) + w * d2/tot   # death at v2: n₁ unchanged
+        end
+    end
+    s = sum(values(new_f)); s > 1e-300 && map!(v -> v/s, values(new_f))
+    new_f
+end
+
+# Refine: level-1 → level-0 by splitting each coarse bin using within-bin
+# weights borrowed from a reference level-0 fiber at the nearest known N.
+function _refine_fiber1(fiber1::Dict{Int,Float64},
+                         ref0  ::Dict{Int,Float64},
+                         n_max ::Int)
+    fiber0 = Dict{Int,Float64}()
+    for (m, cp) in fiber1
+        cp < 1e-300 && continue
+        n1_lo, n1_hi = 2m, 2m+1
+        p_lo = get(ref0, n1_lo, 0.0)
+        p_hi = get(ref0, n1_hi, 0.0)
+        tot  = p_lo + p_hi
+        w_lo, w_hi = tot > 1e-300 ? (p_lo/tot, p_hi/tot) : (0.5, 0.5)
+        n1_lo ≤ n_max && (fiber0[n1_lo] = get(fiber0, n1_lo, 0.0) + cp * w_lo)
+        n1_hi ≤ n_max && (fiber0[n1_hi] = get(fiber0, n1_hi, 0.0) + cp * w_hi)
+    end
+    s = sum(values(fiber0)); s > 1e-300 && map!(v -> v/s, values(fiber0))
+    fiber0
+end
+
+# Multi-level prolongation: assemble sp_new from fibers and p_post weights.
+# For existing N: exact multiplicative correction (fiber0 × p_post[N]).
+# For new N:      coarse L/R propagation (fiber1) → level-0 refinement.
+function _prolong_multilevel(sp        ::StateSpace{CartesianIndex{2},Float64},
+                              p_pre     ::Vector{Float64},
+                              p_post    ::Vector{Float64},
+                              in1       ::Float64, in2  ::Float64,
+                              out1      ::Float64, out2 ::Float64,
+                              model     ::AbstractSpatialRDMEModel,
+                              n_max     ::Int,
+                              state_tol ::Float64,
+                              max_states::Int)
+    nmax2 = 2 * n_max
+    fibers0, fibers1 = _build_pair_fibers(sp, nmax2, state_tol)
+    isempty(fibers0) && return nothing
+
+    known_Ns   = sort(collect(keys(fibers0)))
+    derived0   = Dict{Int, Dict{Int,Float64}}()   # cache for new-N fiber0
+    derived1   = Dict{Int, Dict{Int,Float64}}()   # cache for new-N fiber1
+
+    # Derive fiber0 at a new N via: coarse L/R on fiber1 → refine → cache.
+    function derive_fiber0(N::Int)
+        haskey(fibers0,  N) && return fibers0[N]
+        haskey(derived0, N) && return derived0[N]
+        isempty(known_Ns) && return nothing
+
+        # Nearest known anchor for both fibers
+        idx      = searchsortedfirst(known_Ns, N)
+        N_anchor = idx > length(known_Ns) ? known_Ns[end] :
+                   idx == 1               ? known_Ns[1]   :
+                   (N - known_Ns[idx-1] ≤ known_Ns[idx] - N) ? known_Ns[idx-1] : known_Ns[idx]
+
+        # Propagate level-1 fiber step by step from anchor → N (coarse, cheap)
+        cur1 = get(fibers1, N_anchor, Dict{Int,Float64}())
+        cur_N = N_anchor
+        step  = cur_N < N ? 1 : -1
+        while cur_N != N
+            next1 = step > 0 ? _lift_fiber1(cur1,  cur_N, in1, in2, model, n_max) :
+                                _lower_fiber1(cur1, cur_N, out1, out2, model)
+            cur_N += step
+            isempty(next1) && return nothing
+            if !haskey(fibers1, cur_N) && !haskey(derived1, cur_N)
+                derived1[cur_N] = next1
+            end
+            cur1 = get(fibers1, cur_N, get(derived1, cur_N, next1))
+        end
+
+        # Refine level-1 → level-0 using within-bin weights from anchor fiber0
+        ref0  = get(fibers0, N_anchor, Dict{Int,Float64}())
+        f0new = _refine_fiber1(cur1, ref0, n_max)
+        derived0[N] = f0new
+        f0new
+    end
+
+    # Build sp_new
+    sp_new = StateSpace{CartesianIndex{2}, Float64}()
+    for N in 0:nmax2
+        p_post[N+1] > state_tol || continue
+        fiber0 = (haskey(fibers0, N) && p_pre[N+1] > state_tol) ?
+                 fibers0[N] : derive_fiber0(N)
+        fiber0 === nothing && continue
+        isempty(fiber0)   && continue
+        for (n1, cp) in fiber0
+            n2 = N - n1
+            (0 ≤ n1 ≤ n_max && 0 ≤ n2 ≤ n_max) || continue
+            w = cp * p_post[N+1]
+            w > state_tol || continue
+            ci  = CartesianIndex(n1, n2)
+            idx = get(sp_new.index, ci, 0)
+            if idx == 0; add_state!(sp_new, ci, w)
+            else;        sp_new.probs[idx] += w; end
+        end
+        length(sp_new) > max_states && return nothing
+    end
+    sp_new
+end
+
+# ─── ADI pair V-cycle (K=2, correct 2D, O(N) new states vs O(N³) for K=4) ──
+
+"""
+    _evolve_pair_vcycle(model, v1, v2, p1, p2, means, K_x, K_y, dt, n_max; ...)
+        → (p1_new, p2_new) or nothing
+
+K=2 V-cycle for a single adjacent pair of active voxels.
+
+Structure (same as K=4 block but 50× cheaper for new states):
+  1. Product state IC from p1⊗p2 (sparse, state_tol filtered)
+  2. Pre-smooth: pair diffusion only (τ_pre fraction of dt)
+  3. Restrict: p_total[N] = Σ_{n1+n2=N} p(n1,n2)  →  1D vector (2n_max+1 states)
+  4. Coarse solve: 1D CME on total N, includes external boundary flux
+  5. Prolong: multi-level stochastic interpolation
+               — existing N: exact multiplicative correction (fiber0 × p_post/p_pre)
+               — new N:      coarse L/R on fiber1 → refine to fiber0
+  6. Post-smooth: pair diffusion (τ_post fraction of dt)
+  7. Extract marginals → p1_new, p2_new
+
+ADI (alternating row/column sweeps) captures all 4 nearest-neighbor correlations
+in 2D by alternating between horizontal and vertical pair sweeps each step.
+"""
+function _evolve_pair_vcycle(
+        model   :: AbstractSpatialRDMEModel,
+        v1      :: CartesianIndex{2},
+        v2      :: CartesianIndex{2},
+        p1      :: Vector{Float64},
+        p2      :: Vector{Float64},
+        means   :: Dict{CartesianIndex{2}, Float64},
+        K_x     :: Int, K_y :: Int,
+        dt      :: Float64,
+        n_max   :: Int;
+        krylov_m :: Int    = 30,
+        state_tol :: Float64 = 1e-8,
+        pre_frac  :: Float64 = 0.1,
+        post_frac :: Float64 = 0.1,
+        max_states :: Int   = 2000)
+
+    d = jump_rate(model)
+
+    # ── 1. Build sparse product state p1⊗p2 ──────────────────────────────────
+    supp1 = findall(>(state_tol), p1); isempty(supp1) && (supp1 = [argmax(p1)])
+    supp2 = findall(>(state_tol), p2); isempty(supp2) && (supp2 = [argmax(p2)])
+    length(supp1) * length(supp2) > max_states && return nothing
+
+    sp = StateSpace{CartesianIndex{2}, Float64}()
+    for i1 in supp1, i2 in supp2
+        w = p1[i1] * p2[i2]
+        w > state_tol || continue
+        add_state!(sp, CartesianIndex(i1-1, i2-1), w)
+    end
+    isempty(sp.states) && return nothing
+    renormalize!(sp)
+
+    # ── 1b. Organic rstep expansion of the fine-level state space ─────────────
+    # Expand from the product state using the pair RDME system.
+    # This is the organic bound: only states reachable by one reaction from
+    # the current support are added (no fixed n_max pre-allocation).
+    pair_intra = DiscreteStochasticSystem{CartesianIndex{2}}(
+        [CartesianIndex(-1,1), CartesianIndex(1,-1)],
+        [(x,r,t) -> d*max(0,Tuple(x)[1]),
+         (x,r,t) -> d*max(0,Tuple(x)[2])])
+    bc2 = x -> all(c -> 0 ≤ c ≤ n_max, Tuple(x))
+    expand!(sp, pair_intra, bc2; depth=1)   # rstep: organic, not n_max-bounded
+    length(sp) > max_states && return nothing
+
+    # ── 2. Pre-smooth: intra-pair diffusion only ──────────────────────────────
+    τ_pre = pre_frac * dt
+    if τ_pre > 0.0 && !isempty(sp.states)
+        A, = build_generator(sp, pair_intra, nothing, 0.0)
+        sp.probs .= expv(τ_pre, A, sp.probs; m=min(krylov_m,size(A,1)))
+        _clean!(sp.probs, state_tol)
+    end
+
+    # ── 3. Restrict: 1D total count distribution ──────────────────────────────
+    nmax2 = 2 * n_max
+    p_pre = zeros(nmax2 + 1)
+    for (ci, prob) in zip(sp.states, sp.probs)
+        N = sum(Tuple(ci)); N <= nmax2 && (p_pre[N+1] += prob)
+    end
+    p_pre ./= max(sum(p_pre), 1e-100)
+
+    # ── 4. Coarse solve: 1D CME on total N ───────────────────────────────────
+    # Boundary contributions: external equil/empty neighbours of v1 and v2
+    in1 = sum(d * get(means, nb, 0.0)
+              for nb in grid_neighbors(v1, K_x, K_y)
+              if nb != v2 && !haskey(means, nb); init=0.0)
+    in1 += sum(d * get(means, nb, 0.0)
+               for nb in grid_neighbors(v1, K_x, K_y)
+               if nb != v2 && haskey(means, nb); init=0.0)
+    in2  = sum(d * get(means, nb, 0.0)
+               for nb in grid_neighbors(v2, K_x, K_y)
+               if nb != v1; init=0.0)
+    in_rate   = in1 + in2
+
+    out1 = sum(d for nb in grid_neighbors(v1, K_x, K_y) if nb != v2 && !haskey(means, nb); init=0.0)
+    out1 += sum(d for nb in grid_neighbors(v1, K_x, K_y) if nb != v2 && haskey(means, nb); init=0.0)
+    out2  = sum(d for nb in grid_neighbors(v2, K_x, K_y) if nb != v1; init=0.0)
+    out_coeff = (out1 + out2) / 2   # average per-molecule out rate
+
+    Q_c = _single_voxel_generator(model, in_rate, out_coeff, nmax2; n_sites=2)
+    p_post = expv(Float64(dt), Q_c, p_pre; m=min(krylov_m, size(Q_c,1)))
+    _clean!(p_post, state_tol)
+
+    # ── 5. Prolong: multi-level stochastic interpolation ─────────────────────
+    #
+    # Three-level hierarchy (fine → coarse split → total N):
+    #   Existing N: exact multiplicative correction using pre-smooth fiber0
+    #   New N:      coarse L/R propagation on fiber1 → refine to fiber0
+    # See _prolong_multilevel and helpers above for full derivation.
+
+    sp_new = _prolong_multilevel(sp, p_pre, p_post, in1, in2, out1, out2,
+                                  model, n_max, state_tol, max_states)
+    sp_new === nothing && return nothing
+    length(sp_new) > max_states && return nothing
+
+    # ── 6. Post-smooth: intra-pair diffusion ──────────────────────────────────
+    τ_post = post_frac * dt
+    if τ_post > 0.0 && !isempty(sp_new.states)
+        intra = DiscreteStochasticSystem{CartesianIndex{2}}(
+            [CartesianIndex(-1,1), CartesianIndex(1,-1)],
+            [(x,r,t) -> d*max(0,Tuple(x)[1]),
+             (x,r,t) -> d*max(0,Tuple(x)[2])])
+        expand!(sp_new, intra, x -> all(c->0≤c≤n_max,Tuple(x)); depth=1)
+        A, = build_generator(sp_new, intra, nothing, 0.0)
+        sp_new.probs .= expv(τ_post, A, sp_new.probs; m=min(krylov_m,size(A,1)))
+        _clean!(sp_new.probs, state_tol)
+    end
+
+    renormalize!(sp_new) > 0.0 || return nothing
+
+    # ── 7. Extract updated per-voxel marginals ────────────────────────────────
+    p1_new = zeros(n_max + 1); p2_new = zeros(n_max + 1)
+    for (ci, prob) in zip(sp_new.states, sp_new.probs)
+        t = Tuple(ci)
+        t[1] ≤ n_max && (p1_new[t[1]+1] += prob)
+        t[2] ≤ n_max && (p2_new[t[2]+1] += prob)
+    end
+    s1 = sum(p1_new); s1 > 0 && (p1_new ./= s1)
+    s2 = sum(p2_new); s2 > 0 && (p2_new ./= s2)
+
+    (p1_new, p2_new)
+end
+
+"""
+    _step_adi_pair!(s, means, dt; krylov_m, row_pass)
+
+ADI pair V-cycle: sweep all horizontal pairs (row_pass=true) or all vertical
+pairs (row_pass=false) of active voxels using `_evolve_pair_vcycle`.
+
+Alternating between row_pass=true and row_pass=false each step captures all
+4 nearest-neighbor 2D correlations at 2× the cost of one direction.
+"""
+function _step_adi_pair!(s::SpatialFSP,
+                          means     :: Dict{CartesianIndex{2}, Float64},
+                          dt        :: Float64;
+                          krylov_m  :: Int  = 30,
+                          row_pass  :: Bool = true)
+    n_max     = s.n_max
+    state_tol = s.block_state_tol
+    max_s     = s.block_max_states
+
+    # Direction: row-adjacent (Δi=0, Δj=1) or column-adjacent (Δi=1, Δj=0)
+    Δ = row_pass ? CartesianIndex(0,1) : CartesianIndex(1,0)
+
+    handled = Set{CartesianIndex{2}}()
+    for v1 in keys(s.dists)
+        v1 ∈ handled && continue
+        v2 = v1 + Δ
+        haskey(s.dists, v2) || continue
+        v2 ∈ handled && continue
+
+        result = _evolve_pair_vcycle(
+            s.model, v1, v2,
+            s.dists[v1], s.dists[v2],
+            means, s.K_x, s.K_y, dt, n_max;
+            krylov_m, state_tol, max_states = max_s,
+            pre_frac  = s.block_pre_frac,
+            post_frac = s.block_post_frac)
+
+        if result !== nothing
+            s.dists[v1], s.dists[v2] = result
+            push!(handled, v1); push!(handled, v2)
+        end
+    end
+    handled   # return set of voxels processed; unmatched fall through to per-voxel
+end
+
 # ─── Main time step ───────────────────────────────────────────────────────────
 
 """
@@ -1150,35 +1648,29 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
     end
 
     if isempty(handled) && s.use_block_vcycle
-        active_blocks = _select_active_blocks(s.dists, s.K_x, s.K_y, collect(keys(s.block_states)))
-        _sync_block_cache!(s, active_blocks)
-
-        for anchor in active_blocks
-            haskey(s.block_states, anchor) || continue
-            block = _block_voxels(anchor)
-            sp_new_block = _evolve_block_vcycle(s, block, s.block_states[anchor], means, dt; krylov_m)
-            if sp_new_block === nothing
-                delete!(s.block_states, anchor)
-                continue
-            end
-
-            s.block_states[anchor] = sp_new_block
-            p_new_block = _block_marginals(sp_new_block, s.n_max)
-            for k in 1:4
-                new_dists[block[k]] = p_new_block[k]
-                push!(handled, block[k])
-            end
+        # ADI pair V-cycle: K=2 pairs, alternating row/column each step.
+        # _step_adi_pair! updates s.dists in-place for paired voxels.
+        # We copy those results to new_dists so they survive s.dists = new_dists.
+        # Unmatched voxels fall through to the per-voxel CME below.
+        row_pass = isodd(round(Int, s.t / dt))
+        pair_handled = _step_adi_pair!(s, means, dt; krylov_m, row_pass)
+        for idx in pair_handled
+            new_dists[idx] = s.dists[idx]   # copy in-place updates to new_dists
         end
+        union!(handled, pair_handled)
+        empty!(s.block_states)
     end
 
+    # Schlögl: include n_un in the support so cross-basin transitions are captured.
+    _n_un = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
     for (idx, p_old) in s.dists
         idx in handled && continue
         ns       = grid_neighbors(idx, s.K_x, s.K_y)
         μ_in     = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
         in_rate  = d * μ_in
         out_coeff = d * length(ns)
-        Q        = _single_voxel_generator(s.model, in_rate, out_coeff, s.n_max)
-        p_new    = expv(Float64(dt), Q, p_old; m = min(krylov_m, size(Q, 1)))
+        p_new    = _expv_voxel(s.model, in_rate, out_coeff, p_old, Float64(dt), krylov_m;
+                               n_include = _n_un)
         _clean!(p_new, s.ε_prune)
         new_dists[idx] = p_new
     end
@@ -1211,9 +1703,9 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
 
             if any(nb -> haskey(s.dists, nb), ns)
                 # ── BOUNDARY: Galerkin expv ───────────────────────────────────────
-                Q_eq     = _single_voxel_generator(s.model, in_rate, out_coeff, s.n_max_eq)
                 p_old_eq = _resize_dist(p_eq, s.n_max_eq)
-                p_new_eq = expv(Float64(dt), Q_eq, p_old_eq; m = min(s.krylov_m_eq, size(Q_eq, 1)))
+                p_new_eq = _expv_voxel(s.model, in_rate, out_coeff, p_old_eq,
+                                        Float64(dt), s.krylov_m_eq)
                 _clean!(p_new_eq, s.ε_prune)
                 new_equil[idx] = p_new_eq
             else
@@ -1224,24 +1716,109 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
         end
         s.equil_dists = new_equil
     else
-        empty!(s.equil_dists)
+        # BranchingDeathRDME: boundary-only expv.
+        # SchloglModel1D: equil voxels are FROZEN — they stay at their current basin
+        #   (delta at n_lo or n_hi) until cross-basin flux from an active wave front
+        #   re-activates them in step 5. This is the exact bistable analogue of the
+        #   BD "empty voxel": both are background states that only become active when
+        #   a wave front crosses them. No ad-hoc step needed — the pending_flux
+        #   mechanism (steps 4–5) handles both cases uniformly.
+        if !(s.model isa SchloglModel1D)
+            new_equil = Dict{CartesianIndex{2}, Vector{Float64}}()
+            for (idx, p_eq) in s.equil_dists
+                ns = grid_neighbors(idx, s.K_x, s.K_y)
+                if any(nb -> haskey(s.dists, nb), ns)
+                    μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+                    in_rate   = d * μ_in
+                    out_coeff = d * length(ns)
+                    p_old_eq  = _resize_dist(p_eq, s.n_max_eq)
+                    p_new_eq  = _expv_voxel(s.model, in_rate, out_coeff, p_old_eq,
+                                            Float64(dt), s.krylov_m_eq)
+                    _clean!(p_new_eq, s.ε_prune)
+                    new_equil[idx] = p_new_eq
+                else
+                    new_equil[idx] = p_eq
+                end
+            end
+            s.equil_dists = new_equil
+        end
+        # SchloglModel1D: s.equil_dists unchanged (frozen background)
     end
 
-    # ── 4. Accumulate flux into empty voxels ─────────────────────────────────
-    for (idx, μ) in means
-        μ > 0.0 || continue
-        for nb in grid_neighbors(idx, s.K_x, s.K_y)
-            haskey(s.dists, nb)       && continue
-            haskey(s.equil_dists, nb) && continue
-            s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * μ * dt
+    # ── 3a. Schlögl: early deactivation (BEFORE cross-basin flux) ────────────
+    # Voxels that have converged to a stable basin (outflux criterion:
+    # p(n_un) < ε_equil) are deactivated NOW — before step 4 computes
+    # cross-basin flux. This ensures that newly-deactivated equil-hi (or lo)
+    # voxels appear in equil_dists and immediately drive the next layer's
+    # activation. No cross-basin guard needed: a converged voxel should
+    # deactivate unconditionally; the following cross-basin flux step will
+    # re-activate the neighbours that need it.
+    if s.model isa SchloglModel1D
+        n_lo_e, n_un_e, n_hi_e = schlogl_fixed_points(s.model)
+        ε_out = s.ε_equil
+        to_deact_early = CartesianIndex{2}[]
+        for (idx, p) in s.dists
+            nv = length(p)
+            p_at_nun = n_un_e + 1 <= nv ? p[n_un_e + 1] : 0.0
+            p_at_nun < ε_out || continue
+            push!(to_deact_early, idx)
+            s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+        end
+        for idx in to_deact_early; delete!(s.dists, idx); end
+    end
+
+    # ── 4. Accumulate flux into target voxels ────────────────────────────────
+    # BD:      total flux  D·μ·dt  from any source → empty targets (μ=0 baseline).
+    # Schlögl: cross-basin flux from EQUIL (settled) sources only.
+    #   Only equil voxels that have fully committed to one basin generate flux —
+    #   active (transitioning) voxels don't. This is the bistable analog of the
+    #   BD rule "only settled voxels radiate flux into empty neighbors."
+    #   Once an equil-hi voxel is deactivated, it radiates cross-basin flux to
+    #   adjacent equil-lo voxels, driving the next layer of wave propagation.
+    if s.model isa SchloglModel1D
+        _, n_un_schlogl, _ = schlogl_fixed_points(s.model)
+        n_un_f = Float64(n_un_schlogl)
+        # Sources: equil voxels only (settled, committed to one basin)
+        for (idx, p_eq) in s.equil_dists
+            μ = get(means, idx, voxel_mean(p_eq))
+            μ > 0.0 || continue
+            for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                haskey(s.dists, nb)       && continue  # active targets excluded
+                haskey(s.equil_dists, nb) || continue  # empty (Schlögl has none)
+                μ_nb  = get(means, nb, -1.0)
+                cross = if μ_nb >= 0.0 && μ_nb < n_un_f && μ > n_un_f
+                    d * (μ - n_un_f) * dt        # equil-hi → equil-lo
+                elseif μ_nb >= n_un_f && μ < n_un_f
+                    d * (n_un_f - μ) * dt        # equil-lo → equil-hi
+                else
+                    0.0
+                end
+                cross > 0.0 && (s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + cross)
+            end
+        end
+    else
+        for (idx, μ) in means
+            μ > 0.0 || continue
+            for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                haskey(s.dists, nb)       && continue
+                haskey(s.equil_dists, nb) && continue
+                s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * μ * dt
+            end
         end
     end
 
-    # ── 5. Activate (prolong) empty voxels ────────────────────────────────────
+    # ── 5. Activate (prolong) target voxels ──────────────────────────────────
+    # Empty target:  start from delta(0).
+    # Equil target (Schlögl bistable): start from the stored basin distribution.
     for (nb, fl) in s.pending_flux
-        if fl >= s.ε_expand && !haskey(s.dists, nb) && !haskey(s.equil_dists, nb)
-            p0 = zeros(s.n_max + 1);  p0[1] = 1.0
-            s.dists[nb] = p0
+        if fl >= s.ε_expand && !haskey(s.dists, nb)
+            if haskey(s.equil_dists, nb)
+                s.dists[nb] = _resize_dist(s.equil_dists[nb], s.n_max)
+                delete!(s.equil_dists, nb)
+            else
+                p0 = zeros(s.n_max + 1);  p0[1] = 1.0
+                s.dists[nb] = p0
+            end
             delete!(s.pending_flux, nb)
         end
     end
@@ -1264,6 +1841,23 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
 
             push!(to_deactivate, idx)
             s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+        end
+        for idx in to_deactivate; delete!(s.dists, idx); end
+    else
+        to_deactivate = CartesianIndex{2}[]
+        if s.model isa SchloglModel1D
+            # Schlögl: deactivation was handled in step 3a (early deactivation).
+            # Nothing to do here — all converged voxels already moved to equil_dists.
+        else
+            # BranchingDeathRDME: saturation-based equil (mean > 50% of n_max)
+            sat_thresh = 0.50 * Float64(s.n_max)
+            for (idx, p) in s.dists
+                voxel_mean(p) >= sat_thresh || continue
+                ns = grid_neighbors(idx, s.K_x, s.K_y)
+                any(nb -> !haskey(s.dists,nb) && !haskey(s.equil_dists,nb), ns) && continue
+                push!(to_deactivate, idx)
+                s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+            end
         end
         for idx in to_deactivate; delete!(s.dists, idx); end
     end
@@ -1321,8 +1915,9 @@ function step!(s::SpatialFSP, dt::Float64, fg::Any;
         μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
         in_rate   = d * μ_in
         out_coeff = d * length(ns)
-        Q         = _single_voxel_generator(s.model, in_rate, out_coeff, s.n_max)
-        p_new     = expv(Float64(dt), Q, p_old; m = min(krylov_m, size(Q, 1)))
+        _n_un2 = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
+        p_new     = _expv_voxel(s.model, in_rate, out_coeff, p_old, Float64(dt), krylov_m;
+                               n_include = _n_un2)
         _clean!(p_new, s.ε_prune)
         new_dists[idx] = p_new
     end
@@ -1351,24 +1946,86 @@ function step!(s::SpatialFSP, dt::Float64, fg::Any;
         end
         s.equil_dists = new_equil
     else
-        empty!(s.equil_dists)
-    end
-
-    # ── 4. Accumulate flux into empty voxels ──────────────────────────────────
-    for (idx, μ) in means
-        μ > 0.0 || continue
-        for nb in grid_neighbors(idx, s.K_x, s.K_y)
-            haskey(s.dists, nb)       && continue
-            haskey(s.equil_dists, nb) && continue
-            s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * μ * dt
+        # BranchingDeathRDME: boundary-only expv.
+        # SchloglModel1D: frozen (see main step! for rationale).
+        if !(s.model isa SchloglModel1D)
+            new_equil = Dict{CartesianIndex{2}, Vector{Float64}}()
+            for (idx, p_eq) in s.equil_dists
+                ns = grid_neighbors(idx, s.K_x, s.K_y)
+                if any(nb -> haskey(s.dists, nb), ns)
+                    μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+                    in_rate   = d * μ_in
+                    out_coeff = d * length(ns)
+                    p_old_eq  = _resize_dist(p_eq, s.n_max_eq)
+                    p_new_eq  = _expv_voxel(s.model, in_rate, out_coeff, p_old_eq,
+                                            Float64(dt), s.krylov_m_eq)
+                    _clean!(p_new_eq, s.ε_prune)
+                    new_equil[idx] = p_new_eq
+                else
+                    new_equil[idx] = p_eq
+                end
+            end
+            s.equil_dists = new_equil
         end
     end
 
-    # ── 5. Activate empty voxels ──────────────────────────────────────────────
+    # ── 3a. Schlögl: early deactivation (BEFORE cross-basin flux) ────────────
+    if s.model isa SchloglModel1D
+        _, n_un_e2, _ = schlogl_fixed_points(s.model)
+        ε_out2 = s.ε_equil
+        to_deact_early2 = CartesianIndex{2}[]
+        for (idx, p) in s.dists
+            nv = length(p)
+            p_at_nun = n_un_e2 + 1 <= nv ? p[n_un_e2 + 1] : 0.0
+            p_at_nun < ε_out2 || continue
+            push!(to_deact_early2, idx)
+            s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+        end
+        for idx in to_deact_early2; delete!(s.dists, idx); end
+    end
+
+    # ── 4. Accumulate flux into target voxels ────────────────────────────────
+    if s.model isa SchloglModel1D
+        _, n_un_schlogl, _ = schlogl_fixed_points(s.model)
+        n_un_f = Float64(n_un_schlogl)
+        for (idx, p_eq) in s.equil_dists
+            μ = get(means, idx, voxel_mean(p_eq))
+            μ > 0.0 || continue
+            for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                haskey(s.dists, nb)       && continue
+                haskey(s.equil_dists, nb) || continue
+                μ_nb  = get(means, nb, -1.0)
+                cross = if μ_nb >= 0.0 && μ_nb < n_un_f && μ > n_un_f
+                    d * (μ - n_un_f) * dt
+                elseif μ_nb >= n_un_f && μ < n_un_f
+                    d * (n_un_f - μ) * dt
+                else
+                    0.0
+                end
+                cross > 0.0 && (s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + cross)
+            end
+        end
+    else
+        for (idx, μ) in means
+            μ > 0.0 || continue
+            for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                haskey(s.dists, nb)       && continue
+                haskey(s.equil_dists, nb) && continue
+                s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * μ * dt
+            end
+        end
+    end
+
+    # ── 5. Activate target voxels ─────────────────────────────────────────────
     for (nb, fl) in s.pending_flux
-        if fl >= s.ε_expand && !haskey(s.dists, nb) && !haskey(s.equil_dists, nb)
-            p0 = zeros(s.n_max + 1); p0[1] = 1.0
-            s.dists[nb] = p0
+        if fl >= s.ε_expand && !haskey(s.dists, nb)
+            if haskey(s.equil_dists, nb)
+                s.dists[nb] = _resize_dist(s.equil_dists[nb], s.n_max)
+                delete!(s.equil_dists, nb)
+            else
+                p0 = zeros(s.n_max + 1); p0[1] = 1.0
+                s.dists[nb] = p0
+            end
             delete!(s.pending_flux, nb)
         end
     end
@@ -1387,6 +2044,20 @@ function step!(s::SpatialFSP, dt::Float64, fg::Any;
             tv < 0.08 || continue
             push!(to_deact, idx)
             s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+        end
+        for idx in to_deact; delete!(s.dists, idx); end
+    else
+        to_deact = CartesianIndex{2}[]
+        if s.model isa SchloglModel1D
+            nothing  # deactivated in step 3a above
+        else
+            sat_thresh = 0.50 * Float64(s.n_max)
+            for (idx, p) in s.dists
+                voxel_mean(p) >= sat_thresh || continue
+                ns = grid_neighbors(idx, s.K_x, s.K_y)
+                any(nb -> !haskey(s.dists,nb) && !haskey(s.equil_dists,nb), ns) && continue
+                push!(to_deact, idx); s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+            end
         end
         for idx in to_deact; delete!(s.dists, idx); end
     end

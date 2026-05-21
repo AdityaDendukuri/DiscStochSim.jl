@@ -291,6 +291,141 @@ function prolong(sp_coarse::StateSpace{CartesianIndex{K2}, T},
     sp_fine
 end
 
+"""
+    prolong_product(sp_fine_pre, sp_coarse; weight_tol)
+        → StateSpace{CartesianIndex{K}, Float64}
+
+Product-convolution prolongation: the principled CME analog of polynomial
+interpolation in PDE multigrid.
+
+For each pair j = {2j-1, 2j} with coarse total N_j:
+
+  p(n₁, n₂ | N_j) ∝ m_j1(n₁) × m_j2(N_j − n₁)
+
+where m_j1, m_j2 are the marginals of the two fine voxels extracted from the
+PRE-SMOOTHED fine state `sp_fine_pre`.
+
+Why this is the right prolongation
+-----------------------------------
+In PDEs, prolongation interpolates using the SMOOTHNESS of the solution —
+polynomials of degree p reproduce exact values at p+1 points.
+
+In the CME, the analog of smoothness is QUASI-STATIONARITY: after the
+pre-smoother runs for time τ_pre, the within-pair distribution relaxes toward
+its QSD.  At QSD the joint factorises approximately as p(n₁,n₂) ≈ p₁(n₁)⋅p₂(n₂).
+The product convolution is therefore exact in the limit τ_pre → ∞.
+
+Contrast with Binomial prolongation (current default):
+  Binomial:  p(n₁|N) = Bin(N, 0.5) — assumes EQUAL MEANS within the pair
+  Product:   p(n₁|N) ∝ m₁(n₁)⋅m₂(N−n₁) — uses ACTUAL MARGINALS from pre-smooth
+
+For a bistable interface pair with one voxel at n_lo and one at n_hi:
+  Binomial gives a unimodal peak at N/2 (the WRONG transition state)
+  Product gives a BIMODAL peak at (n_lo, n_hi) and (n_hi, n_lo)  ← correct
+
+Normalization
+--------------
+For each pair j, the convolution Z_j = Σ_n m_j1(n) ⋅ m_j2(N_j−n) is computed
+and divided out so that total probability is exactly preserved.
+
+Arguments
+----------
+- `sp_fine_pre` : StateSpace at the fine level, POST-pre-smooth (marginals extracted here)
+- `sp_coarse`   : StateSpace at the coarse level, post-coarse-solve
+- `weight_tol`  : skip coarse states with probability < weight_tol
+"""
+function prolong_product(
+    sp_fine_pre::StateSpace{CartesianIndex{K}, Float64},
+    sp_coarse::StateSpace{CartesianIndex{K2}, Float64};
+    weight_tol::Float64 = 1e-13,
+    max_states::Int     = 10_000_000
+) where {K, K2}
+    K == 2 * K2 || error("K=$K must equal 2*K2=$K2 for product-convolution prolongation")
+
+    # ── 1. Extract per-voxel marginals from the pre-smoothed fine state ────────
+    # Determine support upper bound
+    n_max_est = 0
+    for ci in sp_fine_pre.states
+        for n in Tuple(ci); n > n_max_est && (n_max_est = n); end
+    end
+
+    # marginals[k][n+1] = P(voxel k has n molecules) in pre-smoothed distribution
+    marginals = [zeros(Float64, n_max_est + 2) for _ in 1:K]
+    for (ci, prob) in zip(sp_fine_pre.states, sp_fine_pre.probs)
+        t = Tuple(ci)
+        for k in 1:K
+            n = t[k]; marginals[k][n+1] += prob
+        end
+    end
+    # Normalize (sum might be slightly < 1 after pruning)
+    for mk in marginals
+        s = sum(mk); s > 0.0 && (mk ./= s)
+    end
+
+    # ── 2. Build fine state space via product-convolution over pairs ───────────
+    sp_fine = StateSpace{CartesianIndex{K}, Float64}()
+    buf     = zeros(Int, K)
+
+    for (cs, cp) in zip(sp_coarse.states, sp_coarse.probs)
+        cp > weight_tol || continue
+        ct = Tuple(cs)
+
+        # Per-pair normalization constants Z_j = Σ_n m_j1(n)⋅m_j2(N_j−n)
+        Z = ntuple(Val(K2)) do j
+            N_j = ct[j]; m1 = marginals[2j-1]; m2 = marginals[2j]
+            z   = 0.0
+            for n1 in 0:min(N_j, length(m1)-1)
+                n2 = N_j - n1
+                n2 < length(m2) && (z += m1[n1+1] * m2[n2+1])
+            end
+            z > 0.0 ? z : 1.0
+        end
+
+        _prolong_product_recurse!(sp_fine, cp, buf, Val(K), Val(K2),
+                                   ct, marginals, Z, weight_tol)
+        length(sp_fine) > max_states &&
+            error("Product prolongation exploded: |S_fine| > $max_states")
+    end
+
+    sp_fine
+end
+
+# ── Recursive tensor product over K2 pairs ────────────────────────────────────
+# pair_idx goes 1..K2; builds CartesianIndex{K} in buf when all pairs done.
+function _prolong_product_recurse!(
+    sp_fine::StateSpace{CartesianIndex{K}, Float64},
+    weight::Float64,
+    buf::Vector{Int},
+    ::Val{K}, ::Val{K2},
+    ct::NTuple{K2, Int},
+    marginals::Vector{Vector{Float64}},
+    Z::NTuple{K2, Float64},
+    weight_tol::Float64,
+    pair_idx::Int = 1
+) where {K, K2}
+    if pair_idx > K2
+        ci  = CartesianIndex(NTuple{K, Int}(buf))
+        idx = get(sp_fine.index, ci, 0)
+        if idx == 0; add_state!(sp_fine, ci, weight)
+        else;        sp_fine.probs[idx] += weight; end
+        return
+    end
+
+    N_j = ct[pair_idx]; k1 = 2pair_idx - 1; k2 = 2pair_idx
+    m1  = marginals[k1]; m2 = marginals[k2]
+    Z_j = Z[pair_idx]
+
+    for n1 in 0:min(N_j, length(m1)-1)
+        n2 = N_j - n1
+        n2 >= length(m2) && continue
+        w  = weight * m1[n1+1] * m2[n2+1] / Z_j
+        w  > weight_tol || continue
+        buf[k1] = n1; buf[k2] = n2
+        _prolong_product_recurse!(sp_fine, w, buf, Val(K), Val(K2),
+                                   ct, marginals, Z, weight_tol, pair_idx + 1)
+    end
+end
+
 function _prolong_recurse!(sp_fine::StateSpace{CartesianIndex{K}, T},
                             coarse_tup::NTuple{K2, Int},
                             weight::T,
