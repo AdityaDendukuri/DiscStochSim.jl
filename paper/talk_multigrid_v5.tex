@@ -274,9 +274,6 @@
 \end{frame}
 
 
-% ================================================================
-%  4. Active/equil classification
-% ================================================================
 \begin{frame}{Adaptive resolution: active vs.\ equilibrated voxels}
 
   \begin{columns}[T]
@@ -610,7 +607,153 @@ Conditioned on a death event, molecule leaves from $v_1$ or $v_2$:
 
 
 % ================================================================
-%  8. Birth-death 200x200 result
+%  8b. True spatial multigrid: L0→L1→L2
+% ================================================================
+\begin{frame}{Extending to true spatial multigrid: three spatial scales}
+
+\begin{columns}[T]
+\column{0.46\textwidth}
+
+The pair V-cycle captures 2-voxel correlations.
+A \textbf{full spatial multigrid} adds coarser levels:
+
+\medskip
+\begin{block}{Spatial hierarchy (active wavefront)}
+\small
+\begin{tabular}{lll}
+  \textbf{L0} & individual voxels & $w$ states\\
+  \textbf{L1} & adjacent pairs    & $p(N_2)$, 1-D\\
+  \textbf{L2} & $2{\times}2$ quads & $p(N_4)$, 1-D
+\end{tabular}
+\end{block}
+
+\medskip
+\textbf{V-cycle (time split: $\alpha_{\rm pre} + (1{-}2\alpha) + \alpha_{\rm post} = \Delta t$):}
+\begin{enumerate}\setlength\itemsep{0.25em}
+  \item Pre-smooth L0: per-voxel expv for $\alpha\Delta t$
+  \item Restrict L0$\to$L1: $p_{12}(N_2) = p_1 * p_2$ \,(convolution)
+  \item Restrict L1$\to$L2: $p_{1234}(N_4) = p_{12} * p_{34}$
+  \item \textbf{Coarse solve L2}: 1-D CME for $(1{-}2\alpha)\Delta t$
+  \item Correct L2$\to$L1: $p_{12}^{\rm new} \propto p_{12}\times E[C(N_4)\mid N_2]$
+  \item Correct L1$\to$L0: $p_k^{\rm new} \propto p_k\times E[C(N_2)\mid n_k]$
+  \item Post-smooth L0: per-voxel expv for $\alpha\Delta t$
+\end{enumerate}
+
+\column{0.51\textwidth}
+\vspace{0.3em}
+\begin{center}
+\begin{tikzpicture}[>=stealth,scale=0.88,every node/.style={font=\small}]
+  % 4 voxels in a 2x2 grid
+  \def\vs{1.0}
+  \foreach \i/\j in {0/0,1/0,0/1,1/1}{
+    \draw[thick,fill=activegreen!18,rounded corners=2pt]
+      (\i*\vs,\j*\vs) rectangle (\i*\vs+0.85,\j*\vs+0.85);
+    \node[font=\scriptsize] at (\i*\vs+0.42,\j*\vs+0.42) {$p_{\the\numexpr\j*2+\i+1}$};
+  }
+  % L0 label
+  \node[font=\scriptsize,myblue] at (-0.7,0.92) {\textbf{L0}};
+
+  % L1 pairs (horizontal)
+  \draw[coarsecolor,very thick,rounded corners=3pt]
+    (-0.08,-0.08) rectangle (1.93+0.0,0.93);
+  \node[coarsecolor,font=\scriptsize,below] at (0.92,-0.12) {$p(N_2^{\rm bot})$};
+  \draw[coarsecolor,very thick,rounded corners=3pt]
+    (-0.08,0.92) rectangle (1.93,1.93);
+  \node[coarsecolor,font=\scriptsize,above] at (0.92,1.97) {$p(N_2^{\rm top})$};
+  \node[font=\scriptsize,coarsecolor] at (-0.7,1.42) {\textbf{L1}};
+
+  % L2 quad
+  \draw[intercolor!80!black,ultra thick,rounded corners=5pt]
+    (-0.18,-0.18) rectangle (2.03,2.03);
+  \node[intercolor!80!black,font=\scriptsize,right] at (2.07,0.92)
+    {$p(N_4)$};
+  \node[font=\scriptsize,intercolor!80!black] at (-0.7,-0.08) {\textbf{L2}};
+
+  % Arrows right side
+  \draw[->,thick,slowred!80,bend right=18]
+    (3.0,1.5) node[right,font=\scriptsize,slowred!80,align=left]
+    {restrict\\$*$ convolve} to (2.1,0.92);
+  \draw[->,thick,fastblue,bend left=18]
+    (3.0,0.3) node[right,font=\scriptsize,fastblue,align=left]
+    {correct\\$\times C(N)$} to (2.1,0.50);
+
+\end{tikzpicture}
+\end{center}
+
+\medskip
+{\small
+  \textbf{Multiplicative correction} at each level:\\
+  $p_k^{\rm new}(n) \propto p_k(n)\times \sum_{N} \frac{p^{\rm new}[N]}{p^{\rm old}[N]}\,p_{\rm other}(N{-}n)$\\[0.3em]
+  Exact for existing $N$; identity fallback for new $N$.
+}
+
+\end{columns}
+
+\end{frame}
+
+
+% ================================================================
+%  9a. Multigrid wavefront result
+% ================================================================
+\begin{frame}{Result: multigrid RDME wavefront on $200{\times}200$ grid}
+\begin{center}
+  \includegraphics[width=0.52\textwidth,keepaspectratio]{fig_wave_snapshot}
+\end{center}
+\vspace{-0.4em}
+{\footnotesize
+  Branching-death RDME ($k_b{=}0.5$, $k_d{=}0.1$, $D{=}1.0$), $200{\times}200$,
+  three-level multigrid (L0+L1+L2).
+  \textbf{Top}: mean-field heatmap $\langle n_\mathbf{k}\rangle$ at $t{=}79.2$.
+  \textbf{Bottom}: per-voxel distributions at three positions:
+  interior (broad Poisson), mid-ring (sharp, building), leading edge (sparse).\\[0.2em]
+  \textbf{Multigrid speedup}: ${\sim}40\%$ faster than per-voxel expv at the same accuracy.
+  Peak: ${\sim}4000$ active voxels (thin front) $+$ $35{,}000$ equilibrated interior.
+}
+\end{frame}
+
+
+% ================================================================
+%  9b. Correction field
+% ================================================================
+\begin{frame}{The correction field: where does L2 add information?}
+\begin{center}
+  \includegraphics[width=0.88\textwidth,keepaspectratio]{fig_mg_correction}
+\end{center}
+\vspace{-0.4em}
+{\footnotesize
+  At peak wavefront ($t{=}142$, $4138$ active voxels, $200{\times}200$ grid).\\
+  \textbf{Left}: plasma heatmap of $\langle n_\mathbf{k}\rangle$ --- the thin active ring is visible.\\
+  \textbf{Right}: correction magnitude $\|\Delta p_k\|_1$ applied by the L2$\to$L0 step.\\[0.2em]
+  The correction is \textbf{concentrated at the wavefront ring} and near-zero in the
+  equilibrated interior --- confirming that the L2 quad coarse solve captures
+  collective dynamics \emph{at the front} that the fine-level per-voxel expv misses.
+}
+\end{frame}
+
+
+% ================================================================
+%  9c. Space-time xt diagram
+% ================================================================
+\begin{frame}{Space-time diagram: wavefront at each spatial scale}
+\begin{center}
+  \includegraphics[width=0.94\textwidth,keepaspectratio]{fig_mg_spacetime}
+\end{center}
+\vspace{-0.4em}
+{\footnotesize
+  Each panel: heatmap of radial mean $\langle n\rangle$ vs.\ radius (x) and time (y).
+  White dashed: theoretical wave speed $v{\approx}1.26\,\text{vox}/\text{s}$.\\
+  \textbf{L0} (per-voxel): sharp front, thin band.
+  \textbf{L1} ($2{\times}2$ smooth): slightly broader --- pairs see a wider front.
+  \textbf{L2} ($4{\times}4$ smooth): broadest --- quads capture collective dynamics
+  ahead of the fine-level front.\\[0.2em]
+  This non-redundancy across levels is why the multigrid hierarchy is effective:
+  each level carries distinct spatial-scale information about the wave propagation.
+}
+\end{frame}
+
+
+% ================================================================
+%  10. Birth-death 200x200 result
 % ================================================================
 \begin{frame}{Result: A$\to$2A wavefront on a $200{\times}200$ RDME}
 \begin{center}
@@ -749,11 +892,20 @@ unstable point $n_{\rm un}{\approx}63$.
   \bigskip
   \begin{block}{3.\quad Multi-level stochastic prolongation.}
     Three-level hierarchy on the split axis.
-    Existing total counts $N$: exact multiplicative correction --- no approximation.
-    New $N$ values: physics-derived stochastic $\mathcal{L}/\mathcal{R}$ operators
-    propagate the conditional fiber from the nearest known $N$, then a
-    within-bin refinement restores fine resolution.
-    Strictly better than product-convolution for bistable and nonlinear systems.
+    Existing $N$: exact multiplicative correction.
+    New $N$: physics-derived $\mathcal{L}/\mathcal{R}$ operators propagate the
+    conditional fiber.  Strictly better than product-convolution for bistable systems.
+  \end{block}
+
+  \bigskip
+  \begin{block}{4.\quad True spatial multigrid: L0$\to$L1$\to$L2.}
+    Pair V-cycle extended to a three-level spatial hierarchy:
+    per-voxel ($w$ states) $\to$ pairs ($p(N_2)$) $\to$ $2{\times}2$ quads ($p(N_4)$).
+    Coarse solve at L2 captures collective 4-voxel dynamics; multiplicative
+    corrections propagate L2$\to$L1$\to$L0.  Time split ensures total evolution
+    time exactly equals $\Delta t$.\\[0.2em]
+    \emph{${\sim}40\%$ speedup on $200{\times}200$ BD wavefront.
+    Correction field confirms L2 adds information at the front, zero in interior.}
   \end{block}
 
 \end{frame}

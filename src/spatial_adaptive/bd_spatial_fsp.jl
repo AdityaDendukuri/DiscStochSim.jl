@@ -102,6 +102,7 @@ mutable struct SpatialFSP
     use_joint_vcycle    :: Bool     # V-cycle on the joint active region
     joint_vcycle_τ_pre  :: Float64  # pre-smooth time (intra-pair diffusion)
     joint_vcycle_τ_post :: Float64  # post-smooth time
+    use_multigrid       :: Bool     # true multigrid: L0 voxels → L1 pairs → L2 quads
 end
 
 function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
@@ -124,7 +125,8 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                     block_post_frac::Float64 = 0.15,
                     use_joint_vcycle::Bool = false,
                     joint_vcycle_τ_pre::Float64 = 0.0,
-                    joint_vcycle_τ_post::Float64 = 0.0)
+                    joint_vcycle_τ_post::Float64 = 0.0,
+                    use_multigrid::Bool = false)
     n_max_eq_val = n_max_eq > 0 ? n_max_eq :
                    has_finite_local_ss(model) ? max(12, round(Int, 4 * ss_mean(model)) + 4) :
                    max(12, n_max)
@@ -140,7 +142,8 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                joint_expand_threshold,
                use_block_vcycle, block_state_tol, block_max_states,
                block_expand_depth, block_pre_frac, block_post_frac,
-               use_joint_vcycle, joint_vcycle_τ_pre, joint_vcycle_τ_post)
+               use_joint_vcycle, joint_vcycle_τ_pre, joint_vcycle_τ_post,
+               use_multigrid)
 end
 
 function set_ic!(s::SpatialFSP, idx::CartesianIndex{2}, n0::Int)
@@ -1562,6 +1565,208 @@ function _evolve_pair_vcycle(
     (p1_new, p2_new)
 end
 
+# ─── Three-level multigrid V-cycle for RDME active voxels ───────────────────
+#
+# Hierarchy:
+#   L0  individual voxels    — w states each
+#   L1  adjacent pairs       — 2w total-count states   (restrict = convolution)
+#   L2  2×2 quads of pairs   — 4w total-count states   (coarsest, CME solve here)
+#
+# V-cycle (down then up):
+#   L0 pre-smooth → restrict L0→L1 → restrict L1→L2
+#   → coarse CME solve at L2
+#   → multiplicative correction L2→L1 → multiplicative correction L1→L0
+#   → L0 post-smooth
+#
+# The multiplicative correction at each level:
+#   p_fine_new(n_a) ∝ p_fine(n_a) × E[C(N_coarse) | n_a]
+#                   = p_fine(n_a) × Σ_{n_b} C(n_a+n_b) × p_other(n_b)
+# where C(N) = p_coarse_new[N] / p_coarse_old[N].  This is exact for existing N
+# values and falls back to identity for new N values created by the coarse solve.
+
+# Convolve two 1D distributions → total-count distribution (restriction operator)
+function _mg_convolve(p1::Vector{Float64}, p2::Vector{Float64}, stol::Float64)
+    n1 = length(p1)-1;  n2 = length(p2)-1
+    out = zeros(n1+n2+1)
+    for i in 1:length(p1)
+        p1[i] < stol && continue
+        for j in 1:length(p2)
+            p2[j] < stol && continue
+            out[i+j-1] += p1[i]*p2[j]
+        end
+    end
+    s = sum(out); s > 1e-300 && (out ./= s)
+    out
+end
+
+# Apply multiplicative coarse correction (prolongation operator).
+# Given p_this (this group's distribution), p_other (sibling group's distribution),
+# p_coarse_old and p_coarse_new (before/after coarse solve of the merged group):
+#   p_this_new(N_a) ∝ p_this(N_a) × Σ_{N_b} C(N_a+N_b) × p_other(N_b)
+# where C(N) = p_coarse_new[N]/p_coarse_old[N]   (1.0 when old≈0, no info)
+function _mg_correct(p_this::Vector{Float64}, p_other::Vector{Float64},
+                     p_old::Vector{Float64},  p_new::Vector{Float64},
+                     stol::Float64)
+    na = length(p_this)-1;  nb = length(p_other)-1
+    out = zeros(na+1)
+    for Na in 0:na
+        p_this[Na+1] < stol && continue
+        c = 0.0
+        for Nb in 0:nb
+            p_other[Nb+1] < stol && continue
+            Nc = Na+Nb
+            Nc < length(p_old) || continue
+            C  = p_old[Nc+1] > 1e-300 ? p_new[Nc+1]/p_old[Nc+1] : 1.0
+            c += C * p_other[Nb+1]
+        end
+        out[Na+1] = p_this[Na+1] * c
+    end
+    s = sum(out)
+    s > 1e-300 ? out./s : copy(p_this)   # fallback: identity if correction collapses
+end
+
+"""
+    _step_multigrid!(s, means, dt; krylov_m, row_pass) → handled::Set
+
+Three-level multigrid V-cycle for the RDME active wavefront.
+
+Levels: L0 (per-voxel) → L1 (pairs, total N₂) → L2 (quads, total N₄).
+Each level coarsens the spatial scale by 2×; the coarse CME solve at L2
+captures collective molecular dynamics across the 2×2 block and feeds
+multiplicative corrections back down to individual voxels.
+"""
+function _step_multigrid!(s     :: SpatialFSP,
+                           means :: Dict{CartesianIndex{2},Float64},
+                           dt    :: Float64;
+                           krylov_m :: Int  = 30,
+                           row_pass :: Bool = true,
+                           α_pre    :: Float64 = 0.08,
+                           α_post   :: Float64 = 0.08)
+
+    d     = jump_rate(s.model)
+    n_max = s.n_max;  stol = s.block_state_tol
+    _n_un = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
+
+    # Time split: pre-smooth + coarse solve + post-smooth = dt exactly
+    τ_pre    = α_pre  * dt
+    τ_mid    = (1.0 - α_pre - α_post) * dt   # coarse solve time
+    τ_post   = α_post * dt
+
+    active_keys = collect(keys(s.dists))
+    isempty(active_keys) && return Set{CartesianIndex{2}}()
+    active_set  = Set(active_keys)
+
+    # helper: per-voxel expv
+    function smooth!(idx, τ)
+        τ ≤ 0.0 && return
+        ns = grid_neighbors(idx, s.K_x, s.K_y)
+        μ_in = sum(get(means,nb,0.0) for nb in ns; init=0.0)
+        p = _expv_voxel(s.model, d*μ_in, d*length(ns), s.dists[idx],
+                         τ, krylov_m; n_include=_n_un)
+        _clean!(p, stol); s.dists[idx] = p
+    end
+
+    # ── L0 pre-smooth ────────────────────────────────────────────────────────
+    for idx in active_keys; smooth!(idx, τ_pre); end
+
+    # ── Form non-overlapping pairs (L1) ──────────────────────────────────────
+    Δ_par  = row_pass ? CartesianIndex(0,1) : CartesianIndex(1,0)
+    Δ_perp = row_pass ? CartesianIndex(1,0) : CartesianIndex(0,1)
+
+    pairs = Tuple{CartesianIndex{2},CartesianIndex{2}}[]
+    used  = Set{CartesianIndex{2}}()
+    for v1 in sort(active_keys; by=x->(x[2],x[1]))
+        v1 in used && continue
+        v2 = v1 + Δ_par
+        (v2 in active_set && v2 ∉ used) || continue
+        push!(pairs, (v1,v2)); push!(used, v1); push!(used, v2)
+    end
+
+    # ── Restrict L0→L1 ───────────────────────────────────────────────────────
+    p_L1 = [_mg_convolve(s.dists[v1], s.dists[v2], stol) for (v1,v2) in pairs]
+    pair_to_idx = Dict((v1,v2)=>i for (i,(v1,v2)) in enumerate(pairs))
+
+    # ── Form non-overlapping quads (L2) ──────────────────────────────────────
+    quads = Tuple{Int,Int}[]; used_p = Set{Int}()
+    for (i,(v1,v2)) in enumerate(pairs)
+        i in used_p && continue
+        v3 = v1 + Δ_perp;  v4 = v2 + Δ_perp
+        j  = get(pair_to_idx,(v3,v4), get(pair_to_idx,(v4,v3),0))
+        (j==0 || j in used_p) && continue
+        push!(quads,(i,j)); push!(used_p,i); push!(used_p,j)
+    end
+    quad_pairs = Set(vcat([[i,j] for (i,j) in quads]...))
+
+    # ── Restrict L1→L2, coarse solve, correct L2→L1 ──────────────────────────
+    p_L1_corr = copy(p_L1)   # will hold quad-corrected pair distributions
+    nmax4 = 4*n_max
+
+    for (q,(i,j)) in enumerate(quads)
+        (v1a,v2a) = pairs[i];  (v1b,v2b) = pairs[j]
+        quad_vx   = (v1a,v2a,v1b,v2b)
+
+        # L2 restriction: convolve two pair distributions
+        p_L2_old = _mg_convolve(p_L1[i], p_L1[j], stol)
+
+        # Quad external rates
+        in_q = 0.0; n_ext = 0
+        for vi in quad_vx, nb in grid_neighbors(vi, s.K_x, s.K_y)
+            nb in quad_vx && continue
+            in_q += d * get(means,nb,0.0); n_ext += 1
+        end
+        Q_q = _single_voxel_generator(s.model, in_q, d*n_ext/4.0, nmax4; n_sites=4)
+        p_L2_new = expv(Float64(τ_mid), Q_q, p_L2_old; m=min(krylov_m,size(Q_q,1)))
+        _clean!(p_L2_new, stol)
+
+        # L2→L1 multiplicative correction
+        p_L1_corr[i] = _mg_correct(p_L1[i], p_L1[j], p_L2_old, p_L2_new, stol)
+        p_L1_corr[j] = _mg_correct(p_L1[j], p_L1[i], p_L2_old, p_L2_new, stol)
+    end
+
+    # Pair-only (not in any quad): L1 CME solve for τ_mid, correct L1→L0
+    nmax2 = 2*n_max
+    for (k,(v1,v2)) in enumerate(pairs)
+        k in quad_pairs && continue   # handled by L2 above
+        ns1 = grid_neighbors(v1,s.K_x,s.K_y); ns2 = grid_neighbors(v2,s.K_x,s.K_y)
+        in1 = sum(d*get(means,nb,0.0) for nb in ns1 if nb!=v2; init=0.0)
+        in2 = sum(d*get(means,nb,0.0) for nb in ns2 if nb!=v1; init=0.0)
+        out_p = d*(length(ns1)-1 + length(ns2)-1)/2.0
+        Q_p = _single_voxel_generator(s.model, in1+in2, out_p, nmax2; n_sites=2)
+        p_L1_new = expv(Float64(τ_mid), Q_p, p_L1[k]; m=min(krylov_m,size(Q_p,1)))
+        _clean!(p_L1_new, stol)
+        p_L1_corr[k] = _mg_correct(p_L1[k], p_L1[k], p_L1[k], p_L1_new, stol)
+        # simpler: just store the evolved pair total for the L1→L0 step
+        p_L1_corr[k] = p_L1_new
+    end
+
+    # ── Correct L1→L0 for all pairs ──────────────────────────────────────────
+    handled = Set{CartesianIndex{2}}()
+    for (k,(v1,v2)) in enumerate(pairs)
+        p1 = s.dists[v1]; p2 = s.dists[v2]
+        p1n = _mg_correct(p1, p2, p_L1[k], p_L1_corr[k], stol)
+        p2n = _mg_correct(p2, p1, p_L1[k], p_L1_corr[k], stol)
+        _clean!(p1n, stol); _clean!(p2n, stol)
+        s1=sum(p1n); s2=sum(p2n)
+        s1>1e-300 && (s.dists[v1]=p1n./s1; push!(handled,v1))
+        s2>1e-300 && (s.dists[v2]=p2n./s2; push!(handled,v2))
+    end
+
+    # ── Unmatched voxels: full per-voxel CME for τ_mid ───────────────────────
+    for idx in active_keys
+        idx in handled && continue
+        ns = grid_neighbors(idx, s.K_x, s.K_y)
+        μ_in = sum(get(means,nb,0.0) for nb in ns; init=0.0)
+        p = _expv_voxel(s.model, d*μ_in, d*length(ns), s.dists[idx],
+                         τ_mid, krylov_m; n_include=_n_un)
+        _clean!(p, stol); s.dists[idx]=p; push!(handled,idx)
+    end
+
+    # ── L0 post-smooth ────────────────────────────────────────────────────────
+    for idx in active_keys; smooth!(idx, τ_post); end
+
+    handled
+end
+
 """
     _step_adi_pair!(s, means, dt; krylov_m, row_pass)
 
@@ -1647,15 +1852,22 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
         end
     end
 
+    row_pass = isodd(round(Int, s.t / dt))
+
+    if isempty(handled) && s.use_multigrid
+        # True multigrid V-cycle: L0→L1→L2 restriction, L2 coarse solve,
+        # L2→L1→L0 multiplicative correction, with pre/post smoothing.
+        mg_handled = _step_multigrid!(s, means, dt; krylov_m, row_pass)
+        for idx in mg_handled; new_dists[idx] = s.dists[idx]; end
+        union!(handled, mg_handled)
+        empty!(s.block_states)
+    end
+
     if isempty(handled) && s.use_block_vcycle
         # ADI pair V-cycle: K=2 pairs, alternating row/column each step.
-        # _step_adi_pair! updates s.dists in-place for paired voxels.
-        # We copy those results to new_dists so they survive s.dists = new_dists.
-        # Unmatched voxels fall through to the per-voxel CME below.
-        row_pass = isodd(round(Int, s.t / dt))
         pair_handled = _step_adi_pair!(s, means, dt; krylov_m, row_pass)
         for idx in pair_handled
-            new_dists[idx] = s.dists[idx]   # copy in-place updates to new_dists
+            new_dists[idx] = s.dists[idx]
         end
         union!(handled, pair_handled)
         empty!(s.block_states)
