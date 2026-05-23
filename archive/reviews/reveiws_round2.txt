@@ -1,0 +1,63 @@
+Dear Aditya Dendukuri,
+
+Your manuscript, "Flux-Preserving Adaptive Finite State Projection for Multiscale Stochastic Reaction Networks", has completed this round of review.
+I now encourage you to read the referee reports and to carefully revise the paper following the suggestions outlined. Include a response to the reviewers' comments with your revision.
+
+If you do not intend to make changes and send a revised version of the paper, please let me know by return email (with a cc: to mms@siam.org). Otherwise, we ask that you complete your revision within 1 month, by March 12, 2026.
+
+On a personal note, I would like to stress the following things:
+-- the referees acknowledge improvement
+-- this version of the manuscript is a revised version from a previous submission, and one of the referees still asks for major revisions. I have the feeling that there is still much work to do. I do not feel like it is the duty of the referees, nor the objective of the referee process, to correct for typos and easy-to-spot mistakes.
+-- as before, the above deadline is indicative. Please let us know if you require more time. In my opinion, it would not be acceptable to send a new version that will again ask for major revisions.
+
+Note: A second email will follow, which will include a link that you, as the corresponding author, can use when you're ready to submit the revised version. Do not forward the follow-up email to anyone else as the link is for your use exclusively, and allows access to your account.
+
+Sincerely,
+
+Frederic Legoll
+Associate Editor
+Multiscale Modeling and Simulation
+
+------------------------------------------------------------------------------
+
+Referee #1 (Remarks to the Author):
+
+The substantially updated manuscript has addressed my major concerns regarding the original submission. I have only one question regarding the approach in this manuscript: The "total flux" of a reduced state space is defined as the sum of the flux of each state in the subset. The majority of this total flux would then be the propensities to move between two states already contained in the reduced state space (e.g., between s_1 and s_2 in region A and s_3 and s_4 in region B), especially if the reduced state space is adequately large. If the goal of the algorithm is to avoid loss of states that move to other metastable regions, would it make more sense to limit the flux to propensities of moving outside the reduced state space?
+
+Minor issues:
+- Line 140: the term for flux w(x) is used before being defined.
+- Fig. 2: As the flux is central to your paper, it would be helpful to visualize it for the readers to understand more easily. A natural place would be in Fig. 2A, where the fluxes can be illustrated on the arrows. It may also be feasible to demonstrate small fluxes to state s_b, making it a bottleneck, but large fluxes from s_b to the other state region, making it essential for being included.
+
+
+Referee #2 (Remarks to the Author):
+
+This revision has addressed the main conceptual issues identified in the first submitted version. To this end, the paper proposes a well-motivated flux-preserving adaptive Finite State Projection (FSP) method to address connectivity loss in multiscale stochastic reaction networks. The use of instantaneous probability flux to protect bottleneck states is a principled innovation that addresses a recognized failure mode in existing heuristics. The forward-enumeration matrix assembly and the use of Krylov-based exponential actions are practical contributions that enhance simulation efficiency.
+
+
+Major comments
+
+
+While the conceptual basis is sound, several technical inconsistencies must be resolved before the paper can be considered suitable for publication. On the theoretical side:
+
+- There is a significant notational error in Eq. (4.4) regarding the definition of boundary fluxes. Given the stated column convention, Φ_{out} should involve A_{J′J}​ rather than A{JJ′}. This error is systematics and propagates through subsequent error bounds and must be corrected.
+
+- The derivation for the adaptive time-step rule (Δt=ϵΔt​/Φ_{max})) relies on the inequality Φ_in+Φ_out​{less than or equal to}
+Φ_max​, for which I fail to see the justification without a multiplicative constant that accounts for the boundary's size or structure.
+
+- The algorithm (3.1 and 3.3) performs renormalization after pruning, yet the theoretical analysis in Section 4 is built upon a compressed (reflecting) generator. The relationship between these two treatments needs explicit clarification to ensure the error bounds remain valid for the implemented code.
+
+- Estimating w_max​: Corollary 4.7 uses w_max​ (the maximum exit rate of pruned states), but it is unclear how this value is robustly estimated on a truncated domain since it involves states outside the current active set.
+
+
+Moveover, to substantiate the claims of efficiency and robustness, the following should be addressed:
+
+- Quantitative benchmarking: The manuscript lacks head-to-head comparisons (quantitative tables/plots) against strong adaptive FSP baselines, such as ETFSP or other time-varying variants. While I agree that a systematic efficiency study across systems and parameter setting would lengthen the paper and be out of scope, a simple comparison against one state of the art alternative on the systems currently studied should not be too demanding. Without it, the claims about efficiency remain speculative and the method should be understood as an alternative to existing methods, rather than an improvement.
+
+- The authors should attempt to numerically demonstrate the specific benefits of flux-based protection (the main contribution of the paper) versus pure probability pruning, and of Φ_max​-based stepping versus other activity indicators.
+
+- While a full sensitivity analysis is probably out of scope, some guidance for choosing the key tolerances (α,ϵflux,​,ϵΔt) across different types of models would be very valuable to the reader, and necessary to have some impact.
+
+
+Overall Recommendation
+
+The manuscript addresses a timely problem with a conceptually sound heuristic. However, revision is required to align the mathematical proofs with the implemented algorithm and to provide the quantitative comparative data necessary to validate the method's performance claims. 

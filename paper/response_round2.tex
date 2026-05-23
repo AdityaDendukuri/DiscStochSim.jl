@@ -117,7 +117,11 @@ accounts for the boundary's size or structure.}
 \textbf{Response:} We redesigned the time-stepping
 rule from first principles to remove the unjustified inequality.
 
-The new rule $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}(J_n,t_n)$, where $\Phi_{\mathrm{total}} := \sum_{\boldsymbol{x}\in J_n}p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})$, is justified in Proposition~3.5 by a semigroup expansion argument: expanding $e^{\widetilde{\mathbf{A}}_{JJ}\Delta t}\widetilde{\boldsymbol{p}}_n$ to first order and using the zero column sums of $\widetilde{\mathbf{A}}_{JJ}$ gives $\|\boldsymbol{p}(t+\Delta t)-\boldsymbol{p}(t)\|_1 = 2\,\Phi_{\mathrm{total}}\,\Delta t + O(\Delta t^2)$. The choice $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ limits the leading-order fraction of probability mass undergoing a transition to $O(\varepsilon_{\Delta t})$, with no undetermined multiplicative constant.
+The new rule $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}(J_n,t_n)$, where $\Phi_{\mathrm{total}} := \sum_{\boldsymbol{x}\in J_n}p(\boldsymbol{x},t_n)\,w(\boldsymbol{x})$, is justified in Proposition~3.5 by a semigroup expansion argument on the compressed dynamics. Expanding $e^{\widetilde{\mathbf{A}}_{JJ}\Delta t}\widetilde{\boldsymbol{p}}_n$ to first order gives
+\[
+\|\widehat{\boldsymbol{p}}(t+\Delta t)-\widetilde{\boldsymbol{p}}_n\|_1 \leq 2\,\Phi_{\mathrm{total}}\,\Delta t + O(\Delta t^2),
+\]
+so the total variation distance, and hence the leading-order fraction of probability mass redistributed within the active set, is bounded by $\Phi_{\mathrm{total}}\,\Delta t + O(\Delta t^2)$. The choice $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ therefore bounds this fraction by $\varepsilon_{\Delta t} + O(\Delta t^2)$, with an explicit constant.
 
 Crucially, $\Phi_{\mathrm{total}} = \mathbb{E}_p[w(\boldsymbol{x})]$ is the probability-weighted mean propensity, which tracks the \emph{active} timescale of the system rather than the worst-case propensity. When probability resides in low-propensity states, $\Phi_{\mathrm{total}}$ is small and the step is large; when probability shifts into high-propensity states, $\Phi_{\mathrm{total}}$ grows and the step shrinks automatically. This self-adaptation, proved in Proposition~3.5, is what makes the rule effective across the stiff Robertson and oscillatory Oregonator benchmarks without manual tuning.
 

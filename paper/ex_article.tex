@@ -394,17 +394,40 @@ The step size
 \label{eq:flux-timestep}
 \Delta t_n = \frac{\varepsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n,t_n)}, \qquad \Phi_{\mathrm{total}}(J_n,t_n) := \sum_{\boldsymbol{x}\in J_n} p(\boldsymbol{x},t_n)\,w(\boldsymbol{x}),
 \end{equation}
-limits the leading-order fraction of probability mass undergoing a transition per step to $O(\varepsilon_{\Delta t})$, and automatically shortens steps during fast or stiff phases while lengthening them during slow transients.
+limits the leading-order fraction of probability mass redistributed within the active set during one step to at most $\varepsilon_{\Delta t} + O(\Delta t_n^2)$, and automatically shortens steps during fast or stiff phases while lengthening them during slow transients.
 \end{proposition}
 \begin{proof}
-The exact CME semigroup satisfies $\boldsymbol{p}(t_n+\Delta t_n) = e^{\widetilde{\mathbf{A}}_{JJ}\Delta t_n}\widetilde{\boldsymbol{p}}_n$; expanding to first order gives $\boldsymbol{p}(t_n+\Delta t_n) - \widetilde{\boldsymbol{p}}_n = \widetilde{\mathbf{A}}_{JJ}\widetilde{\boldsymbol{p}}_n\,\Delta t_n + O(\Delta t_n^2)$.  Since $\widetilde{\mathbf{A}}_{JJ}$ has zero column sums, $\widetilde{\mathbf{A}}_{JJ}\widetilde{\boldsymbol{p}}_n$ sums to zero; its positive and negative parts are equal, each summing to $\Phi_{\mathrm{total}}(J_n,t_n)$.  Therefore
+Let $\widehat{\boldsymbol{p}}(t)$ denote the compressed dynamics on $J_n$, so that $\widehat{\boldsymbol{p}}(t_n+\Delta t_n) = e^{\widetilde{\mathbf{A}}_{JJ}\Delta t_n}\widetilde{\boldsymbol{p}}_n$. Expanding to first order gives
 \[
-\|\boldsymbol{p}(t_n+\Delta t_n) - \widetilde{\boldsymbol{p}}_n\|_1 = 2\,\Phi_{\mathrm{total}}(J_n,t_n)\,\Delta t_n + O(\Delta t_n^2),
+\widehat{\boldsymbol{p}}(t_n+\Delta t_n) - \widetilde{\boldsymbol{p}}_n = \widetilde{\mathbf{A}}_{JJ}\widetilde{\boldsymbol{p}}_n\,\Delta t_n + O(\Delta t_n^2).
 \]
-and the choice $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ makes this $O(\varepsilon_{\Delta t})$.  The adaptive property follows because $\Phi_{\mathrm{total}} = \mathbb{E}_p[w(\boldsymbol{x})]$ tracks the active timescale.
+Define the retained-state exit rate
+\[
+\lambda_J(\boldsymbol{x}) := -\widetilde{A}_{\boldsymbol{x}\boldsymbol{x}} = \sum_{\substack{\boldsymbol{y}\in J_n\\ \boldsymbol{y}\neq \boldsymbol{x}}} \widetilde{A}_{\boldsymbol{y}\boldsymbol{x}},
+\]
+which satisfies $\lambda_J(\boldsymbol{x}) \leq w(\boldsymbol{x})$ because transitions from $\boldsymbol{x}$ to states outside $J_n$ are removed in the compressed generator. Using the non-negative off-diagonal entries of $\widetilde{\mathbf{A}}_{JJ}$ and the triangle inequality,
+\begin{align*}
+\|\widetilde{\mathbf{A}}_{JJ}\widetilde{\boldsymbol{p}}_n\|_1
+&\leq \sum_{\boldsymbol{x}\in J_n}\lambda_J(\boldsymbol{x})\,\widetilde{p}_n(\boldsymbol{x})
++ \sum_{\boldsymbol{x}\in J_n}\sum_{\substack{\boldsymbol{y}\in J_n\\ \boldsymbol{y}\neq \boldsymbol{x}}}\widetilde{A}_{\boldsymbol{x}\boldsymbol{y}}\,\widetilde{p}_n(\boldsymbol{y}) \\
+&= 2\sum_{\boldsymbol{x}\in J_n}\lambda_J(\boldsymbol{x})\,\widetilde{p}_n(\boldsymbol{x}) \\
+&\leq 2\sum_{\boldsymbol{x}\in J_n}w(\boldsymbol{x})\,\widetilde{p}_n(\boldsymbol{x}) \\
+&= 2\,\Phi_{\mathrm{total}}(J_n,t_n).
+\end{align*}
+Therefore
+\[
+\|\widehat{\boldsymbol{p}}(t_n+\Delta t_n) - \widetilde{\boldsymbol{p}}_n\|_1
+\leq 2\,\Phi_{\mathrm{total}}(J_n,t_n)\,\Delta t_n + O(\Delta t_n^2),
+\]
+so the total variation distance, and hence the fraction of probability mass redistributed within the active set during the step, is bounded by
+\[
+\tfrac{1}{2}\|\widehat{\boldsymbol{p}}(t_n+\Delta t_n) - \widetilde{\boldsymbol{p}}_n\|_1
+\leq \Phi_{\mathrm{total}}(J_n,t_n)\,\Delta t_n + O(\Delta t_n^2).
+\]
+The choice $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ therefore bounds this fraction by $\varepsilon_{\Delta t} + O(\Delta t_n^2)$. The adaptive property follows because $\Phi_{\mathrm{total}} = \mathbb{E}_p[w(\boldsymbol{x})]$ tracks the active timescale.
 \begin{itemize}
-\item \emph{Slow transient or quiescent phase.} Probability is concentrated in low-propensity states, so $\Phi_{\mathrm{total}}$ is small and $\Delta t_n$ is large.
-\item \emph{Fast or stiff phase.} Probability shifts into high-propensity states, $\Phi_{\mathrm{total}}$ grows, and $\Delta t_n$ shrinks automatically without explicit phase detection.
+\item \emph{Slow or stiff phase.} Probability is concentrated in low-propensity states, so $\Phi_{\mathrm{total}}$ is small and $\Delta t_n$ is large.
+\item \emph{Fast or transient phase.} Probability shifts into high-propensity states, $\Phi_{\mathrm{total}}$ grows, and $\Delta t_n$ shrinks automatically without explicit phase detection.
 \end{itemize}
 \end{proof}
 
@@ -743,7 +766,7 @@ Combining: $e_{n+1} \leq e_n + 2\alpha + \Phi_{\mathrm{out}}(J_n,t_n)\,\Delta t_
 
 In this section we demonstrate the flux-aware FSP method on four benchmark systems from the stochastic chemical kinetics literature. We first present a detailed analysis on a toy bottleneck reaction system that validates the method's connectivity-preserving properties and error bounds along with a deterministic error analysis. The toggle switch tests spatial adaptivity for bimodal distributions. The Robertson system tests long-time integration with extreme temporal stiffness spanning nine orders of magnitude in rate constants. The Oregonator tests adaptive time-stepping for sustained oscillatory dynamics. These examples illustrate performance on well-established models with large state spaces and complex transient behavior. Finally, we experimentally study the matrix construction algorithm's efficiency. All experiments were conducted on an M1 MacBook Pro (M1 Pro chip, 16 GB RAM). The adaptive FSP algorithm was implemented in Julia, using Catalyst.jl~\cite{catalyst2021} for reaction network modeling and Expokit.jl for Krylov-based matrix exponential computations via EXPOKIT's routines~\cite{expokit2021}.
 
-Tolerance parameters were set from the known rate constants of each system rather than by tuning.  For $\varepsilon_{\Delta t}$, well-mixed systems (Oregonator, Robertson, toggle switch) use $\varepsilon_{\Delta t} = 1$, since $\Phi_{\mathrm{total}}$ already scales with the dominant reaction rates and this value keeps the per-step activity fraction bounded.  For $\alpha$, connectivity-critical systems such as the bottleneck admit aggressive pruning ($\alpha = 0.9$) because the flux criterion independently protects any connector state; oscillatory and bimodal systems use moderate values ($\alpha = 0.1$--$0.3$) to avoid over-pruning the tails of a moving or split distribution.  For $\varepsilon_{\mathrm{flux}}$, simply-connected systems use $\varepsilon_{\mathrm{flux}} = 1$: since no individual state can carry flux equal to the total system flux $\Phi_{\mathrm{total}}$, the protection threshold $\varepsilon_{\mathrm{flux}}\cdot\Phi_{\mathrm{total}}$ is unreachable by any single state, which effectively disables flux-based protection and allows the quantile filter to operate freely.  For the bottleneck system, $\varepsilon_{\mathrm{flux}} = 10^{-12}$ was set to match the estimated relative flux of the connector state $p(B{=}1)\,w(B{=}1)/\Phi_{\mathrm{total}} \approx k_1/k_2 = 10^{-6}/1 \approx 10^{-6}$, and the results were insensitive to any value in $[10^{-12}, 10^{-6}]$.
+Tolerance parameters were set from the known rate constants of each system rather than by tuning.  For $\varepsilon_{\Delta t}$, well-mixed systems (Oregonator, Robertson, toggle switch) use $\varepsilon_{\Delta t} = 1$, since $\Phi_{\mathrm{total}}$ already scales with the dominant reaction rates and this value keeps the per-step activity fraction bounded.  For $\alpha$, connectivity-critical systems such as the bottleneck admit aggressive pruning ($\alpha = 0.9$) because the flux criterion independently protects any connector state; oscillatory and bimodal systems use moderate values ($\alpha = 0.1$--$0.3$) to avoid over-pruning the tails of a moving or split distribution.  For $\varepsilon_{\mathrm{flux}}$, simply-connected systems use $\varepsilon_{\mathrm{flux}} = 1$: since no individual state can carry flux equal to the total system flux $\Phi_{\mathrm{total}}$, the protection threshold $\varepsilon_{\mathrm{flux}}\cdot\Phi_{\mathrm{total}}$ is unreachable by any single state, which effectively disables flux-based protection and allows the quantile filter to operate freely.  For the bottleneck system, $\varepsilon_{\mathrm{flux}} = 10^{-12}$ was set to match the estimated relative flux of the connector state $p(B{=}1)\,w(B{=}1)/\Phi_{\mathrm{total}} \approx k_1/k_2 = 10^{-6}/0.1 = 10^{-5}$, and the results were insensitive to any value in $[10^{-12}, 10^{-6}]$.
 
 \subsection{Reaction System With a Bottleneck Channel}
 
@@ -751,7 +774,7 @@ We consider a three-species network with a slow gateway followed by fast downstr
 \begin{equation}
 A \xrightarrow{k_1} B, \qquad B \xrightarrow{k_2} B + C,
 \end{equation}
-with state $(N_A,N_B,N_C)\in\mathbb{Z}_{\ge 0}^3$, $k_1=10^{-6}\,\text{s}^{-1}$, $k_2=1\,\text{s}^{-1}$, and initial condition $(1,0,0)$. The reaction $B \to B+C$ conserves $B$ while producing $C$, creating a catalytic production pathway. The slow $A \to B$ transition acts as a bottleneck: once probability reaches states with $B \geq 1$, the fast catalytic reaction rapidly advances $C$ while maintaining $B \approx 1$.
+with state $(N_A,N_B,N_C)\in\mathbb{Z}_{\ge 0}^3$, $k_1=10^{-6}\,\text{s}^{-1}$, $k_2=0.1\,\text{s}^{-1}$, and initial condition $(1,0,0)$. The reaction $B \to B+C$ conserves $B$ while producing $C$, creating a catalytic production pathway. The slow $A \to B$ transition acts as a bottleneck: once probability reaches states with $B \geq 1$, the fast catalytic reaction rapidly advances $C$ while maintaining $B \approx 1$.
 
 \begin{figure}[htbp]
 \centering
@@ -806,7 +829,7 @@ $3.0 \times 10^6$ & 0.081 & 8344 & 0.910 & 9124  & $8.4 \times 10^{-8}$ \\
 \end{tabular}
 \end{table}
 
-At early times ($t \sim 10^5$ s), the system exhibits a clear quasi-bimodal distribution with significant mass at both $(1,0,0)$ and the advancing front. As time progresses, probability mass transfers from the trapped state to the wave front, with $p(1,0,0)$ decreasing from 0.905 to 0.081 while $p(0,1,C_{\max})$ increases from 0.095 to 0.910 over the observed time range. The state space grows continuously from 4 to over 9000 states to accommodate the advancing front, with $C_{\max}$ increasing approximately linearly at rate $k_2 \approx 1$ s$^{-1}$ once $B=1$ is established.
+At early times ($t \sim 10^5$ s), the system exhibits a clear quasi-bimodal distribution with significant mass at both $(1,0,0)$ and the advancing front. As time progresses, probability mass transfers from the trapped state to the wave front, with $p(1,0,0)$ decreasing from 0.905 to 0.081 while $p(0,1,C_{\max})$ increases from 0.095 to 0.910 over the observed time range. The state space grows continuously from 4 to over 9000 states to accommodate the advancing front, with $C_{\max}$ increasing approximately linearly at rate $k_2 \approx 0.1$ s$^{-1}$ once $B=1$ is established.
 
 Table~\ref{tab:prob_flux_rankings} reveals the critical disconnect between probability and flux rankings. At $t=1.0\times10^3$ s (shown with flux tolerance $\epsilon=10^{-3}$ to capture early dynamics), while $(1,0,0)$ dominates by probability with $p=0.999$, state $(0,1,2)$ at the wave front carries the highest flux of $6.3\times10^{-5}$ s$^{-1}$ despite having probability $p=6.3\times10^{-4}$—a flux-to-probability ratio of 100. State $(0,1,1)$ exhibits a similar pattern with flux $3.7\times10^{-5}$ s$^{-1}$ and probability $3.7\times10^{-4}$, while the bottleneck connector $(0,1,0)$ with $p=1.0\times10^{-5}$ carries flux comparable to the dominant state. At $t=3.0\times10^6$ s, this disconnect becomes even more pronounced: state $(0,1,9121)$ ranks third by probability with $p=8\times10^{-4}$ but first by flux with $\phi=8.4\times10^{-5}$ s$^{-1}$. Similarly, states $(0,1,2697)$ and $(0,1,4298)$ appear nowhere in the top probability rankings yet carry flux values of $2.0\times10^{-5}$ and $3.1\times10^{-6}$ s$^{-1}$, respectively. These states form the critical bottleneck chain connecting the trapped region at $(1,0,0)$ to the active wave front at $(0,1,9122)$.
 

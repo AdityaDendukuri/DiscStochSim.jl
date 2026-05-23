@@ -1,0 +1,590 @@
+2:\documentclass[review,onefignum,onetabnum]{siamart171218}
+4:% Packages
+5:\usepackage{amsmath,amssymb,bm}
+6:\usepackage{graphicx}
+7:\usepackage{subcaption}
+8:\usepackage{tikz}
+9:\usepackage{mathtools}
+10:\usepackage{siunitx}
+11:\usepackage{algorithm}
+12:\usepackage{algorithmic}
+14:% Information that is shared between the article and the supplement
+15:% (title and author information, macros, packages, etc.) goes into
+16:% ex_shared.tex. If there is no supplement, this file can be included
+19:\input{ex_shared}
+23:\hypersetup{
+24:  pdftitle={Flux-Preserving Adaptive Finite State Projection},
+25:  pdfauthor={A. Dendukuri S. Chandrasekaran and L. Petzold}
+33:\begin{abstract}
+34:[Omitted long matching line]
+35:\end{abstract}
+38:\begin{keywords}
+39:  chemical master equation, finite state projection, adaptive methods, stiff stochastic systems, multiscale modeling, flux-based pruning
+40:\end{keywords}
+46:\section{Introduction}
+47:The Chemical Master Equation (CME) governs the evolution of probability distributions for well-mixed stochastic reaction networks and is the canonical description of intrinsic noise in biochemical systems \cite{Gillespie1977, Wilkinson2006-so}. 
+48:Formally, the CME is an infinite system of linear ODEs posed on a countably infinite lattice of molecular population states. 
+49:Because the reachable state space typically grows combinatorially with copy numbers, the CME cannot be solved directly without an adaptive or carefully structured truncation scheme.
+51:[Omitted long matching line]
+53:[Omitted long matching line]
+55:\subsection{Related Work}
+56:\label{sec:related-work}
+57:We review prior work on adaptive FSP methods and state space truncation strategies for stochastic chemical kinetics. The original FSP method \cite{Munsky2006} introduced fixed truncation with rigorous error bounds based on the probability flux leaving the truncated domain. Munsky and Khammash \cite{MUNSKY2007818} extended this framework to time-stepping variants that repeatedly expand the state space along reachable directions, providing adaptive control of the truncation error over time.
+59:[Omitted long matching line]
+61:[Omitted long matching line]
+63:[Omitted long matching line]
+66:\section{Background}
+67:\label{sec:background}
+69:We first briefly review the necessary definitions and methods, then state the main motivation of this paper in remark~\ref{rem:stiffness-challenges}. 
+71:\subsection{The Chemical Master Equation}
+73:\begin{definition}[Chemical Master Equation (CME)]
+74:The \textit{Chemical Master Equation (CME)} describes the time evolution of the probability distribution $p(\boldsymbol{x}, t)$ over the state $\boldsymbol{x}$. For a single state $\boldsymbol{x}$, the CME is
+76:    \frac{d}{dt} p(\boldsymbol{x}, t) =
+77:    \sum_{k=1}^{M} \big[\alpha_k(\boldsymbol{x} - \boldsymbol{\nu}_k)\, p(\boldsymbol{x} - \boldsymbol{\nu}_k, t)
+78:    - \alpha_k(\boldsymbol{x})\, p(\boldsymbol{x}, t)\big],
+80:where $\alpha_k(\boldsymbol{x})$ is the propensity for reaction $k$ at state $\boldsymbol{x}$ and $\boldsymbol{\nu}_k$ is its stoichiometric change vector.
+82:For the entire state space $\mathbf{X}$, the CME can be written in matrix form as
+84:    \frac{d}{dt}\, \boldsymbol{p}(\mathbf{X}, t) = \mathbf{A}\, \boldsymbol{p}(\mathbf{X}, t),
+86:where $\boldsymbol{p}(\mathbf{X}, t)$ is the probability vector over $\mathbf{X}$ and the \textit{generator matrix} $\mathbf{A}$ has entries
+89:    \begin{cases}
+90:        -\displaystyle\sum_{k=1}^{M} \alpha_k(\mathbf{X}_j), & \text{if } i=j, \\
+91:         \alpha_k(\mathbf{X}_j) & \text{if }\, \mathbf{X}_i=\mathbf{X}_j+\boldsymbol{\nu}_k, \\
+92:    \end{cases}
+94:and $\mathbf{A}_{ij}=0$ when no reaction connects $\mathbf{X}_j$ to $\mathbf{X}_i$.
+97:\begin{remark}[Generator matrix properties]
+98:The generator $\mathbf{A}$ satisfies:  
+101:    \item $\mathbf{A}_{ii}\le 0$ (diagonal nonpositive),
+102:    \item $\sum_{i} \mathbf{A}_{ij}=0$ for all $j$ (each column sums to zero),
+106:\subsection{Finite State Projection Method}
+109:The \textit{Finite State Projection (FSP)} method approximates the CME by restricting dynamics to a finite subset $\mathbf{X}_J\subset\mathbf{X}$. If $\mathbf{A}_J$ is the sub-generator on $\mathbf{X}_J$ and $\boldsymbol{p}_J(0)$ is the initial distribution restricted to $\mathbf{X}_J$, then
+111:    \boldsymbol{p}(\mathbf{X}_J, t) \approx e^{\mathbf{A}_J t}\, \boldsymbol{p}_J(0).
+115:\begin{theorem}[Classical FSP bounds \cite{Munsky2006}]
+116:\label{thm:classical_fsp}
+117:Let $A$ be a CME generator (\,$A_{ij}\ge 0$ for $i\neq j$, $A_{ii}\le 0$, and $\mathbf{1}^\top A=0^\top$\,), and let $A_J$ be the principal submatrix on a finite set $J\subset \mathbf{X}$. Denote by $p_J(t)$ the full CME solution restricted to $J$ and by $e^{A_J t}p_J(0)$ the truncated solution that ignores transitions to $J'$.
+119:If for some $t_f\ge 0$ and $\varepsilon>0$,
+121:\mathbf{1}^\top e^{A_J t_f}\,p_J(0) \;\ge\; 1-\varepsilon,
+122:\label{eq:fsp-mass-cond}
+124:then the following elementwise bounds hold:
+126:e^{A_J t_f}\,p_J(0) \;\le\; p_J(t_f) \;\le\; e^{A_J t_f}\,p_J(0) + \varepsilon\,\mathbf{1}.
+127:\label{eq:fsp-elementwise}
+131:\subsubsection{Time-stepping and sliding window approaches}
+135:    \includegraphics[width=\linewidth]{lv_grid.pdf}
+136:    \caption{Visualization of the adaptive FSP procedure (species $U$ and $V$) during a single time step in Algorithm~\ref{alg:fsp-naive}. The top row shows the truncation boundary during the expand, evolve, and prune phases, while the bottom row shows the corresponding probability contours.}
+140:[Omitted long matching line]
+141:At each time step, the method initializes $\boldsymbol{p}_J^{(k)}(t_k)$ from the previous solution, expands $\mathbf{X}_J^{(k)}$ to include newly reachable states, evolves the distribution forward in time, and prunes states whose probabilities fall below a chosen tolerance.
+145:\label{alg:fsp-naive}
+147:\REQUIRE initial state $x_0$, time range $[t_0,t_f]$, propensities $\{\alpha_k(x)\}$, stoichiometries $\{\nu_k\}$, step $\Delta t$
+148:\STATE $t \gets t_0$, \; $J \gets \{x_0\}$, \; $\boldsymbol{p} \gets [1]$
+150:  \STATE \textbf{Expand:} add neighbors of $J$ reachable by one (or preset $r$) reactions
+151:  \STATE \textbf{Assemble:} build $\mathbf{A}_{JJ}$ on $J$
+152:  \STATE \textbf{Evolve:} $\boldsymbol{p} \gets \exp(\mathbf{A}_{JJ}\Delta t)\,\boldsymbol{p}$
+153:  \STATE \textbf{Prune:} remove states with $p(x)$ below a heuristic threshold
+154:  \STATE $t \gets \min\{t+\Delta t,\,t_f\}$
+156:\STATE \textbf{return} $(J,\boldsymbol{p})$ at $t_f$
+160:This \emph{sliding-window} approach provides a general template for adaptive FSP methods with dynamically evolving state spaces \cite{Dinh2016}. Many variants differ in how expansion and pruning are performed, but they all follow the same broad framework which is to enlarge the state space to capture new probability flow, evolve the distribution on the truncated generator, and prune regions that have become irrelevant. 
+161:The remainder of this paper focuses on refining and analyzing the pruning and time step determination steps within this general adaptive FSP skeleton.
+164:\begin{remark}[Stiffness and multiscale challenges in adaptive FSP]
+165:\label{rem:stiffness-challenges}
+166:[Omitted long matching line]
+168:% Requires: \usepackage{subcaption}
+172:\begin{subfigure}[b]{0.46\textwidth}
+174:\resizebox{\linewidth}{!}{%
+175:\begin{tikzpicture}[node distance=2.2cm, auto, thick,
+176:  state/.style={circle, draw, minimum size=0.8cm}]
+177:  \node[state] (A1) at (0,1) {$s_1$};
+178:  \node[state] (A2) at (0,-1) {$s_2$};
+179:  \node[state, fill=gray!20] (B) at (3,0) {$s_b$};
+180:  \node[state] (C1) at (6,1) {$s_3$};
+181:  \node[state] (C2) at (6,-1) {$s_4$};
+190:  \draw[dashed, rounded corners] (-1.2,-2) rectangle (1.2,2);
+191:  \draw[dashed, rounded corners] (4.8,-2) rectangle (7.2,2);
+193:  \node at (0, -2.5) {Metastable Region A};
+194:  \node at (6, -2.5) {Metastable Region B};
+195:  \node at (3, -1.1) {Bottleneck $s_b$};
+200:\end{subfigure}
+202:\begin{subfigure}[b]{0.46\textwidth}
+204:\resizebox{\linewidth}{!}{%
+206:  % Axes
+207:  \draw[->, >=stealth, thick] (-0.2,0) -- (9.5,0) node[right, font=\small] {$t$};
+208:  \draw[->, >=stealth, thick] (0,-0.2) -- (0,3.2) node[above, font=\small] {$\Phi_{\text{total}}(t)$};
+209:  % Curve with steeper transients and gently varying stiff regions
+211:    (0.3,2.8) .. controls (0.5,2.6) and (0.7,0.8) .. (1.0,0.5)
+212:    .. controls (1.3,0.4) and (2.0,0.45) .. (2.8,0.5)
+213:    .. controls (3.5,0.55) and (4.0,0.6) .. (4.3,0.65)
+214:    .. controls (4.5,1.2) and (4.8,2.4) .. (5.3,2.7)
+215:    .. controls (5.6,2.8) and (5.9,2.5) .. (6.2,1.2)
+216:    .. controls (6.4,0.6) and (6.6,0.5) .. (7.0,0.55)
+217:    .. controls (7.8,0.65) and (8.4,0.7) .. (8.8,0.75);
+218:  % Small Δt ticks (transient regions)
+220:    \draw[densely dotted, line width=1pt] (\x,0) -- (\x,0.35);
+221:  % Large Δt ticks (stiff regions)
+223:    \draw[dashed, line width=1pt] (\x,0) -- (\x,0.35);
+224:  % Region labels
+225:  \node[font=\small] at (0.7,-0.75) {Transient};
+226:  \node[font=\small] at (2.6,-0.75) {Stiff};
+227:  \node[font=\small] at (5.3,-0.75) {Transient};
+228:  \node[font=\small] at (7.7,-0.75) {Stiff};
+230:  \begin{scope}[shift={(6.8,2.7)}]
+231:    \draw[densely dotted, line width=1pt] (0,0) -- (0.5,0);
+232:    \node[right, font=\small] at (0.55,0) {small $\Delta t$};
+233:    \draw[dashed, line width=1pt] (0,-0.35) -- (0.5,-0.35);
+234:    \node[right, font=\small] at (0.55,-0.35) {large $\Delta t$};
+235:  \end{scope}
+239:\label{fig:temporal-stiffness}
+240:\end{subfigure}
+241:\caption{Illustration of stiffness in both spatial and temporal domains. (\subref{fig:bottleneck}) shows a bottleneck state $s_b$ that connects metastable regions, while (\subref{fig:temporal-stiffness}) shows alternating transient and stiff regimes reflected in the total flux $\Phi_{\text{total}}(t)$.}
+242:\label{fig:stiffness-combined}
+246:\section{Methodology: Flux-Based Adaptive FSP}
+247:\label{sec:methodology}
+249:This section introduces a state space adaptation approach that preserves network connectivity through flux-aware truncation. We first define and characterize probability flux as a connectivity measure, argue that naive probability-based pruning can destroy essential pathways, then construct an algorithm that maintains structural integrity of the state-space graph while controlling computational cost.
+253:Let $w(\boldsymbol{x}) := \sum_{k=1}^M \alpha_k(\boldsymbol{x}) = -\mathbf{A}_{\boldsymbol{x},\boldsymbol{x}}$ denote the total exit rate from state $\boldsymbol{x}$. The \textit{outgoing probability flux} from state $\boldsymbol{x}$ at time $t$ is
+255:\Phi(\boldsymbol{x},t) := p(\boldsymbol{x},t) \cdot w(\boldsymbol{x}).
+259:[Omitted long matching line]
+261:\begin{definition}[Total system flux]
+262:The total probability flux of the system at time $t$ over state set $J$ is
+264:\Phi_{\mathrm{total}}(J,t) := \sum_{\boldsymbol{x} \in J} \Phi(\boldsymbol{x},t) = \sum_{\boldsymbol{x} \in J} p(\boldsymbol{x},t) \cdot w(\boldsymbol{x}).
+268:\begin{proposition}[Total flux properties]
+270:For the full state space $\mathcal{X}$ and any time $t \geq 0$, the total system flux satisfies
+272:\Phi_{\mathrm{total}}(\mathcal{X},t) = \sum_{\boldsymbol{x} \in \mathcal{X}} p(\boldsymbol{x},t) \cdot w(\boldsymbol{x}) = -\boldsymbol{p}(t)^\top \mathrm{diag}(\mathbf{A}).
+274:Since $\sum_{\boldsymbol{x}} p(\boldsymbol{x},t) = 1$ for all $t$, the total flux represents a weighted average of exit rates across the state space. For reaction networks with mass-action or similar kinetics where exit rates grow at most polynomially with state values, $\Phi_{\mathrm{total}}(\mathcal{X},t)$ remains bounded on compact time intervals and tracks the instantaneous activity level of the system.
+275:\end{proposition}
+280:\Phi_{\mathrm{total}}(\mathcal{X},t) &= \sum_{\boldsymbol{x} \in \mathcal{X}} p(\boldsymbol{x},t) \cdot (-\mathbf{A}_{\boldsymbol{x},\boldsymbol{x}}) = -\boldsymbol{p}(t)^\top \mathrm{diag}(\mathbf{A}).
+282:Since the diagonal entries $\mathbf{A}_{\boldsymbol{x},\boldsymbol{x}} = -\sum_{k=1}^M \alpha_k(\boldsymbol{x})$ depend only on the reaction network structure and state $\boldsymbol{x}$, the total flux evolves with the probability distribution. 
+285:\subsection{Flux and Network Connectivity}
+286:\label{sec:flux-connectivity}
+288:[Omitted long matching line]
+292:governs exponential convergence to stationarity (e.g., in $\pi$-weighted norms), i.e., $\|\boldsymbol{p}(t)-\boldsymbol{\pi}\|\le C e^{-\lambda t}$. The connection between flux and connectivity is formalized through Cheeger's inequality for continuous-time Markov chains \cite{Diaconis1991,63529}. Define the \textit{conductance} of a subset $S \subset J$ as
+294:\Psi(S) := \frac{\sum_{\boldsymbol{x} \in S}\sum_{\boldsymbol{y} \in J \setminus S} \pi(\boldsymbol{x}) \mathbf{A}_{\boldsymbol{y},\boldsymbol{x}}}{\min\{\pi(S), \pi(J\setminus S)\}},
+297:[Omitted long matching line]
+300:\frac{\Psi_*^2}{2} \leq \lambda \leq 2\Psi_*,
+302:[Omitted long matching line]
+304:\subsubsection{Flux-Aware Truncation Algorithm}
+306:We propose a two-stage pruning approach that combines probability-based candidate selection with flux-based protection. The algorithm identifies states for potential removal using a quantile threshold, then protects low-probability states that carry significant probability flow.
+309:\caption{Flux-Preserving Pruning}
+312:\REQUIRE Active set $\mathcal{S}$, probability vector $\boldsymbol{p}$, generator $\mathbf{A}$, quantile tolerance $\alpha \in (0,1)$, flux tolerance $\epsilon_{\mathrm{flux}} > 0$
+313:\ENSURE Updated set $\mathcal{S}_{\mathrm{new}}$ and renormalized probability $\boldsymbol{p}_{\mathrm{new}}$
+316:\STATE Sort states $\boldsymbol{x} \in \mathcal{S}$ in ascending order of $p(\boldsymbol{x}, t)$
+317:\STATE Define candidate set $\mathcal{C} \subseteq \mathcal{S}$ as the minimal set satisfying
+319:\sum_{\boldsymbol{x} \in \mathcal{C}} p(\boldsymbol{x}, t) \leq \alpha \quad \text{and} \quad p(\boldsymbol{x}, t) \leq p(\boldsymbol{y}, t) \; \forall \boldsymbol{x} \in \mathcal{C}, \boldsymbol{y} \in \mathcal{S} \setminus \mathcal{C}
+321:\STATE \textit{Stage 2: Flux-Based Protection}
+322:\FOR{each $\boldsymbol{x} \in \mathcal{S}$}
+323:    \STATE Compute exit rate: $w(\boldsymbol{x}) = -\mathbf{A}_{\boldsymbol{x},\boldsymbol{x}}$
+324:    \STATE Compute flux: $\Phi(\boldsymbol{x}, t) = p(\boldsymbol{x}, t) \cdot w(\boldsymbol{x})$
+326:\STATE Compute total flux: $\Phi_{\mathrm{total}} = \sum_{\boldsymbol{x} \in \mathcal{S}} \Phi(\boldsymbol{x}, t)$
+327:\STATE Set flux threshold: $\Phi_{\mathrm{thr}} = \epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}$
+328:\STATE Define protected set: $\mathcal{P} = \{\boldsymbol{x} \in \mathcal{C} : \Phi(\boldsymbol{x}, t) \geq \Phi_{\mathrm{thr}}\}$
+329:\STATE Define pruning set: $\mathcal{S}_{\mathrm{prune}} = \mathcal{C} \setminus \mathcal{P}$
+332:\STATE $\mathcal{S}_{\mathrm{new}} \gets \mathcal{S} \setminus \mathcal{S}_{\mathrm{prune}}$
+333:\STATE $\boldsymbol{p}_{\mathrm{new}} \gets \boldsymbol{p}|_{\mathcal{S}_{\mathrm{new}}} / \|\boldsymbol{p}|_{\mathcal{S}_{\mathrm{new}}}\|_1$ \quad (restrict and renormalize)
+334:\RETURN $\mathcal{S}_{\mathrm{new}}, \boldsymbol{p}_{\mathrm{new}}$
+338:[Omitted long matching line]
+341:\subsection{Adaptive Time Stepping}
+342:[Omitted long matching line]
+344:\label{eq:flux-timestep}
+345:\Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(\mathcal{S}_n, t_n)},
+347:where $\epsilon_{\Delta t}$ is a dimensionless tolerance parameter. This rule ensures that $\Delta t_n \cdot \Phi_{\mathrm{total}}(t_n) = \epsilon_{\Delta t}$, bounding the total probability mass that can cross the truncation boundary during the step. The formal justification follows from the local error analysis in Section~\ref{sec:theory}.
+350:\subsection{Master Equation Matrix Construction}
+351:\label{sec:matrix_construction}
+353:[Omitted long matching line]
+356:\caption{Forward Enumeration Matrix Construction}
+357:\label{alg:matrix_construction}
+359:\REQUIRE State set $\mathcal{S}$, reaction model with stoichiometries $\{\boldsymbol{\nu}_k\}$ and propensities $\{\alpha_k\}$
+361:\STATE Initialize sparse matrix arrays: $I \leftarrow []$, $J \leftarrow []$, $V \leftarrow []$
+362:\STATE Create index mapping: $\texttt{state\_id}: \mathcal{S} \rightarrow \{1, \ldots, |\mathcal{S}|\}$
+363:\FOR{each state $x \in \mathcal{S}$ with index $j$}
+364:    \STATE $\text{col\_sum} \leftarrow 0$
+365:    \FOR{each reaction $k$ with stoichiometry $\boldsymbol{\nu}_k$}
+366:        \STATE $y \leftarrow x + \boldsymbol{\nu}_k$
+368:            \STATE $\alpha \leftarrow \texttt{propensity}_k(x)$
+370:                \STATE $i \leftarrow \texttt{state\_id}[y]$
+371:                \STATE Append $(i, j, \alpha)$ to sparse arrays
+372:                \STATE $\text{col\_sum} \leftarrow \text{col\_sum} + \alpha$
+376:    \IF{$\text{col\_sum} > 0$}
+377:        \STATE Append $(j, j, -\text{col\_sum})$ to sparse arrays \COMMENT{Diagonal entry}
+380:\STATE $\mathbf{A} \leftarrow \texttt{sparse}(I, J, V, |\mathcal{S}|, |\mathcal{S}|)$
+385:[Omitted long matching line]
+388:[Omitted long matching line]
+390:[Omitted long matching line]
+393:\subsection{Full Algorithm}
+394:\label{sec:full-algorithm}
+395:[Omitted long matching line]
+399:\label{alg:fsp-flux-adaptive}
+401:\REQUIRE initial state $x_0$, time range $[t_0,t_f]$, propensities $\{\alpha_k(x)\}$, stoichiometries $\{\nu_k\}$, quantile tolerance $\alpha$, flux tolerance $\epsilon_{\mathrm{flux}}$, time step tolerance $\epsilon_{\Delta t}$
+402:\STATE $t \gets t_0$, \; $\mathcal{S} \gets \{x_0\}$, \; $\boldsymbol{p} \gets [1]$, \; $\mathbf{A} \gets$ initial generator
+404:  \STATE \textbf{Expand:} $\mathcal{S}_{\text{new}} \gets \mathcal{S} \cup \partial \mathcal{S}$ (expand state space)
+405:  \STATE \textbf{Construct:} $\mathbf{A}_{\text{new}} \gets$ forward enumeration (Algorithm~\ref{alg:matrix_construction})
+406:  \STATE \textbf{Adapt step:} Compute $\Phi_{\mathrm{total}} = \sum_{x \in \mathcal{S}_{\text{new}}} p(x,t) \cdot w(x)$ and set $\Delta t = \epsilon_{\Delta t}/\Phi_{\mathrm{total}}$ (Eq.~\eqref{eq:flux-timestep})
+407:  \STATE \textbf{Evolve:} $\boldsymbol{p} \gets \exp(\mathbf{A}_{\text{new}}\Delta t)\,\boldsymbol{p}$
+408:  \STATE \textbf{Prune:} $(\mathcal{S}_{\text{pruned}}, \boldsymbol{p}_{\text{pruned}}) \gets$ flux-preserving pruning (Algorithm~\ref{alg:flux-prune}) with parameters $\alpha, \epsilon_{\mathrm{flux}}$
+409:  \STATE $\mathcal{S} \gets \mathcal{S}_{\text{pruned}}$, \; $\boldsymbol{p} \gets \boldsymbol{p}_{\text{pruned}}$, \; $\mathbf{A} \gets \mathbf{A}_{\text{new}}|_{\mathcal{S}_{\text{pruned}}}$
+410:  \STATE $t \gets \min\{t+\Delta t,\,t_f\}$
+412:\STATE \textbf{return} $(\mathcal{S},\boldsymbol{p})$ at $t_f$
+418:The computational bottleneck is the matrix exponential action $\exp(\mathbf{A}_{\text{new}}\Delta t)\boldsymbol{p}$ in the evolution step. We employ Krylov subspace methods via the EXPOKIT package \cite{Sidje1998}, which computes matrix exponential actions without forming the full exponential matrix. For a sparse generator $\mathbf{A}$ of dimension $n = |\mathcal{S}|$ with
+419:$\mathrm{nnz}(\mathbf{A}) = O(n)$, EXPOKIT's Krylov--Arnoldi routine for
+420:computing $e^{t\mathbf{A}} v$ has per-step cost
+424:where $m \ll n$ is the Krylov subspace dimension. In our setting, the
+425:expansion and pruning operations scale as $O(nR)$, and constructing
+426:$\mathbf{A}$ by forward enumeration also costs $O(nR)$, where $R$ is the
+427:number of reactions. Since $m$ and $R$ are small constants independent of
+428:$n$, the total per-step cost is effectively linear in the state-space size,
+429:making simulations with $10^4$--$10^5$ states computationally tractable.
+432:\section{Error Analysis}
+433:\label{sec:theory}
+435:We derive local and global error bounds for the adaptive FSP method based on probability fluxes across the truncation boundary. Let $\mathcal{X}$ denote the full state space and $J \subset \mathcal{X}$ be a finite active set. Define the complement $J' := \mathcal{X} \setminus J$ with $J \cap J' = \emptyset$ and $J \cup J' = \mathcal{X}$. The generator matrix admits a natural block decomposition:
+445:\boldsymbol{p}(t)=
+447:\boldsymbol{p}_J(t)\\
+448:\boldsymbol{p}_{J'}(t)
+451:[Omitted long matching line]
+456:\boldsymbol{p}_J(t) \\
+457:\boldsymbol{p}_{J'}(t)
+465:\boldsymbol{p}_J(t) \\
+466:\boldsymbol{p}_{J'}(t)
+471:\label{eq:row-sum-identities}
+474:The column sum property of the generator $\mathbf{A}$ immediately yields the identities in Eq.~\eqref{eq:row-sum-identities}.
+477:    \begin{tikzpicture}[node distance=3cm, auto, thick]
+478:    \tikzstyle{state} = [circle, draw, minimum size=1cm, text centered]
+479:    \tikzstyle{transition} = [->, thick]
+480:    \node[state] (S) at (0, 0) {$J$};
+481:    \node[state] (R) at (4, 0) {$J'$};
+482:    \path[transition, loop left] (S) edge node[left] {$\mathbf{A}_{JJ}$} (S);
+483:    \path[transition, loop right] (R) edge node[right] {$\mathbf{A}_{J'J'}$} (R);
+484:    \path[transition] (S) edge[bend left=20] node[above] {$\mathbf{A}_{J'J}$} (R);
+485:    \path[transition] (R) edge[bend left=20] node[below] {$\mathbf{A}_{JJ'}$} (S);
+487:    \caption{Partitioned master equation transitions between the active set $J$ and its complement $J'$.}
+488:    \label{fig:transitions}
+492:We define the boundary flux rates as
+494:\label{eq:flux-defs}
+495:\Phi_{\mathrm{out}}(t) := \mathbf{1}^\top \mathbf{A}_{J'J}\boldsymbol{p}_J(t), \qquad \Phi_{\mathrm{in}}(t) := \mathbf{1}^\top \mathbf{A}_{JJ'}\boldsymbol{p}_{J'}(t),
+497:[Omitted long matching line]
+499:\label{eq:compressed-generator}
+502:where $\operatorname{diag}(.)$ embeds a vector into the diagonal of a matrix. This operation ensures that any probability mass that would have left $J$ (as governed by $\mathbf{A}_{J'J}$) is instantaneously reflected back to its state of origin, creating a reflecting boundary condition.
+504:\begin{proposition}[Compressed generator properties]
+505:\label{prop:compressed-generator}
+506:The compressed generator $\widetilde{\mathbf{A}}_{JJ}$ satisfies:
+508:\item $\mathbf{1}^\top \widetilde{\mathbf{A}}_{JJ} = \mathbf{0}^\top$ (zero column sums, hence mass conservation),
+509:\item $\widetilde{A}_{\boldsymbol{x}\boldsymbol{y}} \geq 0$ for $\boldsymbol{x} \neq \boldsymbol{y}$ (non-negative off-diagonals),
+510:\item $\widetilde{A}_{\boldsymbol{x}\boldsymbol{x}} \leq 0$ for all $\boldsymbol{x}$ (non-positive diagonal),
+511:\item $e^{t\widetilde{\mathbf{A}}_{JJ}} \geq 0$ and $\|e^{t\widetilde{\mathbf{A}}_{JJ}}\|_{1 \to 1} = 1$ for all $t \geq 0$ (generates a positive stochastic semigroup).
+513:\end{proposition}
+516:Properties (1)-(3) follow directly from the construction of $\widetilde{\mathbf{A}}_{JJ}$. For property (1), using Eq.~\eqref{eq:row-sum-identities} and $\mathbf{1}^\top \diag(\boldsymbol{v}) = \boldsymbol{v}^\top$,
+520:[Omitted long matching line]
+522:\frac{d}{dt}\|\boldsymbol{p}(t)\|_1 = \mathbf{1}^\top \frac{d\boldsymbol{p}}{dt} = \mathbf{1}^\top \widetilde{\mathbf{A}}_{JJ}\boldsymbol{p}(t) = (\mathbf{1}^\top \widetilde{\mathbf{A}}_{JJ})\boldsymbol{p}(t) = 0,
+524:by property (1). Therefore, $\|\boldsymbol{p}(t)\|_1 = \|\boldsymbol{p}(0)\|_1 = 1$ for all $t \geq 0$. Taking the supremum over all initial conditions yields $\|e^{t\widetilde{\mathbf{A}}_{JJ}}\|_{1 \to 1} = 1$. Next, we prove positivity: by properties (2)-(3), choose $\alpha \geq \max_{\boldsymbol{x}} |\widetilde{A}_{\boldsymbol{x}\boldsymbol{x}}|$ large enough that $\mathbf{B} := \widetilde{\mathbf{A}}_{JJ} + \alpha I$ has all non-negative entries. Then
+531:Since $\mathbf{B} \geq 0$, each factor $I + \frac{t}{n}\mathbf{B} \geq 0$ for $t \geq 0$ and $n$ sufficiently large. Non-negative matrices are closed under multiplication, so $(I + \frac{t}{n}\mathbf{B})^n \geq 0$ for all $n$. Taking the limit and multiplying by the positive scalar $e^{-\alpha t} > 0$, we can conclude that $e^{t\widetilde{\mathbf{A}}_{JJ}} \geq 0$
+533:We now establish the contraction property for the truncated generator $\mathbf{A}_{JJ}$, which is needed for the local and global error bounds.
+537:The truncated generator $\mathbf{A}_{JJ}$ with non-positive column sums generates a positive contraction semigroup satisfying $e^{t\mathbf{A}_{JJ}} \geq 0$ and $\|e^{t\mathbf{A}_{JJ}}\|_{1 \to 1} \le 1$ for all $t \ge 0$.
+541:For the norm bound, consider any $\boldsymbol{p}(0) \geq \mathbf{0}$ with $\|\boldsymbol{p}(0)\|_1 = 1$. Since $\mathbf{1}^\top \mathbf{A}_{JJ} \leq \mathbf{0}^\top$, we have
+543:\frac{d}{dt}\|\boldsymbol{p}(t)\|_1 = \mathbf{1}^\top \mathbf{A}_{JJ}\boldsymbol{p}(t) = (\mathbf{1}^\top \mathbf{A}_{JJ})\boldsymbol{p}(t) \leq 0,
+545:which gives $\|e^{t\mathbf{A}_{JJ}}\|_{1 \to 1} \leq 1$. Positivity follows by the same shifting argument as in Proposition~\ref{prop:compressed-generator}.
+548:\begin{remark}[Infinite-dimensional extension]
+549:\label{rem:infinite-dimensional}
+550:[Omitted long matching line]
+555:\subsection{Local Error}
+557:We decompose the local error into model error from state space truncation and time-stepping error from numerical approximation.
+559:\subsubsection{Model Error from State Space Truncation}
+561:Consider the dynamics on $J$ starting from the true state $\boldsymbol{p}_J(t_n)$. The true restricted dynamics satisfy
+564:\label{eq:true-restricted}
+565:\frac{d}{dt} \boldsymbol{p}_J(t) = \mathbf{A}_{JJ}\boldsymbol{p}_J(t) + \mathbf{A}_{JJ'}\boldsymbol{p}_{J'}(t),
+567:while the compressed dynamics evolve according to
+569:\label{eq:compressed-dynamics-exact}
+570:\frac{d}{dt} \widehat{\boldsymbol{p}}_J(t) = \widetilde{\mathbf{A}}_{JJ}\widehat{\boldsymbol{p}}_J(t).
+572:Define the local model error $\boldsymbol{\varepsilon}(t) := \boldsymbol{p}_J(t) - \widehat{\boldsymbol{p}}_J(t)$ with $\boldsymbol{\varepsilon}(t_n) = \mathbf{0}$.
+576:Over a single time step $[t_n, t_{n+1}]$, the local model error satisfies
+578:\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s) + \Phi_{\mathrm{out}}(s)) \; ds.
+580:where $\Phi_{\mathrm{in}}$ and $\Phi_{\mathrm{out}}$ are boundary fluxes entering and leaving the truncation boundary respectively (Eq.~\eqref{eq:flux-defs}).
+584:Subtracting Eq.~\eqref{eq:compressed-dynamics-exact} from Eq.~\eqref{eq:true-restricted} gives the following inhomogeneous equation,
+586:\frac{d}{dt}\boldsymbol{\varepsilon}(t) &= \mathbf{A}_{JJ}\boldsymbol{\varepsilon}(t) + \underbrace{\mathbf{A}_{JJ'}\boldsymbol{p}_{J'}(t) - \diag(\mathbf{1}^\top\mathbf{A}_{J'J})\widehat{\boldsymbol{p}}_J(t)}_{=: \boldsymbol{f}(t)}.
+588:The solution of the inhomogeneous ODE is given by,
+590:\boldsymbol{\varepsilon}(t_{n+1}) &= \int_{t_n}^{t_{n+1}} e^{(t_{n+1}-s)\mathbf{A}_{JJ}}\boldsymbol{f}(s) \, ds + e^{A_{JJ}}\varepsilon(t_n). \\
+592:We set the initial condition $\varepsilon(t_n)$ to zero as we start both systems with same initial condition. Eliminating the initial condition and taking the $\ell_1$ norm both sides, we get:
+594:\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 &\leq \int_{t_n}^{t_{n+1}} \underbrace{\|e^{(t_{n+1}-s)\mathbf{A}_{JJ}}\|_{1}}_{\leq 1 (\text{Corollary \ref{cor:truncated-contraction}})}\|\boldsymbol{f}(s)\|_1 \, ds \\
+595:&\leq \int_{t_n}^{t_{n+1}} \left(\|\mathbf{A}_{JJ'}\boldsymbol{p}_{J'}(s)\|_1  +\|\diag(\mathbf{1}^\top\mathbf{A}_{J'J})\widehat{\boldsymbol{p}}_J(s)\|_1 \right)  \; ds \\
+596:&= \int_{t_n}^{t_{n+1}} ( (\mathbf{1}^\top \mathbf{A}_{JJ'})\boldsymbol{p}_{J'}(s) + (\mathbf{1}^\top\mathbf{A}_{J'J})\widehat{\boldsymbol{p}}_J(s)) \;ds \\
+597:&= \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s) + \Phi_{\mathrm{out}}(s)) \; ds.
+602:While potentially conservative, this characterization provides a computationally tractable error estimate based on readily available flux quantities. We next analyze the accumulation of these local errors over multiple time steps.
+604:\subsubsection{Matrix Exponential Approximation Error}
+605:\label{subsec:time_stepping_error_analysis}
+607:In addition to state-space truncation, we approximate the matrix exponential $\exp(\widetilde{\mathbf{A}}_{JJ}\,\Delta t)$ numerically. 
+609:\begin{proposition}[Local time-stepping error]
+611:For a matrix exponential approximation with tolerance $\epsilon_{\mathrm{ODE}}$, the error in a single time step is bounded by
+613:\|\exp(\widetilde{\mathbf{A}}_{JJ}\,\Delta t)\,\boldsymbol{v} - \mathrm{Approx}(\widetilde{\mathbf{A}}_{JJ}, \Delta t)\,\boldsymbol{v}\|_1 \le \epsilon_{\mathrm{ODE}}\,\|\boldsymbol{v}\|_1.
+615:Modern Krylov subspace implementations such as EXPOKIT \cite{Sidje1998} provide adaptive mechanisms to control this error by adjusting the Krylov subspace dimension based on the specified tolerance.
+616:\end{proposition}
+618:\subsection{Global Error}
+622:Let $e_n := \|\boldsymbol{p}(t_n) - \widetilde{\boldsymbol{p}}_n\|_1$ denote the global error, where $\widetilde{\boldsymbol{p}}_n$ is the numerical solution on $J$ extended with zeros. For $N$ time steps with $e_0 = 0$,
+624:e_N \leq \sum_{n=0}^{N-1} (\varepsilon_n + \tau_n),
+626:where $\varepsilon_n := \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s) + \Phi_{\mathrm{out}}(s)) \, ds$ is the local model error and $\tau_n := \|\widehat{\boldsymbol{p}}_{n+1} - \widetilde{\boldsymbol{p}}_{n+1}\|_1$ is the time-stepping error.
+630:We track three sources of discrepancy:
+632:\item $\boldsymbol{p}(t_n)$: true solution on full state space
+633:\item $\widehat{\boldsymbol{p}}_n$: exact solution of compressed dynamics on $J_n$ 
+634:\item $\widetilde{\boldsymbol{p}}_n$: numerical approximation on $J_n$
+639:e_n = \|\boldsymbol{p}(t_n) - \widetilde{\boldsymbol{p}}_n\|_1 \leq \|\boldsymbol{p}(t_n) - \widehat{\boldsymbol{p}}_n\|_1 + \|\widehat{\boldsymbol{p}}_n - \widetilde{\boldsymbol{p}}_n\|_1.
+642:For the first term (model error), Theorem~\ref{thm:local-model-error} and the contraction property give:
+644:\|\boldsymbol{p}(t_{n+1}) - \widehat{\boldsymbol{p}}_{n+1}\|_1 
+645:&\leq \|\boldsymbol{p}(t_n) - \widehat{\boldsymbol{p}}_n\|_1 + \varepsilon_n.
+648:For the second term (numerical error), Proposition~\ref{prop:local_time_error} gives:
+650:\|\widehat{\boldsymbol{p}}_{n+1} - \widetilde{\boldsymbol{p}}_{n+1}\|_1 \leq \|\widehat{\boldsymbol{p}}_n - \widetilde{\boldsymbol{p}}_n\|_1 + \tau_n.
+653:Combining these yields $e_{n+1} \leq e_n + \varepsilon_n + \tau_n$, and recursively expanding with with $e_0 = 0$ gives the result.
+656:Having established the local error bound in Theorem~\ref{thm:local-model-error}, we now connect the theoretical error quantities to the computational tolerances that control the adaptive algorithm. The following corollaries show how the user-specified tolerances: $\alpha$ (probability mass threshold for pruning): $\epsilon_{\mathrm{flux}}$ (flux preservation threshold), and $\epsilon_{\Delta t}$ (time step error tolerance), translate into error bounds.
+660:Under flux-based pruning with probability tolerance $\alpha$ and flux tolerance $\epsilon_{\mathrm{flux}}$, the local error over $[t_n, t_{n+1}]$ satisfies
+662:\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq (\epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}(t_n) + \alpha \cdot w_{\max}) \cdot \Delta t_n,
+664:[Omitted long matching line]
+667:By Theorem~\ref{thm:local-model-error}, the local model error satisfies
+669:\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \int_{t_n}^{t_{n+1}} (\Phi_{\mathrm{in}}(s) + \Phi_{\mathrm{out}}(s)) \, ds \approx (\Phi_{\mathrm{in}}(t_n) + \Phi_{\mathrm{out}}(t_n)) \cdot \Delta t_n
+671:for small $\Delta t_n$. Since $J'_n$ carries negligible probability after pruning, $\Phi_{\mathrm{in}}(t_n) \approx 0$ and the error is dominated by $\Phi_{\mathrm{out}}(t_n)$.
+673:By Algorithm~\ref{alg:flux-prune}, the pruned set $\mathcal{S}_{\mathrm{prune}} = \mathcal{C} \setminus \mathcal{P}$ consists of states with total probability mass at most $\alpha$ (from quantile selection) and flux below $\epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}$ (failed flux protection). The flux contribution from pruned states satisfies
+675:\sum_{x \in \mathcal{S}_{\mathrm{prune}}} p(x, t_n) \cdot w(x) \leq w_{\max} \sum_{x \in \mathcal{S}_{\mathrm{prune}}} p(x, t_n) \leq \alpha \cdot w_{\max}.
+677:States retained by flux protection contribute at most $\epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}(t_n)$ to boundary flux by construction. Combining these contributions yields $\Phi_{\mathrm{out}}(t_n) \leq \epsilon_{\mathrm{flux}} \cdot \Phi_{\mathrm{total}}(t_n) + \alpha \cdot w_{\max}$, which gives the stated bound.
+680:[Omitted long matching line]
+682:\begin{corollary}[Adaptive time step]
+683:\label{cor:flux-timestep}
+684:To ensure the local model error satisfies $\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \leq \epsilon_{\Delta t}$ for a given tolerance $\epsilon_{\Delta t} > 0$, choose
+686:\Delta t_n = \frac{\epsilon_{\Delta t}}{\Phi_{\mathrm{total}}(J_n, t_n)},
+688:where $\Phi_{\mathrm{total}}(J_n, t_n) = \sum_{\boldsymbol{x} \in J_n} p(\boldsymbol{x}, t_n) \cdot w(\boldsymbol{x})$ is the total system flux on the active set.
+692:By Theorem~\ref{thm:local-model-error}, assuming fluxes remain approximately constant over $[t_n, t_{n+1}]$ gives
+694:\|\boldsymbol{\varepsilon}(t_{n+1})\|_1 \approx [\Phi_{\mathrm{in}}(t_n) + \Phi_{\mathrm{out}}(t_n)] \Delta t_n.
+696:We bound each boundary flux separately. For the outflow, since the rate of leaving any state $\boldsymbol{x} \in J$ into the complement $J'$ is at most the total exit rate $w(\boldsymbol{x})$, i.e.,\ $\sum_{\boldsymbol{y} \in J'} \mathbf{A}_{\boldsymbol{y}\boldsymbol{x}} \leq w(\boldsymbol{x})$, we have
+698:\Phi_{\mathrm{out}}(t_n) = \sum_{\boldsymbol{x} \in J} \Big(\sum_{\boldsymbol{y} \in J'} \mathbf{A}_{\boldsymbol{y}\boldsymbol{x}}\Big) p(\boldsymbol{x}, t_n) \leq \sum_{\boldsymbol{x} \in J} w(\boldsymbol{x})\, p(\boldsymbol{x}, t_n) = \Phi_{\mathrm{total}}(J, t_n).
+700:[Omitted long matching line]
+704:Setting $\Phi_{\mathrm{total}}(J, t_n) \cdot \Delta t_n = \epsilon_{\Delta t}$ and solving for $\Delta t_n$ yields the stated formula.
+708:[Omitted long matching line]
+711:\begin{corollary}[Expansion depth for boundary control]
+712:\label{cor:expansion-depth}
+713:Let $\lambda_{\max}(J_n, t_n) := \max_{\boldsymbol{x} \in J_n,\, k} \alpha_k(\boldsymbol{x})$ denote the maximum propensity in the active set at step $n$.
+714:After expanding $J_n$ by graph depth $d$ (so that every state in the complement $J'$ requires at least $d+1$ consecutive reaction steps to reach from any state in $J_n$), the expansion-induced boundary outflux satisfies
+716:\label{eq:expansion-outflux-bound}
+717:\int_{t_n}^{t_{n+1}} \Phi_{\mathrm{out}}(s)\, ds
+719:\lambda_{\max} \,\Delta t_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\lambda_{\max}\,\Delta t_n) \geq d\bigr).
+721:To ensure this contribution to the local model error (Theorem~\ref{thm:local-model-error}) is at most $\varepsilon_{\mathrm{exp}} > 0$, choose
+723:\label{eq:expansion-depth}
+724:d_{\min} = \Bigl\lceil \mu + z_\varepsilon\,\sqrt{\mu} \Bigr\rceil,
+727:where $z_\varepsilon = \Phi^{-1}(1 - \varepsilon_{\mathrm{exp}}/\mu)$ and $\Phi$ is the standard normal CDF.
+728:Substituting the adaptive step $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ gives the depth in terms of the \emph{spatial stiffness ratio} $\kappa_n := \lambda_{\max}(J_n,t_n)/\Phi_{\mathrm{total}}(J_n,t_n) \geq 1$:
+730:\label{eq:expansion-depth-stiffness}
+731:d_{\min} = \Bigl\lceil \kappa_n\,\varepsilon_{\Delta t} + z_\varepsilon\,\sqrt{\kappa_n\,\varepsilon_{\Delta t}} \Bigr\rceil.
+736:After expanding $J_n$ by depth $d$, every state in $J'$ lies at graph distance $\geq d+1$ from any state in $J_n$.
+737:Since probability mass in $J'$ is zero at time $t_n$ (all mass resides in $J_n$), the outflux $\Phi_{\mathrm{out}}$ is driven entirely by mass that has diffused from the interior of $J_n$ to its boundary during $[t_n, t_n+s]$.
+738:Because each reaction fires at rate $\leq \lambda_{\max}$, the number of reactions along any path in time $s$ is stochastically dominated by $\mathrm{Poisson}(\lambda_{\max}\,s)$.
+739:The probability mass reaching graph distance $d$ from $J_n$ (hence capable of flowing into $J'$) by time $t_n + s$ is therefore at most $\mathrm{P}(\mathrm{Poisson}(\lambda_{\max}\,s) \geq d)$.
+740:Hence $\Phi_{\mathrm{out}}(t_n+s) \leq \lambda_{\max} \cdot \mathrm{P}(\mathrm{Poisson}(\lambda_{\max}\,s) \geq d)$, and integrating using the monotonicity of the Poisson survivor in $s$:
+742:\int_{t_n}^{t_{n+1}} \Phi_{\mathrm{out}}(s)\,ds
+744:\lambda_{\max}\,\Delta t_n \cdot \mathrm{P}\!\bigl(\mathrm{Poisson}(\lambda_{\max}\,\Delta t_n) \geq d\bigr).
+747:$\mathrm{P}(\mathrm{Poisson}(\mu) \geq d) \approx 1 - \Phi((d-\mu)/\sqrt{\mu})$,
+748:requiring $\mu \cdot \mathrm{P}(\mathrm{Poisson}(\mu) \geq d) \leq \varepsilon_{\mathrm{exp}}$ yields~\eqref{eq:expansion-depth}.
+749:Substituting $\Delta t_n = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ gives $\mu = \kappa_n\,\varepsilon_{\Delta t}$ and hence~\eqref{eq:expansion-depth-stiffness}.
+752:\begin{remark}[Consistent parameter selection via spatial stiffness]
+753:\label{rem:consistent-params}
+754:Corollaries~\ref{cor:local-error-pruning}, \ref{cor:flux-timestep}, and~\ref{cor:expansion-depth} together provide a self-consistent rule for all three user parameters, governed by the spatial stiffness ratio $\kappa = \lambda_{\max}/\Phi_{\mathrm{total}}$:
+756:  \item \textbf{Time step:} $\Delta t = \varepsilon_{\Delta t}/\Phi_{\mathrm{total}}$ \hfill (Corollary~\ref{cor:flux-timestep}),
+757:  \item \textbf{Expansion depth:} $d_{\min} = \lceil\kappa\,\varepsilon_{\Delta t}\rceil$ (leading order) \hfill (Corollary~\ref{cor:expansion-depth}),
+758:  \item \textbf{Flux tolerance:} $\varepsilon_{\mathrm{flux}} \ll \varepsilon_{\Delta t}$, e.g., $\varepsilon_{\mathrm{flux}} = \varepsilon_{\Delta t}/w_{\max}$ \hfill (Corollary~\ref{cor:local-error-pruning}).
+760:When $\kappa \approx 1$ (all reactions at comparable rates), a small fixed depth suffices.
+761:When $\kappa \gg 1$ (spatially stiff: fast downstream reactions gated by a rare slow transition), $d_{\min}$ must grow as $\kappa\,\varepsilon_{\Delta t}$ unless $\varepsilon_{\Delta t}$ is reduced accordingly.
+762:The latter trades temporal for spatial efficiency: taking smaller steps keeps each step's expansion cost manageable at the price of more steps overall.
+763:In the bottleneck example of Section~\ref{sec:results}, $\kappa \approx k_2/k_1 = 10^5$ early in the simulation; the adaptive formula would require $d_{\min} \approx 10^5$, whereas fixing $\delta t$ such that $k_2\,\delta t \approx 1$ reduces $d_{\min}$ to $O(1)$.
+768:\section{Numerical Experiments}
+769:\label{sec:results}
+772:[Omitted long matching line]
+774:\subsection{Reaction System With a Bottleneck Channel}
+776:We consider a three-species network with a slow gateway followed by fast downstream dynamics:
+780:with state $(N_A,N_B,N_C)\in\mathbb{Z}_{\ge 0}^3$, $k_1=10^{-6}\,\text{s}^{-1}$, $k_2=1\,\text{s}^{-1}$, and initial condition $(1,0,0)$. The reaction $B \to B+C$ conserves $B$ while producing $C$, creating a catalytic production pathway. The slow $A \to B$ transition acts as a bottleneck: once probability reaches states with $B \geq 1$, the fast catalytic reaction rapidly advances $C$ while maintaining $B \approx 1$.
+784:\includegraphics[width=\linewidth]{flux_vs_naive_comparison.png}
+785:[Omitted long matching line]
+786:\label{fig:flux_vs_naive}
+789:The probability mass concentrates at the initial state $(1,0,0)$ and a traveling wave front at $(0,1,C_{\max}(t))$ where $C_{\max}$ grows approximately linearly with time. Intermediate states $(0,1,C)$ for $0 < C < C_{\max}$ form a critical connectivity pathway with negligible probability but significant flux. Tables~\ref{tab:bottleneck_diagnostics} and \ref{tab:prob_flux_rankings} quantify this structure at representative timepoints during the transition phase.
+793:[Omitted long matching line]
+794:\label{tab:bottleneck_diagnostics}
+797:\textbf{Time (s)} & \textbf{$p(1,0,0)$} & \textbf{$C_{\max}$} & \textbf{$p(0,1,C_{\max})$} & \textbf{$|\mathcal{S}|$} & \textbf{Flux (s$^{-1}$)} \\
+799:$1.0 \times 10^5$ & 0.905 & 1   & 0.095 & 4     & $9.0 \times 10^{-7}$ \\
+800:$2.5 \times 10^5$ & 0.779 & 11  & 0.221 & 8     & $7.8 \times 10^{-7}$ \\
+801:$5.1 \times 10^5$ & 0.600 & 33  & 0.400 & 36    & $6.0 \times 10^{-7}$ \\
+802:$7.7 \times 10^5$ & 0.458 & 76  & 0.542 & 79    & $4.6 \times 10^{-7}$ \\
+803:$3.0 \times 10^6$ & 0.081 & 8344 & 0.910 & 9124  & $8.4 \times 10^{-8}$ \\
+810:[Omitted long matching line]
+811:\label{tab:prob_flux_rankings}
+814:\multicolumn{4}{c}{\textbf{Early time: $t = 1.0 \times 10^3$ s}} \\
+816:\textbf{Rank} & \textbf{By probability} & \textbf{By flux} & \textbf{Flux (s$^{-1}$)} \\
+818:1 & $(1,0,0)$, $p=0.999$ & $(0,1,2)$, $\phi=6.3\times10^{-5}$ & $6.3\times10^{-5}$ \\
+819:2 & $(0,1,2)$, $p=6.3 \times 10^{-4}$ & $(0,1,1)$, $\phi=3.7\times10^{-5}$ & $3.7\times10^{-5}$ \\
+820:3 & $(0,1,1)$, $p=3.7 \times 10^{-4}$ & $(0,1,0)$, $\phi=1.0\times10^{-6}$ & $1.0\times10^{-6}$ \\
+821:4 & $(0,1,0)$, $p=1.0 \times 10^{-5}$ & $(1,0,0)$, $\phi=1.0\times10^{-6}$ & $1.0\times10^{-6}$ \\
+823:\multicolumn{4}{c}{\textbf{Late time: $t = 3.0 \times 10^6$ s}} \\
+825:\textbf{Rank} & \textbf{By probability} & \textbf{By flux} & \textbf{Flux (s$^{-1}$)} \\
+827:1 & $(0,1,9122)$, $p=0.910$ & $(0,1,9121)$, $\phi=8.4\times10^{-5}$ & $8.4\times10^{-5}$ \\
+828:2 & $(1,0,0)$, $p=0.081$ & $(0,1,2697)$, $\phi=2.0\times10^{-5}$ & $2.0\times10^{-5}$ \\
+829:3 & $(0,1,9121)$, $p=8\times10^{-4}$ & $(0,1,4298)$, $\phi=3.1\times10^{-6}$ & $3.1\times10^{-6}$ \\
+830:4 & $(0,1,9120)$, $p=2\times10^{-4}$ & $(0,1,4755)$, $\phi=3.2\times10^{-7}$ & $3.2\times10^{-7}$ \\
+835:[Omitted long matching line]
+837:[Omitted long matching line]
+839:The bottleneck pathway flux $\phi \approx k_1 \cdot p(1,0,0)$ decreases proportionally as mass depletes from the initial state, ranging from $9.0 \times 10^{-7}$ s$^{-1}$ at early times down to $8.4 \times 10^{-8}$ s$^{-1}$ at $t = 3 \times 10^6$ s. Despite this decreasing flux magnitude, the intermediate states maintain flux values that are orders of magnitude larger than their probabilities, as quantified in Table~\ref{tab:prob_flux_rankings}.
+841:Figure~\ref{fig:flux_vs_naive} compares flux-based pruning against probability-only pruning. The flux-based method correctly preserves intermediate states despite their negligible probability, maintaining network connectivity and capturing the transition dynamics. State space growth is adaptive and continuous, expanding to accommodate the advancing wave front. The adaptive time step $\delta t$ begins at $\sim 10^5$ s and decreases to $\sim 10^3$ s during rapid transitions before stabilizing.
+843:[Omitted long matching line]
+845:This example demonstrates that bottleneck states are essential for preserving network ergodicity and accurate long-time dynamics. Flux-based pruning correctly identifies and retains these states even when they carry negligible mass, while probability-based thresholds incorrectly remove them. The method successfully maintains connectivity across state spaces ranging from single-digit to thousands of states, adapting the representation as the distribution evolves.
+848:\subsubsection{Experimental Error Analysis}
+851:\includegraphics[width=\textwidth]{error_accumulation_analysis.png}
+852:[Omitted long matching line]
+856:[Omitted long matching line]
+858:[Omitted long matching line]
+862:\caption{Distribution errors at $t = 10^5$ s.}
+863:\label{tab:distribution_errors}
+866:\textbf{Metric} & \textbf{Species $A$} & \textbf{Species $B$} & \textbf{Species $C$} \\
+868:Mean (Adaptive) & $0.9903$ & $9.71 \times 10^{-3}$ & $474.6$ \\
+869:Mean (Exact) & $0.9900$ & $9.95 \times 10^{-3}$ & $474.7$ \\
+870:Absolute Error & $2.5 \times 10^{-4}$ & $2.5 \times 10^{-4}$ & $0.072$ \\
+876:[Omitted long matching line]
+878:The results validate the error bound as $\mathcal{O}(10^{-4})$ relative error in means across $10^4$ time steps, constant error rate $\sim 5 \times 10^{-7}$ s$^{-1}$, and additive rather than multiplicative accumulation due to generator contraction.
+881:\subsection{Stochastic Toggle Switch Model}
+885:    \includegraphics[width=\linewidth]{toggle_switch_grid.pdf}
+887:    Joint probability contours of the stochastic toggle switch at three representative time points (\(t\approx 2, 15, 30\)). 
+888:    Columns correspond to time, while rows correspond to different adaptive--FSP configurations:
+889:    (top) pruning mass \(0.3\) with no flux filter;
+890:    (middle) pruning mass \(0.3\) with flux tolerance \(10^{-7}\);
+891:    (bottom) pruning mass \(0.001\) with no flux filter.
+892:    Black contour lines indicate probability levels, and dotted curves indicate the truncation boundary.
+893:    The right column shows the corresponding state-space size trajectories.
+895:    \label{fig:toggle_results}
+898:The stochastic toggle switch models a genetic regulatory network where two proteins ($U$ and $V$) mutually repress each other via Hill-type kinetics~\cite{tian_stochastic_2006}. The forward reactions incorporate cooperativity with Hill coefficient $n=3$ to model mutual repression, while the reverse reactions represent degradation. Table~\ref{table:toggle} details the reaction network.
+905:\textit{Reaction} & \textit{Reaction Equation} & \textit{Parameter Values} \\
+907:1 & \(\emptyset \xrightarrow{\eta\left(\alpha_1 + \frac{\beta_1K_1^3}{K_1^3+V^3}\right)} U\) & $\eta = 1.0$, $\alpha_1 = 20$, $\beta_1 = 400$, $K_1 = 100$ \\
+908:2 & \(U \xrightarrow{d_1+\frac{s\gamma}{1+s}} \emptyset\) & $d_1 = 1.0$, $s = 0.1$, $\gamma = 1.0$ \\
+909:3 & \(\emptyset \xrightarrow{\eta\left(\alpha_2 + \frac{\beta_2K_2^3}{K_2^3+U^3}\right)} V\) & $\eta = 1.0$, $\alpha_2 = 20$, $\beta_2 = 400$, $K_2 = 100$ \\
+910:4 & \(V \xrightarrow{d_2} \emptyset\) & $d_2 = 1.0$ \\
+913:\caption{Reactions and parameter values for the stochastic toggle switch model~\cite{tian_stochastic_2006, Dinh_2020}. Forward reactions incorporate Hill-type kinetics with cooperativity coefficient $n=3$ to capture mutual repression; reverse reactions represent degradation.}
+918:The system exhibits bistability as probability mass accumulates in two spatially separated regions corresponding to high expression of one protein and low expression of the other. Noise-driven transitions between these stable states occur over long timescales, requiring the adaptive method to simultaneously maintain multiple disconnected regions of state space while tracking rare switching events.
+920:We initialize at $(U, V) = (85, 5)$ with reaction rate parameters taken from~\cite{Dinh_2020} and volume scaling factor $\eta = 100$. The simulation evolves over $t \in [0, 30]$ with initial time step $\delta t = 0.05$. This setup produces a bimodal distribution by the final time, with stable peaks near $(U, V) \approx (90, 10)$ and $(10, 90)$.
+922:Figure~\ref{fig:toggle_results} examines the evolution of the joint distribution under three variants of the adaptive FSP scheme.  
+923:In all cases, the system is initialized at \((U,V)=(85,5)\) and simulated to \(t=30\).  
+924:Each column of the figure shows contour lines of \(\log_{10}(p)\) at three representative times, and each row corresponds to one truncation scheme.
+926:With pruning mass \(0.3\) and no flux filter (top row), the state space expands rapidly after initialization, resolving the dominant drift into the lower metastable well.  
+927:However, the truncation boundary is somewhat irregular and tends to either lag behind or overshoot the motion of the probability mass.  
+928:This behavior reflects the fact that pruning is governed solely by a coarse quantile threshold as many intermediate transition states fall below the quantile cutoff and may be removed prematurely, while other regions are retained longer than necessary.
+930:Introducing a flux tolerance of \(10^{-7}\) while keeping the pruning mass at \(0.3\) produces a dramatically more stable truncation (middle row).  
+931:Here the boundary follows the outermost probability contours much more tightly, especially during the intermediate regime (\(t\approx 10{-}20\)) when the distribution stretches along the switching manifold connecting the two wells.  
+932:The flux constraint protects states that carry even a small outward probability flow, preventing the removal of structurally important low-probability connectors.  
+933:The resulting state space is noticeably smaller than in the quantile-only case, while still preserving the correct geometric structure of the distribution.
+935:Reducing the pruning mass to \(0.001\) without a flux filter (bottom row) results in the most conservative truncation.  
+936:The boundary expands to include a wide region of low-probability states, producing the largest active state space among the three experiments.  
+937:[Omitted long matching line]
+940:\subsection{Oscillatory Dynamics in the Oregonator Model}
+942:[Omitted long matching line]
+944:[Omitted long matching line]
+950:We specify the steady-state populations as $(N_X^*, N_Y^*, N_Z^*) = (500, 1000, 2000)$ molecules, placing the system in the oscillatory regime. From the third equation, $k_3 N_X^* = k_5 N_Z^*$, which implies $\mu_3 = \mu_5$, where $\mu_i = k_i N_i^*$ denotes the steady-state flux through reaction $i$. Defining the characteristic fluxes $\mu_1^* = k_1 N_Y^* = 2000$ s$^{-1}$ and $\mu_2^* = k_2 N_X^* N_Y^* = 50000$ s$^{-1}$, we obtain the rate constants summarized in Table~\ref{table:oregonator}.
+954:\caption{Oregonator reaction network with mass-action kinetics and rate constants determined by steady-state flux balance at $(N_X^*, N_Y^*, N_Z^*) = (500, 1000, 2000)$ molecules.}
+958:\textit{Rxn} & \textit{Reaction} & \textit{Rate Constant} & \textit{Propensity Function}\\
+960:1 & $Y \xrightarrow{k_1} X$ & $k_1 = 2.0$ s$^{-1}$ & $k_1 N_Y$ \\
+961:2 & $X + Y \xrightarrow{k_2} \varnothing$ & $k_2 = 0.1$ molec$^{-1}$s$^{-1}$ & $k_2 N_X N_Y$ \\
+962:3 & $X \xrightarrow{k_3} 2X + Z$ & $k_3 = 104$ s$^{-1}$ & $k_3 N_X$ \\
+963:4 & $2X \xrightarrow{k_4} \varnothing$ & $k_4 = 0.016$ molec$^{-1}$s$^{-1}$ & $k_4 \frac{N_X(N_X-1)}{2}$ \\
+964:5 & $Z \xrightarrow{k_5} Y$ & $k_5 = 26$ s$^{-1}$ & $k_5 N_Z$ \\
+969:These parameters yield a period of approximately 0.85 time units with timescale separation spanning three orders of magnitude, specifically, the autocatalytic amplification (R3) at $k_3 = 104$ s$^{-1}$ drives explosive bursts, recovery (R5) operates at intermediate rate $k_5 = 26$ s$^{-1}$, and initiation (R1) proceeds slowly at $k_1 = 2.0$ s$^{-1}$. At steady-state concentrations, the inhibitory consumption (R2) dominates with flux $\mu_2^* = 50000$ s$^{-1}$.
+971:At the steady-state initial condition, the total flux is $\Phi_{\mathrm{total}} \approx 158{,}000\,\text{s}^{-1}$ and the maximum individual propensity is $\lambda_{\max} = k_3 N_X^* = 52{,}000\,\text{s}^{-1}$, giving spatial stiffness ratio $\kappa \approx 0.33$.
+972:By Corollary~\ref{cor:expansion-depth} with $\varepsilon_{\Delta t} = 1$, the required expansion depth is $d_{\min} = \lceil \kappa\,\varepsilon_{\Delta t} \rceil = 1$, so we set \texttt{expansion\_depth = 1}.
+974:Figure \ref{fig:oregonator_fsp_results} presents results over four complete oscillation cycles. The adaptive time step (panel a) varies over two orders of magnitude from $\Delta t_{\min} \approx 0.005$ during autocatalytic bursts to $\Delta t_{\max} \approx 0.04$ during recovery, tracking the instantaneous system flux and local stiffness.
+976:[Omitted long matching line]
+978:[Omitted long matching line]
+980:[Omitted long matching line]
+983:    \includegraphics[width=\linewidth]{orag.pdf}
+984:    \caption{Adaptive FSP simulation of the Oregonator system. (a) Adaptive time step variation tracking instantaneous system stiffness. (b) Dynamic state space size showing compression ratio of $\sim 10^8:1$ relative to the theoretical state space of $3.6 \times 10^{11}$ states. (c) Mean population trajectories for species $X$ (solid), $Y$ (dash-dot), and $Z$ (dotted). (d-f) Phase space projections revealing the limit cycle attractor with intrinsic stochastic fluctuations.}
+985:    \label{fig:oregonator_fsp_results}
+988:\subsection{Stiff Dynamics in the Robertson Autocatalytic System}
+990:[Omitted long matching line]
+994:\caption{Robertson autocatalytic reaction system with extreme rate constant disparity}
+995:\label{table:robertson}
+998:\textit{Rxn} & \textit{Reaction} & \textit{Rate Constant} & \textit{Propensity Function} \\
+1000:1 & $A \xrightarrow{k_1} B$ & $k_1 = 0.04$ s$^{-1}$ & $a_1 = k_1 N_A$ \\
+1001:2 & $2B \xrightarrow{k_2} B + C$ & $k_2 = 3 \times 10^7$ molec$^{-1}$s$^{-1}$ & $a_2 = k_2 \frac{N_B(N_B-1)}{2}$ \\
+1002:3 & $B + C \xrightarrow{k_3} A + C$ & $k_3 = 10^4$ molec$^{-1}$s$^{-1}$ & $a_3 = k_3 N_B N_C$ \\
+1009:    \includegraphics[width=\linewidth]{simulation_results.pdf}
+1010:[Omitted long matching line]
+1011:    \label{fig:robertson_results}
+1014:The system conserves total mass: $N_{\text{tot}} = N_A + N_B + N_C = 10000$ molecules. We initialize with $(N_A, N_B, N_C) = (10000, 0, 0)$, triggering characteristic three-phase dynamics that span eight decades of time. Figure~\ref{fig:robertson_results} demonstrates how the adaptive FSP method navigates this extreme stiffness through coordinated adjustment of time step, state space size, and flux monitoring.
+1016:At initialization, only R1 is active, giving $\Phi_{\mathrm{total}} = \lambda_{\max} = k_1 N_A = 400\,\text{s}^{-1}$ and hence $\kappa = 1$.
+1017:As $B$ accumulates, R2 rapidly comes to dominate both $\lambda_{\max}$ and $\Phi_{\mathrm{total}}$, keeping $\kappa \approx 1$ throughout the simulation.
+1018:By Corollary~\ref{cor:expansion-depth} with $\varepsilon_{\Delta t} = 0.01$, this gives $d_{\min} = \lceil \kappa\,\varepsilon_{\Delta t} \rceil = 1$, so we set \texttt{expansion\_depth = 1}.
+1020:[Omitted long matching line]
+1022:[Omitted long matching line]
+1024:[Omitted long matching line]
+1027:\subsection{Performance Evaluation of Matrix Construction}
+1029:In this subsection we evaluate the matrix construction strategy introduced in Section~\ref{sec:matrix_construction}. The forward enumeration approach constructs the generator by iterating through reactions for each state, directly computing destination states as $y = x + \nu_k$. We benchmark this strategy against a standard implementation that uses backward state expansion on the Oregonator, ROBER, and toggle switch models.
+1031:[Omitted long matching line]
+1035:\includegraphics[width=\textwidth]{benchmark_comparison.pdf}
+1036:\caption{Performance comparison of standard construction (solid line) and forward enumeration (dashed line) at $t \approx 170$ with state space sizes 1106 $\to$ 1431. (a) Probability density functions on logarithmic scale with median markers at 6.95~ms and 0.54~ms. (b) Cumulative distribution functions showing 12.9$\times$ speedup: forward enumeration completes 50\% of trials by 0.54~ms versus 6.95~ms for standard construction.}
+1042:\caption{Benchmark statistics for matrix construction methods on ROBER model at $t \approx 170$ (state space sizes 1106 $\to$ 1431).}
+1046:Method & Median (ms) & Mean (ms) & Std. Dev. (ms) \\
+1048:Standard construction & 6.95 & 7.38 & 2.33 \\
+1051:Speedup & 12.9$\times$ & 10.4$\times$ & --- \\
+1055:[Omitted long matching line]
+1059:\includegraphics[width=\textwidth]{speed.pdf}
+1060:\caption{Wall-clock time per integration step for FSP simulations with forward enumeration (solid) and standard construction (dotted). (a) Oregonator. (b) ROBER. (c) Toggle switch. Forward enumeration consistently outperforms standard construction across all systems.}
+1061:\label{fig:speed_comparison}
+1064:Table~\ref{tab:walltime} summarizes total simulation times. The toggle switch achieves the largest speedup at 9.8$\times$ (364~s reduced to 37~s), benefiting from slower reaction timescales and compact state space geometry. The Oregonator and ROBER systems achieve 3.9$\times$ and 3.5$\times$ speedups respectively (4000~s $\to$ 1093~s and 10421~s $\to$ 3015~s). The consistent performance gains across diverse system types demonstrate that forward enumeration is the preferred construction method.
+1068:\caption{Total wall-clock times for complete FSP simulations.}
+1072:System & Standard (s) & Optimized (s) & Speedup \\
+1074:Oregonator & 4000 & 1093 & 3.9$\times$ \\
+1075:ROBER & 10421 & 3015 & 3.5$\times$ \\
+1076:Toggle switch & 364 & 37 & 9.8$\times$ \\
+1081:\subsection{Comparison with Krylov-FSP-SSA}
+1082:\label{sec:comparison}
+1084:[Omitted long matching line]
+1087:Table~\ref{tab:comparison_oregonator} and Figure~\ref{fig:oregonator_comparison} compare the two methods on the Oregonator system over $[0, 0.11]$.
+1088:[Omitted long matching line]
+1092:\caption{Oregonator comparison: flux-based adaptive FSP vs.\ Krylov-FSP-SSA.}
+1093:\label{tab:comparison_oregonator}
+1098:Wall time (s) & 41 & 438 \\
+1099:Snapshots / Iterations & 28 & 10{,}000 \\
+1100:Time reached & 0.11 (complete) & 0.01 (9\%) \\
+1103:Rejections & --- & 0 \\
+1110:    \includegraphics[width=\linewidth]{oregonator_comparison.pdf}
+1111:    \caption{Oregonator: FP-FSP (solid blue) vs.\ Krylov-FSP-SSA (dashed red). (a) State space size: Krylov-FSP-SSA grows to $\sim$16{,}000 states without flux-based pruning, while FP-FSP maintains $<$1{,}100. (b) Time step: FP-FSP adjusts $\Delta t$ over two orders of magnitude; Krylov-FSP-SSA is fixed at $\tau = 10^{-6}$.}
+1112:    \label{fig:oregonator_comparison}
+1116:[Omitted long matching line]
+1118:[Omitted long matching line]
+1122:\caption{Bottleneck comparison: connectivity preservation under flux-based vs.\ probability-only pruning.}
+1123:\label{tab:comparison_bottleneck}
+1128:Wall time (s) & 0.4 & ${<}0.1$ \\
+1129:Steps / Iterations & 1{,}000 ($\delta t=10$) & 100 ($\tau=100$, $\varepsilon=10^{-2}$) \\
+1133:$B \geq 1$ state retained & Yes & No \\
+1140:    \includegraphics[width=\linewidth]{bottleneck_comparison.pdf}
+1141:    \caption{Bottleneck system: FP-FSP (solid blue) vs.\ Krylov-FSP-SSA (dashed red). (a) Mean $\langle C \rangle$ trajectory: FP-FSP tracks the reference growth of species~$C$, while Krylov-FSP-SSA underestimates production after connectivity is lost. (b) Mean $\langle B \rangle$ trajectory.}
+1142:    \label{fig:bottleneck_comparison}
+1145:\paragraph{Robertson.}
+1146:[Omitted long matching line]
+1148:[Omitted long matching line]
+1152:\caption{Robertson comparison ($t_f = 10$): both methods complete, with different cost profiles.}
+1153:\label{tab:comparison_robertson}
+1158:Wall time (s) & 877 & 0.35 \\
+1159:Total iterations & 147 & 101 \\
+1161:Rejections & --- & 0 \\
+1168:    \includegraphics[width=\linewidth]{robertson_comparison.pdf}
+1169:    \caption{Robertson system: Krylov-FSP-SSA time step $\tau$ vs.\ iteration, showing the initial halving cascade from $\tau_{\mathrm{init}} = 10^{-1}$ down to ${\sim}10^{-14}$, followed by rapid recovery once the matrix exponential absorbs the fast transient.}
+1170:    \label{fig:robertson_comparison}
+1174:[Omitted long matching line]
+1176:\subsection{Efficiency Under Corrected Krylov-FSP-SSA Parameters}
+1177:\label{subsec:corrected_efficiency}
+1179:A natural question is whether the efficiency advantages in Tables~\ref{tab:comparison_oregonator}--\ref{tab:comparison_robertson} hold when Krylov-FSP-SSA parameters are tuned to produce \emph{correct} results. Table~\ref{tab:corrected_efficiency} summarises this comparison.
+1181:\textbf{Oregonator.} The $\tau$-lock at $\tau \approx 10^{-6}$ arises because the Krylov matrix exponential loses mass conservation for any larger step, owing to the large individual propensities ($k_3 X Z \sim 10^5$). This is independent of $\varepsilon$: tighter pruning reduces $|\mathcal{S}|$ but does not lower the propensity of the surviving states. Krylov-FSP-SSA therefore cannot complete $t_f = 0.11$ at any practical efficiency, regardless of parameter tuning.
+1183:[Omitted long matching line]
+1185:[Omitted long matching line]
+1187:[Omitted long matching line]
+1189:[Omitted long matching line]
+1193:\caption{Efficiency with corrected Krylov-FSP-SSA parameters on the bottleneck system ($t_f = 10^4$). Best result over a sweep of $(\varepsilon, \tau, r)$ is $\langle C \rangle \approx 4.72$ ($\sim$5\% error) at comparable wall time to FP-FSP ($\langle C \rangle = 4.98$, ${<}0.1\%$ error). FP-FSP times for other systems from Tables~\ref{tab:comparison_oregonator}--\ref{tab:comparison_robertson}.}
+1197:System & FP-FSP & KrylovFSP (default) & KrylovFSP (best tuned) & Verdict \\
+1199:Oregonator & 41\,s & 438\,s, 9\% & DNF ($\tau$-lock, all $\varepsilon$) & FP-FSP wins \\
+1200:Bottleneck & 0.4\,s & ${<}0.1$\,s, $\langle C\rangle{\approx}0$ & 0.9\,s, $\langle C\rangle{\approx}4.72$ (${\sim}5\%$ err) & FP-FSP: ${<}0.1\%$ err \\
+1201:Robertson $t_f{=}10^4$ & ${>}877$\,s (est.) & DNF (0.5\%) & DNF (0.5\%, same) & FP-FSP survives \\
+1206:[Omitted long matching line]
+1208:\section{Discussion}
+1209:\label{sec:discussion}
+1211:[Omitted long matching line]
+1213:[Omitted long matching line]
+1215:[Omitted long matching line]
+1218:[Omitted long matching line]
+1220:[Omitted long matching line]
+1223:From an implementation perspective, several steps of the algorithm can be parallelization. Boundary expansion factorizes over reactions, matrix construction over columns, and Krylov iterations over sparse matrix–vector products. Distributed-memory implementations that partition the state space and communicate flux information along partition boundaries could extend the reach of the method to larger problems without changing the underlying analysis.
+1225:[Omitted long matching line]
+1229:\section{Conclusion}
+1230:\label{sec:conclusions}
+1232:[Omitted long matching line]
+1235:\section{Acknowledgments} We thank the anonymous reviewers for their valuable feedback. The suggestion to examine the bottleneck state example was particularly impactful in clarifying the core motivation for our flux-based approach. The first author also acknowledges Ricky Lee (UC Santa Barbara) for helpful discussions on the mathematical derivations.
+1237:\bibliographystyle{siamplain}
+1238:\bibliography{references}
