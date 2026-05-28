@@ -25,6 +25,7 @@ include("adaptive_fsp/terminal_progress.jl")
 # Spatially adaptive FSP (new approach)
 include("spatial_adaptive/bd_spatial_fsp.jl")
 include("spatial_adaptive/flux_vcycle.jl")
+include("spatial_adaptive/joint_rdme_fsp.jl")
 # Schlögl as AbstractSpatialRDMEModel (must come after rdme_model.jl defines SchloglModel1D)
 
 # RDME multigrid FSP
@@ -134,6 +135,7 @@ export fine_mean_grid, fine_status_grid, diagnose, place_molecules!
 
 # Spatial adaptive FSP exports
 export BirthDeathRDME, BranchingDeathRDME, SpatialRDME, SpatialFSP, set_ic!, step!, n_active
+export JointRDMEFSP, n_fine, n_interior, n_tracked, n_joint_states, wavefront_radius, wavefront_radius_mean
 export RDMEExperiment, build_state, rect_grid
 export ZeroIC, CenterIC, VoxelIC, RandomIC
 export FluxGraph, build_flux_graph, update_flux!, evolve_flux_vcycle!

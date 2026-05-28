@@ -1,0 +1,11 @@
+Scanning c3 for Maxwell point  (K=80, T=10, D=2.0)
+
+      c3   n_lo   n_un   n_hi    Δfront
+    14.0     18     96    151       0.0   near zero ✓
+    15.0     20     92    154       0.0   near zero ✓
+    16.0     22     88    156       0.0   near zero ✓
+    17.0     24     84    158       0.0   near zero ✓
+    18.0     27     79    160      10.0   hi expands
+    19.0     30     75    161      10.0   hi expands
+    20.0     33     69    163      10.0   hi expands
+    21.0     38     63    164      10.0   hi expands

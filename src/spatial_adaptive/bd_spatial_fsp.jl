@@ -102,7 +102,19 @@ mutable struct SpatialFSP
     use_joint_vcycle    :: Bool     # V-cycle on the joint active region
     joint_vcycle_τ_pre  :: Float64  # pre-smooth time (intra-pair diffusion)
     joint_vcycle_τ_post :: Float64  # post-smooth time
-    use_multigrid       :: Bool     # true multigrid: L0 voxels → L1 pairs → L2 quads
+    use_multigrid       :: Bool     # true multigrid: generalized spatial V-cycle
+    multigrid_levels    :: Int      # number of spatial levels (1=pairs, 2=quads, 3=8-blocks…)
+    use_block_exact         :: Bool     # exact Galerkin pairs: full 2-body joint CME, ADI H/V passes
+    use_block_vcycle_4body  :: Bool     # 2×2 block V-cycle: compact rstep restrict + correction prolong
+    block_vcycle_4body_max  :: Int      # max rstep-expanded states per block (skip dense interior)
+    use_amg_block           :: Bool     # no mean-field: 2×2 active + frontier joint, rstep state space
+    amg_block_max_states    :: Int      # max rstep states per extended block
+    amg_activate_tol        :: Float64  # activate frontier voxel if P(n≥1) > this
+    # Organic activation: bypass pending_flux accumulation entirely.
+    # Activate empty neighbor nb when any adjacent tracked voxel k has P(n_k>0) > ε_organic.
+    # Eliminates activation delay (ε_expand) — the main source of wave speed error.
+    organic_activation :: Bool
+    ε_organic          :: Float64
 end
 
 function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
@@ -126,7 +138,16 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                     use_joint_vcycle::Bool = false,
                     joint_vcycle_τ_pre::Float64 = 0.0,
                     joint_vcycle_τ_post::Float64 = 0.0,
-                    use_multigrid::Bool = false)
+                    use_multigrid::Bool = false,
+                    multigrid_levels::Int = 3,
+                    use_block_exact::Bool = false,
+                    use_block_vcycle_4body::Bool = false,
+                    block_vcycle_4body_max::Int = 3000,
+                    use_amg_block::Bool = false,
+                    amg_block_max_states::Int = 30_000,
+                    amg_activate_tol::Float64 = 1e-4,
+                    organic_activation::Bool = false,
+                    ε_organic::Float64 = 1e-4)
     n_max_eq_val = n_max_eq > 0 ? n_max_eq :
                    has_finite_local_ss(model) ? max(12, round(Int, 4 * ss_mean(model)) + 4) :
                    max(12, n_max)
@@ -143,7 +164,10 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                use_block_vcycle, block_state_tol, block_max_states,
                block_expand_depth, block_pre_frac, block_post_frac,
                use_joint_vcycle, joint_vcycle_τ_pre, joint_vcycle_τ_post,
-               use_multigrid)
+               use_multigrid, multigrid_levels,
+               use_block_exact, use_block_vcycle_4body, block_vcycle_4body_max,
+               use_amg_block, amg_block_max_states, amg_activate_tol,
+               organic_activation, ε_organic)
 end
 
 function set_ic!(s::SpatialFSP, idx::CartesianIndex{2}, n0::Int)
@@ -971,6 +995,51 @@ function _evolve_joint_active!(s::SpatialFSP,
     true
 end
 
+function _build_pair_system_full(model :: AbstractSpatialRDMEModel,
+                                v1    :: CartesianIndex{2},
+                                v2    :: CartesianIndex{2},
+                                means :: Dict{CartesianIndex{2}, Float64},
+                                K_x   :: Int,
+                                K_y   :: Int)
+    d = jump_rate(model)
+    stoichs      = CartesianIndex{2}[]
+    propensities = Function[]
+    pair_set     = (v1, v2)
+
+    # Local reactions for each voxel
+    for p in 1:2
+        let p = p
+            ep = _eu_local(p, 2)
+            push!(stoichs,  ep); push!(propensities, (x,r,t) -> local_birth_rate(model, Tuple(x)[p]))
+            push!(stoichs, -ep); push!(propensities, (x,r,t) -> model.k_d * max(0, Tuple(x)[p]))
+        end
+    end
+
+    # Intra-pair diffusion
+    push!(stoichs, CartesianIndex(-1, 1))
+    push!(propensities, (x,r,t) -> d * max(0, Tuple(x)[1]))
+    push!(stoichs, CartesianIndex( 1,-1))
+    push!(propensities, (x,r,t) -> d * max(0, Tuple(x)[2]))
+
+    # External coupling: each voxel's non-pair neighbors
+    for (p, vox) in ((1, v1), (2, v2))
+        for nb in grid_neighbors(vox, K_x, K_y)
+            (nb === v1 || nb === v2) && continue
+            μ_nb = get(means, nb, 0.0)
+            let p = p, μ_nb = μ_nb
+                ep = _eu_local(p, 2)
+                push!(stoichs, -ep)
+                push!(propensities, (x,r,t) -> d * max(0, Tuple(x)[p]))
+                μ_nb > 0.0 || continue
+                push!(stoichs,  ep)
+                push!(propensities, (x,r,t) -> d * μ_nb)
+            end
+        end
+    end
+
+    DiscreteStochasticSystem{CartesianIndex{2}}(stoichs, propensities)
+end
+
 function _build_block_system(model::AbstractSpatialRDMEModel,
                              block::NTuple{4, CartesianIndex{2}},
                              means::Dict{CartesianIndex{2}, Float64},
@@ -1233,6 +1302,235 @@ function _evolve_block_vcycle(s::SpatialFSP,
     prune_threshold!(sp_new, s.block_state_tol)
     renormalize!(sp_new) > 0.0 || return nothing
     sp_new
+end
+
+# ─── Exact-Galerkin joint evolution (no total-count restriction) ─────────────
+#
+# Pair (2-body, ADI): Q_pair = L₁ + L₂ + D₁₂ — 1D coarsening, alternating H/V
+#
+# Block V-cycle (4-body): proper 2-level multigrid
+#   Restriction:  compact rstep seed (top-k states/voxel) + depth-d expansion
+#   Coarse solve: full 4-body joint CME with all 4 intra-block diffusion directions
+#   Prolongation: multiplicative correction  p_new = p_pre * (marg_final/marg_init)
+#                 preserves pre-smooth information, corrects only what the joint adds
+
+"""
+    _evolve_block_vcycle_4body(model, block, p_vox, means, K_x, K_y, dt, n_max; ...)
+
+2×2 block V-cycle for the RDME:
+  1. Pre-smooth: per-voxel expv for τ = dt * tau_pre_frac
+  2. Restrict:   top seed_k states per voxel → product → rstep expand (depth rstep_depth)
+  3. Project:    per-voxel probability onto rstep subspace (independence approx)
+  4. Coarse solve: evolve joint 4-body CME for τ_coarse = dt * (1 - 2*tau_pre_frac)
+  5. Prolongate:  p_new[n] = p_pre[n] * (marg_final[n] / marg_init[n])
+                  (states outside subspace keep p_pre unchanged)
+
+Returns NTuple{4, Vector{Float64}} of updated per-voxel distributions, or nothing on fail.
+"""
+function _evolve_block_vcycle_4body(model        :: AbstractSpatialRDMEModel,
+                                     block        :: NTuple{4, CartesianIndex{2}},
+                                     p_vox        :: NTuple{4, Vector{Float64}},
+                                     means        :: Dict{CartesianIndex{2}, Float64},
+                                     K_x          :: Int, K_y :: Int,
+                                     dt           :: Float64,
+                                     n_max        :: Int;
+                                     krylov_m     :: Int     = 30,
+                                     state_tol    :: Float64 = 1e-10,
+                                     max_states   :: Int     = 3000,
+                                     tau_pre_frac :: Float64 = 0.3,
+                                     seed_k       :: Int     = 3,
+                                     rstep_depth  :: Int     = 2)
+
+    d    = jump_rate(model)
+    τ_pre    = dt * tau_pre_frac
+    τ_coarse = dt - τ_pre            # joint CME covers the rest; no post-smooth
+    τ_coarse ≤ 0.0 && return nothing
+
+    block_set = Set(block)
+
+    # ── 1. Pre-smooth (external coupling only) ───────────────────────────────
+    # Intra-block diffusion is handled exclusively by the joint CME.
+    # Including it here would double-count it and homogenize the block.
+    p_pre = ntuple(k -> begin
+        idx      = block[k]
+        ext_ns   = filter(nb -> !(nb in block_set), grid_neighbors(idx, K_x, K_y))
+        μ_in     = sum(get(means, nb, 0.0) for nb in ext_ns; init = 0.0)
+        in_rate  = d * μ_in
+        out_coef = d * length(ext_ns)
+        isempty(ext_ns) ?
+            copy(p_vox[k]) :
+            _expv_voxel(model, in_rate, out_coef, p_vox[k], Float64(τ_pre), krylov_m)
+    end, 4)
+
+    # ── 2. Compact rstep restriction: top-seed_k states per voxel ────────────
+    top_idx = ntuple(k -> begin
+        p   = p_pre[k]
+        nz  = count(>(state_tol), p)
+        k_s = max(1, min(seed_k, nz))
+        partialsortperm(p, 1:k_s; rev = true)
+    end, 4)
+
+    sp = StateSpace{CartesianIndex{4}, Float64}()
+    for i1 in top_idx[1], i2 in top_idx[2], i3 in top_idx[3], i4 in top_idx[4]
+        add_state!(sp, CartesianIndex(i1-1, i2-1, i3-1, i4-1), 1.0)
+    end
+    isempty(sp.states) && return nothing
+
+    sys_full, _, _ = _build_block_system(model, block, means, K_x, K_y)
+    expand!(sp, sys_full, x -> _block_bc(x, n_max); depth = rstep_depth)
+    length(sp) > max_states && return nothing
+
+    # ── 3. Project pre-smoothed probability onto rstep subspace ─────────────
+    for (i, ci) in enumerate(sp.states)
+        t = Tuple(ci)
+        sp.probs[i] = prod(k -> p_pre[k][t[k]+1], 1:4)
+    end
+    s_init = sum(sp.probs)
+    s_init ≤ 0.0 && return nothing
+    sp.probs ./= s_init
+
+    marg_init = _block_marginals(sp, n_max)   # marginals before coarse solve
+
+    # ── 4. Coarse solve ──────────────────────────────────────────────────────
+    A, = build_generator(sp, sys_full, nothing, 0.0)
+    sp.probs .= expv(Float64(τ_coarse), A, sp.probs; m = min(krylov_m, size(A, 1)))
+    _clean!(sp.probs, state_tol)
+    renormalize!(sp) > 0.0 || return nothing
+
+    marg_final = _block_marginals(sp, n_max)  # marginals after coarse solve
+
+    # ── 5. Multiplicative correction prolongation ────────────────────────────
+    # p_new[n] = p_pre[n] * (marg_final[n] / marg_init[n])
+    # States outside subspace (marg_init[n]=0): keep p_pre unchanged.
+    ntuple(k -> begin
+        p_out = copy(p_pre[k])
+        mi = marg_init[k];  mf = marg_final[k]
+        for n in 0:n_max
+            mi[n+1] > state_tol || continue
+            p_out[n+1] = p_pre[k][n+1] * (mf[n+1] / mi[n+1])
+        end
+        _clean!(p_out, state_tol)
+        p_out
+    end, 4)
+end
+
+function _step_block_vcycle_4body!(s        :: SpatialFSP,
+                                    means    :: Dict{CartesianIndex{2}, Float64},
+                                    dt       :: Float64;
+                                    krylov_m :: Int = 30,
+                                    step_idx :: Int = 0)
+    # 4-step offset cycle so every row-pair and col-pair gets V-cycle coupled:
+    #   pass 0: anchors at (odd_row,  odd_col)   → (1,1),(1,3),(3,1),(3,3)...
+    #   pass 1: anchors at (even_row, even_col)  → (2,2),(2,4),(4,2),(4,4)...
+    #   pass 2: anchors at (odd_row,  even_col)  → (1,2),(1,4),(3,2),(3,4)...
+    #   pass 3: anchors at (even_row, odd_col)   → (2,1),(2,3),(4,1),(4,3)...
+    pass    = step_idx % 4
+    i_off   = pass ∈ (1, 3) ? 1 : 0   # row offset: 0=odd start, 1=even start
+    j_off   = pass ∈ (1, 2) ? 1 : 0   # col offset
+    K_x, K_y = s.K_x, s.K_y
+    preferred = [CartesianIndex(i, j)
+                 for i in (1+i_off):2:(K_x-1) for j in (1+j_off):2:(K_y-1)]
+    anchors   = _select_active_blocks(s.dists, K_x, K_y, preferred)
+    handled   = Set{CartesianIndex{2}}()
+
+    for anchor in anchors
+        block = _block_voxels(anchor)
+        p_vox = ntuple(k -> s.dists[block[k]], 4)
+
+        result = _evolve_block_vcycle_4body(s.model, block, p_vox, means,
+                                            s.K_x, s.K_y, dt, s.n_max;
+                                            krylov_m,
+                                            state_tol    = s.block_state_tol,
+                                            max_states   = s.block_vcycle_4body_max,
+                                            tau_pre_frac = s.block_pre_frac)
+        result === nothing && continue
+
+        for (k, idx) in enumerate(block)
+            m = result[k];  sm = sum(m)
+            sm > 0 || continue   # degenerate → fall through to per-voxel
+            s.dists[idx] = m ./ sm
+            push!(handled, idx)
+        end
+    end
+    handled
+end
+
+function _evolve_pair_exact(model    :: AbstractSpatialRDMEModel,
+                             v1      :: CartesianIndex{2},
+                             v2      :: CartesianIndex{2},
+                             p1      :: Vector{Float64},
+                             p2      :: Vector{Float64},
+                             means   :: Dict{CartesianIndex{2}, Float64},
+                             K_x     :: Int, K_y :: Int,
+                             dt      :: Float64,
+                             n_max   :: Int;
+                             krylov_m  :: Int   = 30,
+                             state_tol :: Float64 = 1e-10,
+                             max_states :: Int  = 2000)
+
+    # Build sparse product state
+    supp1 = findall(>(state_tol), p1); isempty(supp1) && (supp1 = [argmax(p1)])
+    supp2 = findall(>(state_tol), p2); isempty(supp2) && (supp2 = [argmax(p2)])
+    length(supp1) * length(supp2) > max_states && return nothing
+
+    sp = StateSpace{CartesianIndex{2}, Float64}()
+    for i1 in supp1, i2 in supp2
+        w = p1[i1] * p2[i2]; w > state_tol || continue
+        add_state!(sp, CartesianIndex(i1 - 1, i2 - 1), w)
+    end
+    isempty(sp.states) && return nothing
+    renormalize!(sp)
+
+    # Full pair system: reactions + intra-diffusion + external coupling
+    sys = _build_pair_system_full(model, v1, v2, means, K_x, K_y)
+    bc  = x -> all(c -> 0 ≤ c ≤ n_max, Tuple(x))
+
+    expand!(sp, sys, bc; depth = 1)
+    length(sp) > max_states && return nothing
+
+    # Evolve full joint CME — exact Galerkin, no restriction
+    A, = build_generator(sp, sys, nothing, 0.0)
+    sp.probs .= expv(Float64(dt), A, sp.probs; m = min(krylov_m, size(A, 1)))
+    _clean!(sp.probs, state_tol)
+
+    # Extract marginals
+    p1_new = zeros(n_max + 1); p2_new = zeros(n_max + 1)
+    for (ci, prob) in zip(sp.states, sp.probs)
+        t = Tuple(ci)
+        t[1] ≤ n_max && (p1_new[t[1] + 1] += prob)
+        t[2] ≤ n_max && (p2_new[t[2] + 1] += prob)
+    end
+    s1 = sum(p1_new); s2 = sum(p2_new)
+    s1 > 0 && (p1_new ./= s1); s2 > 0 && (p2_new ./= s2)
+    (p1_new, p2_new)
+end
+
+function _step_pair_exact!(s        :: SpatialFSP,
+                            means    :: Dict{CartesianIndex{2}, Float64},
+                            dt       :: Float64;
+                            krylov_m :: Int  = 30,
+                            row_pass :: Bool = true)
+    n_max     = s.n_max
+    state_tol = s.block_state_tol
+    max_s     = s.block_max_states
+    Δ = row_pass ? CartesianIndex(0, 1) : CartesianIndex(1, 0)
+
+    handled = Set{CartesianIndex{2}}()
+    for v1 in keys(s.dists)
+        v1 ∈ handled && continue
+        v2 = v1 + Δ
+        haskey(s.dists, v2) || continue
+        v2 ∈ handled && continue
+
+        result = _evolve_pair_exact(s.model, v1, v2,
+                                    s.dists[v1], s.dists[v2],
+                                    means, s.K_x, s.K_y, dt, n_max;
+                                    krylov_m, state_tol, max_states = max_s)
+        result === nothing && continue
+        s.dists[v1], s.dists[v2] = result
+        push!(handled, v1); push!(handled, v2)
+    end
+    handled
 end
 
 # ─── Multi-level stochastic prolongation for pair V-cycle ────────────────────
@@ -1625,143 +1923,375 @@ function _mg_correct(p_this::Vector{Float64}, p_other::Vector{Float64},
     s > 1e-300 ? out./s : copy(p_this)   # fallback: identity if correction collapses
 end
 
+# Galerkin prolongation: reconstruct per-voxel marginals from the updated
+# pair total-count distribution p_new(N) using the conditional
+#   φ_N(n1) ∝ p1_ref(n1) * p2_ref(N-n1)
+# This is the Galerkin-optimal prolongation: the coarse variable is N=n1+n2,
+# the intra-pair transitions at fixed N are symmetric diffusion hops whose
+# stationary is Binomial(N,1/2), and the marginal product p1_ref*p2_ref
+# encodes the current spatial distribution within each N-fiber (from the
+# pre-smooth step).  Falls back to the uniform (binomial) conditional when
+# the marginal product has no support at a given N.
+function _prolong_galerkin(p_new  :: Vector{Float64},
+                            p1_ref :: Vector{Float64},
+                            p2_ref :: Vector{Float64},
+                            n_max  :: Int,
+                            stol   :: Float64)
+    p1_out = zeros(n_max + 1)
+    p2_out = zeros(n_max + 1)
+    for N in 0:2*n_max
+        N + 1 > length(p_new) && continue
+        p_new[N+1] < stol && continue
+        n1_lo = max(0, N - n_max)
+        n1_hi = min(N, n_max)
+        # Conditional φ_N(n1) ∝ p1_ref(n1) * p2_ref(N-n1)
+        s = 0.0
+        for n1 in n1_lo:n1_hi
+            s += p1_ref[n1+1] * p2_ref[N-n1+1]
+        end
+        if s < stol
+            # Fallback: uniform over valid N-fiber (≡ Binomial(N,1/2) weight)
+            cnt = n1_hi - n1_lo + 1
+            cnt <= 0 && continue
+            w = p_new[N+1] / cnt
+            for n1 in n1_lo:n1_hi
+                p1_out[n1+1] += w
+                p2_out[N-n1+1] += w
+            end
+        else
+            w = p_new[N+1] / s
+            for n1 in n1_lo:n1_hi
+                c = w * p1_ref[n1+1] * p2_ref[N-n1+1]
+                p1_out[n1+1] += c
+                p2_out[N-n1+1] += c
+            end
+        end
+    end
+    s1 = sum(p1_out); s2 = sum(p2_out)
+    s1 > 1e-300 && (p1_out ./= s1)
+    s2 > 1e-300 && (p2_out ./= s2)
+    p1_out, p2_out
+end
+
+# Build the joint product state p1⊗p2, apply intra-pair diffusion for τ,
+# then return (p1_smoothed, p2_smoothed, p_total_count).  Used at ℓ=1 in
+# _step_multigrid! so the L1 restriction carries intra-pair correlations.
+# Returns nothing if the pair state space is too large.
+function _presmooth_pair(
+        d         :: Float64,
+        n_max     :: Int,
+        p1        :: Vector{Float64},
+        p2        :: Vector{Float64},
+        τ         :: Float64;
+        stol      :: Float64 = 1e-8,
+        krylov_m  :: Int     = 30,
+        max_states :: Int    = 2000)
+
+    supp1 = findall(>(stol), p1); isempty(supp1) && (supp1 = [argmax(p1)])
+    supp2 = findall(>(stol), p2); isempty(supp2) && (supp2 = [argmax(p2)])
+    length(supp1) * length(supp2) > max_states && return nothing
+
+    sp = StateSpace{CartesianIndex{2}, Float64}()
+    for i1 in supp1, i2 in supp2
+        w = p1[i1] * p2[i2]
+        w > stol || continue
+        add_state!(sp, CartesianIndex(i1-1, i2-1), w)
+    end
+    isempty(sp.states) && return nothing
+    renormalize!(sp)
+
+    pair_intra = DiscreteStochasticSystem{CartesianIndex{2}}(
+        [CartesianIndex(-1,1), CartesianIndex(1,-1)],
+        [(x,r,t) -> d*max(0,Tuple(x)[1]),
+         (x,r,t) -> d*max(0,Tuple(x)[2])])
+    bc2 = x -> all(c -> 0 ≤ c ≤ n_max, Tuple(x))
+    expand!(sp, pair_intra, bc2; depth=1)
+    length(sp) > max_states && return nothing
+
+    if τ > 0.0 && !isempty(sp.states)
+        A, = build_generator(sp, pair_intra, nothing, 0.0)
+        sp.probs .= expv(τ, A, sp.probs; m=min(krylov_m, size(A,1)))
+        _clean!(sp.probs, stol)
+    end
+
+    p1_new = zeros(n_max + 1); p2_new = zeros(n_max + 1)
+    for (ci, prob) in zip(sp.states, sp.probs)
+        t = Tuple(ci)
+        t[1] ≤ n_max && (p1_new[t[1]+1] += prob)
+        t[2] ≤ n_max && (p2_new[t[2]+1] += prob)
+    end
+    s1 = sum(p1_new); s1 > 0 && (p1_new ./= s1)
+    s2 = sum(p2_new); s2 > 0 && (p2_new ./= s2)
+
+    nmax2 = 2 * n_max
+    p_total = zeros(nmax2 + 1)
+    for (ci, prob) in zip(sp.states, sp.probs)
+        N = sum(Tuple(ci)); N <= nmax2 && (p_total[N+1] += prob)
+    end
+    p_total ./= max(sum(p_total), 1e-100)
+
+    (p1_new, p2_new, p_total)
+end
+
 """
     _step_multigrid!(s, means, dt; krylov_m, row_pass) → handled::Set
 
 Three-level multigrid V-cycle for the RDME active wavefront.
 
 Levels: L0 (per-voxel) → L1 (pairs, total N₂) → L2 (quads, total N₄).
-Each level coarsens the spatial scale by 2×; the coarse CME solve at L2
-captures collective molecular dynamics across the 2×2 block and feeds
-multiplicative corrections back down to individual voxels.
+Each level coarsens the spatial scale by 2×; the coarse CME solve at the
+deepest level captures collective molecular dynamics and feeds multiplicative
+corrections back down to individual voxels.
+
+Pairing direction alternates each level (ADI-style):
+  odd  levels → Δ_par  (row-pass: horizontal, col-pass: vertical)
+  even levels → Δ_perp (perpendicular)
+
+Between-representative offset at level ℓ: Δ(ℓ+1) × 2^(ℓ÷2)
+This gives: L1=pairs, L2=2×2 quads, L3=2×4 blocks, L4=4×4 blocks, …
 """
-function _step_multigrid!(s     :: SpatialFSP,
-                           means :: Dict{CartesianIndex{2},Float64},
-                           dt    :: Float64;
-                           krylov_m :: Int  = 30,
-                           row_pass :: Bool = true,
+function _step_multigrid!(s        :: SpatialFSP,
+                           means    :: Dict{CartesianIndex{2},Float64},
+                           dt       :: Float64;
+                           krylov_m :: Int    = 30,
+                           row_pass :: Bool   = true,
+                           n_levels :: Int    = 3,
                            α_pre    :: Float64 = 0.08,
                            α_post   :: Float64 = 0.08)
 
-    d     = jump_rate(s.model)
-    n_max = s.n_max;  stol = s.block_state_tol
-    _n_un = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
-
-    # Time split: pre-smooth + coarse solve + post-smooth = dt exactly
-    τ_pre    = α_pre  * dt
-    τ_mid    = (1.0 - α_pre - α_post) * dt   # coarse solve time
-    τ_post   = α_post * dt
+    d      = jump_rate(s.model)
+    n_max  = s.n_max;  stol = s.block_state_tol
+    _n_un  = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
+    τ_pre  = α_pre  * dt
+    τ_mid  = (1.0 - α_pre - α_post) * dt
+    τ_post = α_post * dt
+    n_lev  = clamp(n_levels, 1, 8)
 
     active_keys = collect(keys(s.dists))
     isempty(active_keys) && return Set{CartesianIndex{2}}()
     active_set  = Set(active_keys)
+    equil_set   = Set(keys(s.equil_dists))
 
-    # helper: per-voxel expv
+    # Classify active voxels:
+    #   interior — all neighbours active or equil of the SAME basin (safe to coarsen)
+    #   edge     — ≥1 empty neighbour, OR (Schlögl) adjacent to equil of opposite basin
+    #
+    # For bistable Schlögl the wavefront voxels sit between equil-hi and equil-lo.
+    # Total-count restriction loses the bimodal structure for these voxels, so they
+    # are kept at full per-voxel resolution (edge) rather than coarsened (interior).
+    n_un_mg = _n_un > 0 ? Float64(_n_un) : -1.0
+    interior = CartesianIndex{2}[]
+    edge      = CartesianIndex{2}[]
+    for idx in active_keys
+        ns = grid_neighbors(idx, s.K_x, s.K_y)
+        is_edge = if n_un_mg > 0.0
+            mean_idx = get(means, idx, 0.0)
+            any(ns) do nb
+                (!haskey(s.dists, nb) && !haskey(s.equil_dists, nb)) ||
+                (haskey(s.equil_dists, nb) &&
+                 xor(mean_idx >= n_un_mg, get(means, nb, 0.0) >= n_un_mg))
+            end
+        else
+            !all(nb -> nb in active_set || nb in equil_set, ns)
+        end
+        push!(is_edge ? edge : interior, idx)
+    end
+    interior_set = Set(interior)
+
+    _n_hi_mg = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[3] : -1
+    # Per-voxel expv helper — support must span n_hi for Schlögl (same reason as step!)
     function smooth!(idx, τ)
         τ ≤ 0.0 && return
-        ns = grid_neighbors(idx, s.K_x, s.K_y)
-        μ_in = sum(get(means,nb,0.0) for nb in ns; init=0.0)
-        p = _expv_voxel(s.model, d*μ_in, d*length(ns), s.dists[idx],
-                         τ, krylov_m; n_include=_n_un)
+        ns  = grid_neighbors(idx, s.K_x, s.K_y)
+        μin = sum(get(means,nb,0.0) for nb in ns; init=0.0)
+        p   = _expv_voxel(s.model, d*μin, d*length(ns), s.dists[idx],
+                           τ, krylov_m; n_include = _n_hi_mg > 0 ? _n_hi_mg : _n_un)
         _clean!(p, stol); s.dists[idx] = p
     end
 
-    # ── L0 pre-smooth ────────────────────────────────────────────────────────
+    # ── Pre-smooth (all active) ───────────────────────────────────────────────
     for idx in active_keys; smooth!(idx, τ_pre); end
 
-    # ── Form non-overlapping pairs (L1) ──────────────────────────────────────
+    # ── ADI direction vectors ─────────────────────────────────────────────────
     Δ_par  = row_pass ? CartesianIndex(0,1) : CartesianIndex(1,0)
     Δ_perp = row_pass ? CartesianIndex(1,0) : CartesianIndex(0,1)
 
-    pairs = Tuple{CartesianIndex{2},CartesianIndex{2}}[]
-    used  = Set{CartesianIndex{2}}()
-    for v1 in sort(active_keys; by=x->(x[2],x[1]))
-        v1 in used && continue
-        v2 = v1 + Δ_par
-        (v2 in active_set && v2 ∉ used) || continue
-        push!(pairs, (v1,v2)); push!(used, v1); push!(used, v2)
+    # Edge voxels are handled by pre/post smooth; multigrid covers interior only
+    frontier_handled = Set{CartesianIndex{2}}()
+    for idx in edge; smooth!(idx, τ_mid); end
+
+    interior_mg = interior
+
+    # ── Build hierarchy over interior voxels only ─────────────────────────────
+    # Alternating pairing directions; at level ℓ the expected rep offset is
+    # Δ(ℓ+1) × 2^(ℓ÷2) where Δ(ℓ) = Δ_par for odd ℓ, Δ_perp for even ℓ.
+    Δdir(ℓ) = isodd(ℓ) ? Δ_par : Δ_perp
+    function pair_delta(ℓ)   # offset between reps when pairing level-ℓ groups
+        stride = 2^((ℓ-1)÷2)
+        CartesianIndex(Tuple(Δdir(ℓ+1)) .* stride)
     end
 
-    # ── Restrict L0→L1 ───────────────────────────────────────────────────────
-    p_L1 = [_mg_convolve(s.dists[v1], s.dists[v2], stol) for (v1,v2) in pairs]
-    pair_to_idx = Dict((v1,v2)=>i for (i,(v1,v2)) in enumerate(pairs))
+    # level_reps[ℓ]   — representative voxel (min CI) for each group
+    # level_voxels[ℓ] — all voxels in each group (for external-rate computation)
+    # level_dists[ℓ]  — total-count distribution for each group
+    # level_pairs[ℓ]  — (i,j) child-index pairs that form level ℓ+1
 
-    # ── Form non-overlapping quads (L2) ──────────────────────────────────────
-    quads = Tuple{Int,Int}[]; used_p = Set{Int}()
-    for (i,(v1,v2)) in enumerate(pairs)
-        i in used_p && continue
-        v3 = v1 + Δ_perp;  v4 = v2 + Δ_perp
-        j  = get(pair_to_idx,(v3,v4), get(pair_to_idx,(v4,v3),0))
-        (j==0 || j in used_p) && continue
-        push!(quads,(i,j)); push!(used_p,i); push!(used_p,j)
-    end
-    quad_pairs = Set(vcat([[i,j] for (i,j) in quads]...))
+    level_reps   = [interior_mg]                                 # level_reps[ℓ][g]   = rep of group g at level ℓ
+    level_voxels = [[[v] for v in interior_mg]]                  # level_voxels[ℓ][g] = voxels in group g at level ℓ
+    level_dists  = [[copy(s.dists[v]) for v in interior_mg]]     # level_dists[ℓ][g]  = total-count dist of group g
+    level_pairs  = Vector{Tuple{Int,Int}}[]                 # level_pairs[ℓ]     = (i,j) forming level ℓ+1
 
-    # ── Restrict L1→L2, coarse solve, correct L2→L1 ──────────────────────────
-    p_L1_corr = copy(p_L1)   # will hold quad-corrected pair distributions
-    nmax4 = 4*n_max
+    for ℓ in 1:n_lev
+        prev_reps = level_reps[end]
+        isempty(prev_reps) && break
+        rep_idx   = Dict(r=>i for (i,r) in enumerate(prev_reps))
+        δ         = pair_delta(ℓ)
 
-    for (q,(i,j)) in enumerate(quads)
-        (v1a,v2a) = pairs[i];  (v1b,v2b) = pairs[j]
-        quad_vx   = (v1a,v2a,v1b,v2b)
+        used = Set{Int}()
+        pairs_ℓ   = Tuple{Int,Int}[]
+        new_reps   = CartesianIndex{2}[]
+        new_vox    = Vector{Vector{CartesianIndex{2}}}()
+        new_dists  = Vector{Float64}[]
 
-        # L2 restriction: convolve two pair distributions
-        p_L2_old = _mg_convolve(p_L1[i], p_L1[j], stol)
-
-        # Quad external rates
-        in_q = 0.0; n_ext = 0
-        for vi in quad_vx, nb in grid_neighbors(vi, s.K_x, s.K_y)
-            nb in quad_vx && continue
-            in_q += d * get(means,nb,0.0); n_ext += 1
+        for (i,rep) in enumerate(prev_reps)
+            i in used && continue
+            rep2 = rep + δ
+            j    = get(rep_idx, rep2, 0)
+            (j==0 || j in used) && continue
+            push!(pairs_ℓ,   (i,j))
+            push!(used, i); push!(used, j)
+            push!(new_reps,  min(rep, rep2))
+            push!(new_vox,   vcat(level_voxels[end][i], level_voxels[end][j]))
+            # At every level: presmooth with effective inter-group coupling.
+            # k_ℓ = 1/2^((ℓ-1)÷2): fraction of boundary voxels per child group,
+            # so each particle in a child group exits to the sibling at rate d*k_ℓ.
+            # At ℓ=1: k=1 (single voxels, direct edge), identical to old code.
+            # At ℓ=2: k=1 (2-voxel pairs, full column boundary with sibling pair).
+            # At ℓ=3+: k<1 as interior voxels accumulate in each child group.
+            k_ℓ     = 1.0 / 2.0^((ℓ-1)÷2)
+            d_eff   = d * k_ℓ
+            n_max_ℓ = length(level_dists[end][i]) - 1
+            ps = _presmooth_pair(d_eff, n_max_ℓ,
+                                 level_dists[end][i], level_dists[end][j],
+                                 τ_pre; stol, krylov_m)
+            if ps !== nothing
+                p_i_s, p_j_s, p_total = ps
+                level_dists[end][i] = p_i_s   # update reference for Galerkin prolongation
+                level_dists[end][j] = p_j_s
+                push!(new_dists, p_total)
+            else
+                push!(new_dists, _mg_convolve(level_dists[end][i],
+                                               level_dists[end][j], stol))
+            end
         end
-        Q_q = _single_voxel_generator(s.model, in_q, d*n_ext/4.0, nmax4; n_sites=4)
-        p_L2_new = expv(Float64(τ_mid), Q_q, p_L2_old; m=min(krylov_m,size(Q_q,1)))
-        _clean!(p_L2_new, stol)
 
-        # L2→L1 multiplicative correction
-        p_L1_corr[i] = _mg_correct(p_L1[i], p_L1[j], p_L2_old, p_L2_new, stol)
-        p_L1_corr[j] = _mg_correct(p_L1[j], p_L1[i], p_L2_old, p_L2_new, stol)
+        isempty(pairs_ℓ) && break
+        push!(level_pairs,  pairs_ℓ)
+        push!(level_reps,   new_reps)
+        push!(level_voxels, new_vox)
+        push!(level_dists,  new_dists)
     end
 
-    # Pair-only (not in any quad): L1 CME solve for τ_mid, correct L1→L0
-    nmax2 = 2*n_max
-    for (k,(v1,v2)) in enumerate(pairs)
-        k in quad_pairs && continue   # handled by L2 above
-        ns1 = grid_neighbors(v1,s.K_x,s.K_y); ns2 = grid_neighbors(v2,s.K_x,s.K_y)
-        in1 = sum(d*get(means,nb,0.0) for nb in ns1 if nb!=v2; init=0.0)
-        in2 = sum(d*get(means,nb,0.0) for nb in ns2 if nb!=v1; init=0.0)
-        out_p = d*(length(ns1)-1 + length(ns2)-1)/2.0
-        Q_p = _single_voxel_generator(s.model, in1+in2, out_p, nmax2; n_sites=2)
-        p_L1_new = expv(Float64(τ_mid), Q_p, p_L1[k]; m=min(krylov_m,size(Q_p,1)))
-        _clean!(p_L1_new, stol)
-        p_L1_corr[k] = _mg_correct(p_L1[k], p_L1[k], p_L1[k], p_L1_new, stol)
-        # simpler: just store the evolved pair total for the L1→L0 step
-        p_L1_corr[k] = p_L1_new
+    n_built = length(level_pairs)   # actual levels built (≤ n_lev)
+
+    # ── Coarse solve at deepest level ─────────────────────────────────────────
+    if n_built > 0
+        old_coarse = copy.(level_dists[end])
+        new_coarse = similar.(old_coarse)
+        n_vox_coarse = length(level_voxels[end][1])
+
+        for (g, vxs) in enumerate(level_voxels[end])
+            nv  = length(vxs)
+            nmg = nv * n_max
+            in_g = 0.0; n_ext = 0
+            for vi in vxs, nb in grid_neighbors(vi, s.K_x, s.K_y)
+                nb in vxs && continue
+                in_g += d * get(means,nb,0.0); n_ext += 1
+            end
+            Q_g = _single_voxel_generator(s.model, in_g, d*n_ext/nv, nmg; n_sites=nv)
+            p_g = expv(Float64(τ_mid), Q_g, level_dists[end][g];
+                        m=min(krylov_m, size(Q_g,1)))
+            _clean!(p_g, stol); new_coarse[g] = p_g
+        end
+
+        # ── Correction phase (deep → shallow) ─────────────────────────────────
+        # current_corr[ℓ] = corrected distributions at level ℓ (1-indexed, 1=voxels)
+        current_corr = [copy.(d) for d in level_dists]
+        current_corr[end] = new_coarse   # deepest level = coarse solve output
+
+        # Full Galerkin cascade: deepest level → voxels.
+        # Before each Galerkin step at level ℓ, groups at level ℓ+1 that are
+        # NOT covered by any deeper-level solve (orphaned groups) receive a
+        # direct coarse solve at their own level so they also get τ_mid dynamics.
+        for ℓ in n_built:-1:1
+            pairs_ℓ = level_pairs[ℓ]
+            old_ℓ   = level_dists[ℓ]
+            new_c   = current_corr[ℓ+1]
+            n_max_ℓ = length(old_ℓ[1]) - 1
+
+            # Orphan coarse solve: groups at level ℓ+1 not in any level-(ℓ+2) group
+            if ℓ < n_built
+                covered_above = Set{Int}()
+                for (i,j) in level_pairs[ℓ+1]
+                    push!(covered_above, i); push!(covered_above, j)
+                end
+                for k in 1:length(new_c)
+                    k in covered_above && continue
+                    vxs = level_voxels[ℓ+1][k]
+                    nv  = length(vxs);  nmg = nv * n_max
+                    ig  = 0.0;          ne  = 0
+                    for vi in vxs, nb in grid_neighbors(vi, s.K_x, s.K_y)
+                        nb in vxs && continue
+                        ig += d * get(means,nb,0.0);  ne += 1
+                    end
+                    Q_k = _single_voxel_generator(s.model, ig, d*ne/nv, nmg; n_sites=nv)
+                    p_k = expv(Float64(τ_mid), Q_k, level_dists[ℓ+1][k];
+                                m=min(krylov_m, size(Q_k,1)))
+                    _clean!(p_k, stol);  current_corr[ℓ+1][k] = p_k
+                end
+            end
+
+            corrected = copy(old_ℓ)
+            for (g,(i,j)) in enumerate(pairs_ℓ)
+                corrected[i], corrected[j] =
+                    _prolong_galerkin(new_c[g], old_ℓ[i], old_ℓ[j], n_max_ℓ, stol)
+            end
+            current_corr[ℓ] = corrected
+        end
+
+        # Apply corrected voxel distributions (current_corr[1]) to s.dists
+        handled = union(frontier_handled, Set{CartesianIndex{2}}(edge))
+        for (g,(i,j)) in enumerate(level_pairs[1])
+            vi = interior_mg[i]; vj = interior_mg[j]
+            p_i = current_corr[1][i]; p_j = current_corr[1][j]
+            _clean!(p_i, stol); _clean!(p_j, stol)
+            si = sum(p_i); sj = sum(p_j)
+            si > 1e-300 && (s.dists[vi] = p_i./si; push!(handled, vi))
+            sj > 1e-300 && (s.dists[vj] = p_j./sj; push!(handled, vj))
+        end
+
+        # Interior voxels not in any pair: per-voxel expv for τ_mid
+        for idx in interior
+            idx in handled && continue
+            ns  = grid_neighbors(idx, s.K_x, s.K_y)
+            μin = sum(get(means,nb,0.0) for nb in ns; init=0.0)
+            p   = _expv_voxel(s.model, d*μin, d*length(ns), s.dists[idx],
+                               τ_mid, krylov_m; n_include=_n_un)
+            _clean!(p, stol); s.dists[idx] = p; push!(handled, idx)
+        end
+    else
+        # No interior pairs formed: per-voxel for remaining interior voxels
+        handled = union(frontier_handled, Set{CartesianIndex{2}}(edge))
+        for idx in interior_mg
+            ns  = grid_neighbors(idx, s.K_x, s.K_y)
+            μin = sum(get(means,nb,0.0) for nb in ns; init=0.0)
+            p   = _expv_voxel(s.model, d*μin, d*length(ns), s.dists[idx],
+                               τ_mid, krylov_m; n_include=_n_un)
+            _clean!(p, stol); s.dists[idx] = p; push!(handled, idx)
+        end
     end
 
-    # ── Correct L1→L0 for all pairs ──────────────────────────────────────────
-    handled = Set{CartesianIndex{2}}()
-    for (k,(v1,v2)) in enumerate(pairs)
-        p1 = s.dists[v1]; p2 = s.dists[v2]
-        p1n = _mg_correct(p1, p2, p_L1[k], p_L1_corr[k], stol)
-        p2n = _mg_correct(p2, p1, p_L1[k], p_L1_corr[k], stol)
-        _clean!(p1n, stol); _clean!(p2n, stol)
-        s1=sum(p1n); s2=sum(p2n)
-        s1>1e-300 && (s.dists[v1]=p1n./s1; push!(handled,v1))
-        s2>1e-300 && (s.dists[v2]=p2n./s2; push!(handled,v2))
-    end
-
-    # ── Unmatched voxels: full per-voxel CME for τ_mid ───────────────────────
-    for idx in active_keys
-        idx in handled && continue
-        ns = grid_neighbors(idx, s.K_x, s.K_y)
-        μ_in = sum(get(means,nb,0.0) for nb in ns; init=0.0)
-        p = _expv_voxel(s.model, d*μ_in, d*length(ns), s.dists[idx],
-                         τ_mid, krylov_m; n_include=_n_un)
-        _clean!(p, stol); s.dists[idx]=p; push!(handled,idx)
-    end
-
-    # ── L0 post-smooth ────────────────────────────────────────────────────────
+    # ── Post-smooth (all active) ──────────────────────────────────────────────
     for idx in active_keys; smooth!(idx, τ_post); end
 
     handled
@@ -1811,6 +2341,183 @@ function _step_adi_pair!(s::SpatialFSP,
     handled   # return set of voxels processed; unmatched fall through to per-voxel
 end
 
+# ─── AMG block: no mean-field within 2×2 active + frontier ──────────────────
+#
+# All other methods approximate the coupling from a neighbour voxel as d·μ_nb
+# (its mean only).  Here, the 2×2 active block plus every empty/equil neighbour
+# of that block are all placed into a single joint CME.  Coupling between any
+# two voxels that are BOTH in this extended set uses the exact rate d·n_i.
+# Mean-field is applied only at the outer boundary (outside the extended set).
+#
+# State space is built by rstep from the active product seed; the frontier
+# voxels start at n=0 in the seed and their n>0 states are generated organically
+# by the rstep expansion through seeding reactions.  No (n_max+1)^N enumeration.
+#
+# After the solve, any frontier voxel whose marginal has P(n≥1) > amg_activate_tol
+# is immediately promoted to active (bypassing the pending_flux threshold).
+# This is the "prolongation that preserves pre-restricted state": the voxel
+# starts its active career with the physically-correct solved distribution.
+
+function _evolve_amg_block(
+    model,
+    all_voxels  :: Vector{CartesianIndex{2}},
+    all_dists   :: Vector{Vector{Float64}},
+    outer_means :: Dict{CartesianIndex{2}, Float64},
+    K_x :: Int, K_y :: Int,
+    dt  :: Float64,
+    n_max :: Int;
+    seed_k      :: Int     = 2,
+    rstep_depth :: Int     = 2,
+    max_states  :: Int     = 30_000,
+    krylov_m    :: Int     = 30,
+    state_tol   :: Float64 = 1e-10
+)
+    N        = length(all_voxels)
+    N_active = 4
+
+    # Exact joint CME for all_voxels; mean-field only at outer boundary
+    sys = _build_joint_active_system(model, all_voxels, outer_means, K_x, K_y)
+    bc  = x -> all(0 ≤ c ≤ n_max for c in Tuple(x))
+
+    # Seed: product of active top-seed_k states; frontier fixed at n=0
+    active_supps = [let p = all_dists[k]
+                        nz = count(>(state_tol), p)
+                        partialsortperm(p, 1:max(1, min(seed_k, nz)); rev=true)
+                    end for k in 1:N_active]
+
+    sp = StateSpace{CartesianIndex{N}, Float64}()
+    for combo in Iterators.product(active_supps...)
+        n_a = Tuple(c - 1 for c in combo)
+        n_f = ntuple(_ -> 0, N - N_active)
+        ci  = CartesianIndex(n_a..., n_f...)
+        w   = prod(k -> all_dists[k][combo[k]], 1:N_active)
+        w > state_tol && add_state!(sp, ci, w)
+    end
+    isempty(sp.states) && return nothing
+
+    # rstep expansion: frontier n>0 states generated by seeding reactions
+    expand!(sp, sys, bc; depth = rstep_depth)
+    length(sp) > max_states && return nothing
+
+    # Initialise from product distribution.
+    # Frontier states at n>0 get p=0 (correct: frontier starts empty).
+    # expv will populate them via seeding transitions.
+    for i in eachindex(sp.states)
+        t = Tuple(sp.states[i])
+        sp.probs[i] = prod(k -> begin
+            nk = t[k];  nk < length(all_dists[k]) ? all_dists[k][nk + 1] : 0.0
+        end, 1:N)
+    end
+    s = sum(sp.probs);  s ≤ 0.0 && return nothing
+    sp.probs ./= s
+
+    A, = build_generator(sp, sys, nothing, 0.0)
+    sp.probs .= expv(Float64(dt), A, sp.probs; m = min(krylov_m, size(A, 1)))
+    _clean!(sp.probs, state_tol)
+    renormalize!(sp) > 0.0 || return nothing
+
+    # Extract per-voxel marginals
+    marginals = [zeros(n_max + 1) for _ in 1:N]
+    for i in eachindex(sp.states)
+        t = Tuple(sp.states[i]);  pr = sp.probs[i]
+        for k in 1:N
+            nk = t[k];  nk ≤ n_max && (marginals[k][nk + 1] += pr)
+        end
+    end
+    for m in marginals
+        s = sum(m);  s > 0.0 && (m ./= s)
+    end
+    marginals
+end
+
+function _step_amg_block!(
+    s        :: SpatialFSP,
+    means    :: Dict{CartesianIndex{2}, Float64},
+    dt       :: Float64;
+    krylov_m :: Int = 30,
+    step_idx :: Int = 0
+)
+    pass  = step_idx % 4
+    i_off = pass ∈ (1, 3) ? 1 : 0
+    j_off = pass ∈ (1, 2) ? 1 : 0
+    preferred  = [CartesianIndex(i, j)
+                  for i in (1+i_off):2:(s.K_x-1) for j in (1+j_off):2:(s.K_y-1)]
+    anchors    = _select_active_blocks(s.dists, s.K_x, s.K_y, preferred)
+    active_set = Set(keys(s.dists))
+
+    handled = Set{CartesianIndex{2}}()
+
+    for anchor in anchors
+        block = _block_voxels(anchor)
+        all(b -> b ∈ active_set, block)  || continue
+        any(b -> b ∈ handled, block)     && continue
+
+        # Frontier: EMPTY voxels adjacent to block only (not active, not equil).
+        # Equil voxels are handled via mean-field in outer_means (step 3 evolves
+        # them separately; including them here would re-activate saturated interior).
+        seen     = Set{CartesianIndex{2}}(block)
+        frontier = CartesianIndex{2}[]
+        for v in block
+            for nb in grid_neighbors(v, s.K_x, s.K_y)
+                nb ∈ seen                  && continue
+                nb ∈ active_set            && continue   # active → mean-field
+                haskey(s.equil_dists, nb)  && continue   # equil  → mean-field
+                1 ≤ nb[1] ≤ s.K_x && 1 ≤ nb[2] ≤ s.K_y || continue
+                push!(seen, nb);  push!(frontier, nb)
+            end
+        end
+
+        all_voxels = [block..., frontier...]
+
+        p_block    = [s.dists[b] for b in block]
+        p_frontier = [vcat(1.0, zeros(s.n_max)) for _ in frontier]  # all empty: δ(n=0)
+        all_dists  = [p_block..., p_frontier...]
+
+        # outer_means: mean-field for everything outside all_voxels
+        # (other active, equil, and far-empty voxels)
+        all_set     = Set(all_voxels)
+        outer_means = Dict{CartesianIndex{2}, Float64}()
+        for v in all_voxels
+            for nb in grid_neighbors(v, s.K_x, s.K_y)
+                nb ∈ all_set && continue
+                outer_means[nb] = get(means, nb, 0.0)
+            end
+        end
+
+        result = _evolve_amg_block(
+            s.model, all_voxels, all_dists, outer_means,
+            s.K_x, s.K_y, dt, s.n_max;
+            seed_k      = 2,
+            rstep_depth = 2,
+            max_states  = s.amg_block_max_states,
+            krylov_m,
+            state_tol   = s.block_state_tol)
+        result === nothing && continue
+
+        # Update active block voxels
+        for (k, v) in enumerate(block)
+            m = result[k];  sm = sum(m)
+            sm > 0 || continue
+            s.dists[v] = m ./ sm
+            push!(handled, v)
+        end
+
+        # Activate empty frontier voxels where P(n≥1) > amg_activate_tol.
+        # Frontier is EMPTY only (equil excluded above), so no equil_dists cleanup.
+        for (k, v) in enumerate(frontier)
+            m  = result[4 + k]
+            sm = sum(m);  sm > 0 || continue
+            m ./= sm
+            1.0 - m[1] > s.amg_activate_tol || continue
+            haskey(s.dists, v) && continue   # edge case: activated by another block
+            s.dists[v] = m
+            delete!(s.pending_flux, v)
+        end
+    end
+
+    handled
+end
+
 # ─── Main time step ───────────────────────────────────────────────────────────
 
 """
@@ -1855,11 +2562,40 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
     row_pass = isodd(round(Int, s.t / dt))
 
     if isempty(handled) && s.use_multigrid
-        # True multigrid V-cycle: L0→L1→L2 restriction, L2 coarse solve,
-        # L2→L1→L0 multiplicative correction, with pre/post smoothing.
-        mg_handled = _step_multigrid!(s, means, dt; krylov_m, row_pass)
+        # Generalized multigrid V-cycle: n_levels spatial hierarchy.
+        mg_handled = _step_multigrid!(s, means, dt; krylov_m, row_pass,
+                                       n_levels = s.multigrid_levels)
         for idx in mg_handled; new_dists[idx] = s.dists[idx]; end
         union!(handled, mg_handled)
+        empty!(s.block_states)
+    end
+
+    if isempty(handled) && s.use_block_vcycle_4body
+        # 2×2 block V-cycle: compact rstep restriction + 4-body joint CME + correction prolongation.
+        step_idx = round(Int, s.t / dt)
+        vcb_handled = _step_block_vcycle_4body!(s, means, dt; krylov_m, step_idx)
+        for idx in vcb_handled; new_dists[idx] = s.dists[idx]; end
+        union!(handled, vcb_handled)
+        empty!(s.block_states)
+    end
+
+    if isempty(handled) && s.use_amg_block
+        # AMG block: no mean-field within 2×2 active + frontier joint state.
+        # Frontier (empty/equil neighbours) included in joint CME via rstep.
+        # Frontier voxels with P(n≥1) > amg_activate_tol promoted to active.
+        step_idx    = round(Int, s.t / dt)
+        amg_handled = _step_amg_block!(s, means, dt; krylov_m, step_idx)
+        for idx in amg_handled; new_dists[idx] = s.dists[idx]; end
+        union!(handled, amg_handled)
+        empty!(s.block_states)
+    end
+
+    if isempty(handled) && s.use_block_exact
+        # Exact-Galerkin pair joint CME: evolve full 2-body generator,
+        # no total-count restriction.  ADI alternating row/column passes.
+        exact_handled = _step_pair_exact!(s, means, dt; krylov_m, row_pass)
+        for idx in exact_handled; new_dists[idx] = s.dists[idx]; end
+        union!(handled, exact_handled)
         empty!(s.block_states)
     end
 
@@ -1873,18 +2609,31 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
         empty!(s.block_states)
     end
 
-    # Schlögl: include n_un in the support so cross-basin transitions are captured.
+    # Schlögl: support must span [n_lo, n_hi] so strong diffusion inflow from an
+    # equil-hi neighbour can push probability all the way to n_hi in one step.
+    # Additionally, use time-splitting when λ·dt > krylov_m (the Krylov dimension
+    # needed for expv scales with λ·dt; exceeding krylov_m causes mass loss).
+    # Each sub-step keeps λ·dt_sub ≤ krylov_m so m=30 is sufficient.
     _n_un = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[2] : -1
+    _n_hi_sp = s.model isa SchloglModel1D ? schlogl_fixed_points(s.model)[3] : -1
     for (idx, p_old) in s.dists
         idx in handled && continue
-        ns       = grid_neighbors(idx, s.K_x, s.K_y)
-        μ_in     = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
-        in_rate  = d * μ_in
+        ns        = grid_neighbors(idx, s.K_x, s.K_y)
+        μ_in      = sum(get(means, nb, 0.0) for nb in ns; init = 0.0)
+        in_rate   = d * μ_in
         out_coeff = d * length(ns)
-        p_new    = _expv_voxel(s.model, in_rate, out_coeff, p_old, Float64(dt), krylov_m;
-                               n_include = _n_un)
-        _clean!(p_new, s.ε_prune)
-        new_dists[idx] = p_new
+        n_inc     = _n_hi_sp > 0 ? _n_hi_sp : _n_un
+        # Time-splitting: split into sub-steps so λ·dt_sub ≤ krylov_m
+        max_rate  = in_rate + (_n_hi_sp > 0 ? out_coeff * _n_hi_sp : 0.0)
+        n_sub     = max_rate > 0.0 ? max(1, ceil(Int, max_rate * Float64(dt) / krylov_m)) : 1
+        dt_sub    = Float64(dt) / n_sub
+        p_cur = p_old
+        for _ in 1:n_sub
+            p_cur = _expv_voxel(s.model, in_rate, out_coeff, p_cur, dt_sub, krylov_m;
+                                n_include = n_inc)
+            _clean!(p_cur, s.ε_prune)
+        end
+        new_dists[idx] = p_cur
     end
     s.dists = new_dists
 
@@ -1958,23 +2707,37 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
     end
 
     # ── 3a. Schlögl: early deactivation (BEFORE cross-basin flux) ────────────
-    # Voxels that have converged to a stable basin (outflux criterion:
-    # p(n_un) < ε_equil) are deactivated NOW — before step 4 computes
-    # cross-basin flux. This ensures that newly-deactivated equil-hi (or lo)
-    # voxels appear in equil_dists and immediately drive the next layer's
-    # activation. No cross-basin guard needed: a converged voxel should
-    # deactivate unconditionally; the following cross-basin flux step will
-    # re-activate the neighbours that need it.
+    # A voxel deactivates and snaps to its nearest stable basin when either:
+    #   (a) p(n_un) < ε_equil  [distribution has committed to one basin], or
+    #   (b) |mean - n_un| > snap_margin  [mean-field fixed-point criterion]
+    #
+    # Criterion (b) resolves a mean-field artefact: leading-edge voxels with
+    # predominantly equil-lo neighbours develop a spurious stable fixed point
+    # near n_un (e.g. mean ≈ 68 for 1 equil-hi + 3 equil-lo neighbours with
+    # D=2). The true joint CME is bimodal, but the per-voxel mean-field
+    # approximation creates a single attractor just above n_un, so p(n_un)
+    # never drops below ε_equil and the wavefront stalls.  Snapping when the
+    # mean has moved >snap_margin from n_un resolves the trapping: after one
+    # expv step from δ(n_lo) the mean already overshoots n_un (e.g. ≈69.5),
+    # so the voxel immediately commits to equil-hi and drives the next ring.
+    #
+    # The snap stores δ(n_hi) or δ(n_lo) — consistent with the frozen-
+    # background assumption — rather than the raw evolved distribution.
     if s.model isa SchloglModel1D
         n_lo_e, n_un_e, n_hi_e = schlogl_fixed_points(s.model)
-        ε_out = s.ε_equil
+        ε_out      = s.ε_equil
+        snap_margin = 4.0   # commit when mean is >4 away from n_un
         to_deact_early = CartesianIndex{2}[]
         for (idx, p) in s.dists
             nv = length(p)
             p_at_nun = n_un_e + 1 <= nv ? p[n_un_e + 1] : 0.0
-            p_at_nun < ε_out || continue
+            mean_p   = voxel_mean(p)
+            deactivate = p_at_nun < ε_out || abs(mean_p - Float64(n_un_e)) > snap_margin
+            deactivate || continue
             push!(to_deact_early, idx)
-            s.equil_dists[idx] = _resize_dist(p, s.n_max_eq)
+            basin_n = mean_p >= Float64(n_un_e) ? n_hi_e : n_lo_e
+            p_snap  = zeros(s.n_max_eq + 1);  p_snap[basin_n + 1] = 1.0
+            s.equil_dists[idx] = p_snap
         end
         for idx in to_deact_early; delete!(s.dists, idx); end
     end
@@ -1998,13 +2761,11 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
                 haskey(s.dists, nb)       && continue  # active targets excluded
                 haskey(s.equil_dists, nb) || continue  # empty (Schlögl has none)
                 μ_nb  = get(means, nb, -1.0)
-                cross = if μ_nb >= 0.0 && μ_nb < n_un_f && μ > n_un_f
-                    d * (μ - n_un_f) * dt        # equil-hi → equil-lo
-                elseif μ_nb >= n_un_f && μ < n_un_f
-                    d * (n_un_f - μ) * dt        # equil-lo → equil-hi
-                else
-                    0.0
-                end
+                # Only equil-hi drives equil-lo: hi wave propagates outward.
+                # Equil-lo must NOT generate flux back to equil-hi — that would
+                # re-activate stable hi voxels and cause the hi region to collapse.
+                cross = (μ_nb >= 0.0 && μ_nb < n_un_f && μ > n_un_f) ?
+                            d * (μ - n_un_f) * dt : 0.0
                 cross > 0.0 && (s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + cross)
             end
         end
@@ -2032,6 +2793,27 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
                 s.dists[nb] = p0
             end
             delete!(s.pending_flux, nb)
+        end
+    end
+
+    # ── 5b. Organic activation (optional) ────────────────────────────────────
+    # Activate empty neighbor nb immediately when any adjacent tracked voxel k
+    # has P(n_k > 0) = 1 - p_k[1] > ε_organic.  Bypasses pending_flux entirely,
+    # eliminating the activation delay that causes wave speed error.
+    if s.organic_activation
+        for (idx, p) in s.dists
+            (1.0 - p[1]) > s.ε_organic || continue
+            for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                haskey(s.dists, nb) && continue
+                if haskey(s.equil_dists, nb)
+                    s.dists[nb] = _resize_dist(s.equil_dists[nb], s.n_max)
+                    delete!(s.equil_dists, nb)
+                else
+                    p0 = zeros(s.n_max + 1);  p0[1] = 1.0
+                    s.dists[nb] = p0
+                end
+                delete!(s.pending_flux, nb)
+            end
         end
     end
 

@@ -1,0 +1,12 @@
+Fixed pts: n_lo=38 n_un=63 n_hi=164
+in_rate=556.0  out_coeff=8.0  MF fixed pt=69.5
+  step  1 (t=0.5): mean=  69.0  P(hi)=0.725  p_nun=0.037  snap4=YES   snap40=no   
+  step  2 (t=1.0): mean=  69.6  P(hi)=0.746  p_nun=0.035  snap4=YES   snap40=no   
+  step  3 (t=1.5): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  4 (t=2.0): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  5 (t=2.5): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  6 (t=3.0): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  7 (t=3.5): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  8 (t=4.0): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step  9 (t=4.5): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   
+  step 10 (t=5.0): mean=  69.7  P(hi)=0.747  p_nun=0.035  snap4=YES   snap40=no   

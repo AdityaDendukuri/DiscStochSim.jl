@@ -1,0 +1,7 @@
+BD RDME 60×60  v_KPP=1.265  MG L=3
+Simulating to t=18.0 …
+  t=5.0  active=141  equil=0
+  t=11.0  active=333  equil=0
+  t=18.0  active=569  equil=68
+Done in 10.5s
+Saved → /home/adiden/DiscStochSim.jl/examples/../paper/figures/fig_multigrid_intro.png

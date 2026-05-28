@@ -1,0 +1,24 @@
+Schlögl fixed pts: n_lo=38  n_un=63  n_hi=164  K=60×60  D=2.0
+
+Running 3 radii…
+
+R=2…
+  R=2  t=18  hi=0.257  active=84  equil=3516
+  R=2  t=39  hi=0.810  active=72  equil=3528
+  R=2  t=60  hi=1.000  active=0  equil=3600
+  R=2  t=80  hi=1.000  active=0  equil=3600
+R=5…
+  R=5  t=18  hi=0.381  active=104  equil=3496
+  R=5  t=39  hi=0.899  active=52  equil=3548
+  R=5  t=60  hi=1.000  active=0  equil=3600
+  R=5  t=80  hi=1.000  active=0  equil=3600
+R=12…
+  R=12  t=18  hi=0.665  active=120  equil=3480
+  R=12  t=39  hi=0.989  active=16  equil=3584
+  R=12  t=60  hi=1.000  active=0  equil=3600
+  R=12  t=80  hi=1.000  active=0  equil=3600
+
+Saved → /home/adiden/DiscStochSim.jl/examples/../paper/figures/fig_schlogl_2d_droplet.png
+Rendering animation → /home/adiden/DiscStochSim.jl/examples/../paper/figures/anim_schlogl_2d_droplet.gif
+  3.687291 seconds (10.08 M allocations: 615.177 MiB, 21.40% gc time, 65.10% compilation time)
+Saved → /home/adiden/DiscStochSim.jl/examples/../paper/figures/anim_schlogl_2d_droplet.gif
