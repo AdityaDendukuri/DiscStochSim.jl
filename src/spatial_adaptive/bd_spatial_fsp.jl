@@ -115,6 +115,16 @@ mutable struct SpatialFSP
     # Eliminates activation delay (ε_expand) — the main source of wave speed error.
     organic_activation :: Bool
     ε_organic          :: Float64
+    # Per-molecule (high-state) flux activation (abstract gap-3).
+    # Naive activation radiates only TOTAL flux d·(μ-n_un) from equil-hi sources —
+    # a bistable source mostly in the LOW basin but with a small HIGH tail has μ<n_un
+    # and never radiates, so a structural bottleneck (few molecules mediating the
+    # transition) is missed and the front stalls. When use_per_molecule_flux=true,
+    # ACTIVE voxels also radiate per-molecule flux Φ_pm = d·Σ_{n>n_un} n·p(n) to
+    # sub-critical neighbours, gated by ε_pm — separating bottlenecks from genuinely
+    # inactive regions with the same mean.
+    use_per_molecule_flux :: Bool
+    ε_pm                  :: Float64
 end
 
 function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
@@ -147,7 +157,9 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                     amg_block_max_states::Int = 30_000,
                     amg_activate_tol::Float64 = 1e-4,
                     organic_activation::Bool = false,
-                    ε_organic::Float64 = 1e-4)
+                    ε_organic::Float64 = 1e-4,
+                    use_per_molecule_flux::Bool = false,
+                    ε_pm::Float64 = 0.0)
     n_max_eq_val = n_max_eq > 0 ? n_max_eq :
                    has_finite_local_ss(model) ? max(12, round(Int, 4 * ss_mean(model)) + 4) :
                    max(12, n_max)
@@ -167,7 +179,8 @@ function SpatialFSP(model::AbstractSpatialRDMEModel, K_x::Int, K_y::Int;
                use_multigrid, multigrid_levels,
                use_block_exact, use_block_vcycle_4body, block_vcycle_4body_max,
                use_amg_block, amg_block_max_states, amg_activate_tol,
-               organic_activation, ε_organic)
+               organic_activation, ε_organic,
+               use_per_molecule_flux, ε_pm)
 end
 
 function set_ic!(s::SpatialFSP, idx::CartesianIndex{2}, n0::Int)
@@ -186,6 +199,16 @@ n_empty(s::SpatialFSP)        = s.K_x * s.K_y - n_active(s) - n_equilibrated(s)
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 voxel_mean(p::AbstractVector) = sum((i - 1) * p[i] for i in eachindex(p))
+
+# Per-molecule (high-state) flux mass Σ_{n>n_un} n·p(n): the copies carried by the
+# transition-competent high-state tail.  Φ_pm = d · voxel_high_count(p, n_un).
+function voxel_high_count(p::AbstractVector, n_un::Int)
+    s = 0.0
+    @inbounds for n in (n_un + 1):(length(p) - 1)
+        s += n * p[n + 1]
+    end
+    s
+end
 
 function grid_neighbors(idx::CartesianIndex{2}, K_x::Int, K_y::Int)
     i, j = Tuple(idx)
@@ -2767,6 +2790,23 @@ function step!(s::SpatialFSP, dt::Float64; krylov_m::Int = 30)
                 cross = (μ_nb >= 0.0 && μ_nb < n_un_f && μ > n_un_f) ?
                             d * (μ - n_un_f) * dt : 0.0
                 cross > 0.0 && (s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + cross)
+            end
+        end
+        # ── Per-molecule (high-state) flux from ACTIVE sources (gap-3) ──────────
+        # An active voxel that is a bistable mixture (mostly LOW basin, small HIGH
+        # tail) has μ < n_un, so the mean-based rule above never fires — but its
+        # high tail can nucleate a sub-critical neighbour. Radiate Φ_pm·dt =
+        # d·Σ_{n>n_un} n·p(n)·dt to equil-lo / empty neighbours, gated by ε_pm.
+        if s.use_per_molecule_flux
+            for (idx, p) in s.dists
+                pm = voxel_high_count(p, n_un_schlogl)
+                pm > s.ε_pm || continue
+                for nb in grid_neighbors(idx, s.K_x, s.K_y)
+                    haskey(s.dists, nb) && continue
+                    μ_nb = get(means, nb, -1.0)
+                    (μ_nb < 0.0 || μ_nb < n_un_f) || continue  # sub-critical / empty only
+                    s.pending_flux[nb] = get(s.pending_flux, nb, 0.0) + d * pm * dt
+                end
             end
         end
     else

@@ -15,6 +15,11 @@ include("boundary_conditions.jl")
 include("state_space.jl")
 include("generator.jl")
 
+# Smoothed-aggregation algebraic multigrid (the single multigrid solver)
+include("multigrid/sa_amg.jl")
+include("multigrid/unified_fsp.jl")
+include("multigrid/graph_rdme_system.jl")
+
 # Adaptive FSP solver
 include("adaptive_fsp/problem.jl")
 include("adaptive_fsp/solution.jl")
@@ -45,11 +50,34 @@ include("rdme/solve.jl")
 # Graph-generalised RDME (depends on rdme_model, operators, solve)
 include("rdme/graph_rdme.jl")
 
+# Graded variable-width RDME operator (depends on VoxelGraph + SchloglModel1D)
+include("rdme/graded_grid.jl")
+
+# Persisted-joint graph FSP (fine-level kernel of the graph-multigrid hybrid;
+# depends on VoxelGraph from graph_rdme.jl)
+include("spatial_adaptive/graph_joint_fsp.jl")
+
+# Basin-resolved QSD lumping (Phase-2 reservoir: preserves bistability under
+# coarsening; depends on schlogl_generator from tensor_train_cme.jl)
+include("spatial_adaptive/basin_qsd.jl")
+
+# Basin-aware two-grid V-cycle (multigrid solver for the implicit CME step;
+# basin lumping = restriction, smart prolong = interpolation, Galerkin coarse op)
+include("spatial_adaptive/graph_vcycle.jl")
+
 # Schlögl spatial FSP (must come after rdme_model.jl defines SchloglModel1D)
 include("spatial_adaptive/schlogl_spatial_fsp.jl")
 
+# Mixed fine/lumped joint FSP over an arbitrary VoxelGraph (graph-general
+# generalisation of the windowed chain stepper; active front = genuine joint,
+# settled bulk = reservoir basin labels). Needs SchloglModel1D + VoxelGraph.
+include("spatial_adaptive/mixed_fsp.jl")
+
 # Spatial CME: joint distribution over K voxels, multigrid coarsening
 include("rdme/spatial_cme.jl")
+
+# Block-decomposition FSP (weakly-correlated regime; needs GraphRDMEModel)
+include("multigrid/block_fsp.jl")
 
 # Tensor Train CME: MPS/TT representation of the joint RDME distribution
 include("rdme/tensor_train_cme.jl")
@@ -60,11 +88,23 @@ include("rdme/row_tt_solver.jl")
 # Dynamic-K spatial CME: adaptive voxel activation/deactivation
 include("rdme/dynamic_spatial_cme.jl")
 
+# TT multigrid V-cycle: genuine multigrid in tensor-train arithmetic (AMEn coarsest)
+include("multigrid/tt_vcycle.jl")
+using .TTVCycle: build_M_mpo, bd_diffusion_chain_mpo, build_tt_hierarchy,
+                 tt_vcycle, tt_gmres, tt_als, tt_be_solve,
+                 tt_delta0, tt_zeros, tt_to_full, mpo_apply, mpo_to_dense,
+                 op_svd_decompose
+
 # Exports
 export DiscreteStochasticSystem
 export RectLatticeBoundaryCondition
 export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, expand_flux!, compress!, renormalize!, get_global_ids
 export build_generator, reconstruct_generator
+export AMGLevel, build_sa_amg, amg_solve, amg_vcycle!, amg_be_step
+export UnifiedFSP
+export LocalReaction, build_graph_rdme, ring_edges, chain_edges
+export voxel_species_means, voxel_hi_prob, voxel_species_cov
+export BlockFSP, block_means, partition_mesh_edges, block_subsystem
 export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, KrylovFSPDiagnostics, prune_threshold!
 using CommonSolve: solve
 export solve
@@ -107,7 +147,18 @@ export patch_qsd_correlation
 # Graph RDME exports
 export VoxelGraph, chain, grid_2d, grid_3d, degrees, adjacency_list
 export build_schlogl_graph_system, solve_rdme_graph
+export GradedCell, GradedGrid, build_graded_grid, active_from_means
+export graded_diffusion_rates, build_graded_schlogl_system, to_voxel_graph, n_cells
 export GraphRDMESolution, config_probs
+export coarsen_graph, graph_flux_pairs
+# Persisted-joint graph FSP (graph-multigrid hybrid fine kernel)
+export GraphJointFSP, graph_voxel_means, graph_voxel_cov, graph_config_prob
+export graph_voxel_marginal, graph_voxel_marginals
+export BasinQSD, build_basin_qsd, basin_of, restrict_voxel, prolong_voxel
+export within_basin_coupling, lumpable_voxels, LumpInfo
+export build_basin_transfer, basin_vcycle_be
+# Mixed fine/lumped joint FSP over an arbitrary VoxelGraph
+export MixedFSP, set_seed!, build_mixed_generator, mixed_voxel_marginal, mixed_voxel_marginals
 
 # Spatial CME exports (joint distribution + multigrid on voxel axis)
 export VoxelMesh, rect_voxel_mesh
@@ -147,5 +198,11 @@ export BottleneckModel1D, build_bottleneck_system, build_intra_system_2s, bottle
 export build_bottleneck_system_2d, build_intra_system_2d
 export RDMEMultigridFSP, RDMESolution, solve_rdme_multigrid
 export mean_voxel_counts, marginal_voxel
+
+# TT multigrid V-cycle exports (tt_norm intentionally NOT re-exported — name clash
+# with tensor_train_cme.jl; access via TTVCycle if the TT-native norm is needed)
+export TTVCycle, build_M_mpo, bd_diffusion_chain_mpo, build_tt_hierarchy
+export tt_vcycle, tt_gmres, tt_als, tt_be_solve
+export tt_delta0, tt_zeros, tt_to_full, mpo_apply, mpo_to_dense, op_svd_decompose
 
 end

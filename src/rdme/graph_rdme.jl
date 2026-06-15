@@ -123,10 +123,13 @@ Diffusion for each edge (i,j) in graph.edges:
 where D = model.D (the diffusion coefficient; dx=1 assumed throughout,
 so the jump rate d = D/dx² = D).
 """
-function build_schlogl_graph_system(model::SchloglModel1D, graph::VoxelGraph)
+function build_schlogl_graph_system(model::SchloglModel1D, graph::VoxelGraph;
+                                    Dedge::Union{Nothing,AbstractVector} = nothing)
     K  = graph.n_voxels
-    D  = model.D          # jump rate d = D (dx=1)
+    D  = model.D          # jump rate d = D (dx=1); overridden per-edge by Dedge
     c1 = model.c1; c2 = model.c2; c3 = model.c3; c4 = model.c4
+    Dedge === nothing || length(Dedge) == length(graph.edges) ||
+        error("Dedge must have one entry per graph edge ($(length(graph.edges)))")
 
     stoichs      = CartesianIndex{K}[]
     propensities = Function[]
@@ -145,13 +148,13 @@ function build_schlogl_graph_system(model::SchloglModel1D, graph::VoxelGraph)
         end
     end
 
-    # Diffusion along each edge (bidirectional)
-    for (i,j) in graph.edges
-        let i=i, j=j, ei=eu(i), ej=eu(j)
+    # Diffusion along each edge (bidirectional); per-edge rate if Dedge given
+    for (e, (i,j)) in enumerate(graph.edges)
+        let i=i, j=j, ei=eu(i), ej=eu(j), De = Dedge === nothing ? D : float(Dedge[e])
             push!(stoichs, -ei+ej); push!(propensities,
-                (x,rv,t) -> D * max(0, Tuple(x)[i]))
+                (x,rv,t) -> De * max(0, Tuple(x)[i]))
             push!(stoichs,  ei-ej); push!(propensities,
-                (x,rv,t) -> D * max(0, Tuple(x)[j]))
+                (x,rv,t) -> De * max(0, Tuple(x)[j]))
         end
     end
 

@@ -30,3 +30,16 @@ Manifest.toml
 
 .ipynb_checkpoints
 .codex-julia-depot/
+
+# Local purge backup (not versioned)
+_purged/
+
+# LaTeX build artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.nav
+*.snm
+*.toc
+*.log
+*.out

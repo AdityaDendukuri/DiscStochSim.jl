@@ -1,0 +1,726 @@
+%  Multigrid FSP for the RDME — static talk (abstract-aligned, ~12 frames)
+%  Aditya Dendukuri.  Build:  pdflatex talk_multigrid.tex
+%  Structure: Act 1 = well-mixed CME (build the operator); Act 2 = spatial RDME (ring scaling, rate-faithful, space coarsening).
+\documentclass[10pt,aspectratio=169]{beamer}
+
+\usetheme{Boadilla}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+\setbeamerfont{frametitle}{size=\normalsize,series=\bfseries}
+\setbeamerfont{title}{size=\large,series=\bfseries}
+
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,decorations.pathreplacing}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{colortbl}
+
+\graphicspath{{figures/}}
+
+\definecolor{fastblue}{RGB}{31,119,180}
+\definecolor{slowred}{RGB}{214,39,40}
+\definecolor{coarsegreen}{RGB}{44,160,44}
+\definecolor{intercolor}{RGB}{255,140,0}
+\definecolor{myblue}{RGB}{31,119,180}
+\definecolor{mygray}{RGB}{80,80,80}
+\definecolor{activegreen}{RGB}{44,160,44}
+
+\newcommand{\calR}{\mathcal{R}}
+\newcommand{\calP}{\mathcal{P}}
+\newcommand{\Sset}{\mathcal{S}}
+
+\title[Multigrid FSP for the RDME]{%
+  Multigrid Finite State Projection\\
+  for the Reaction--Diffusion Master Equation}
+\author{Aditya Dendukuri}
+\institute[UCSB]{University of California, Santa Barbara}
+\date{}
+
+\begin{document}
+
+\begin{frame}\titlepage\end{frame}
+
+
+% ================================================================
+%  A0.  Motivation: the problem + why baselines fail + roadmap
+% ================================================================
+\begin{frame}{The problem: rare events in spatial stochastic kinetics}
+
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      Reaction--diffusion on a lattice: molecules react within a voxel and hop to
+      neighbours. At low copy number the noise is intrinsic.
+      \begin{itemize}\setlength\itemsep{0.35em}
+        \item Bistable chemistry gives \textbf{metastable} basins; the relevant
+              transitions (basin switching, nucleation) are \textbf{rare}.
+        \item Target: the stationary distribution \emph{and} the switching
+              \textbf{rate}, not a single trajectory.
+      \end{itemize}
+
+      \medskip
+      \begin{block}{This talk}\small
+        One operator $A_c=RAP$ on \textbf{two axes}: count (basins) and space
+        (voxel blocks). Solve the joint at scale, \emph{and} reduce it to a
+        $\sim$200-state rate-faithful model.
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \footnotesize
+      \textbf{Limitations of existing tools:}
+      \smallskip
+
+      \begin{tabular}{@{}p{0.30\linewidth}p{0.62\linewidth}@{}}
+        \toprule
+        \textbf{approach} & \textbf{limitation} \\
+        \midrule
+        SSA (sampling) & rare switch requires prohibitively many samples;
+                         $\lambda_2$ underflows \\[0.35em]
+        Dense / direct FSP & joint is $n_{\max}^{K^2}$
+                         ($200{\times}200\Rightarrow n_{\max}^{40000}$);
+                         LU infeasible by 6.8M states \\[0.35em]
+        Standard multigrid (uniform $P$) & coarsens, but corrupts the slow mode:
+                         $150\%$ rate error \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ################################################################
+% #  ACT 1 — THE WELL-MIXED CME (build the operator)
+% ################################################################
+
+% ================================================================
+%  A1.  CME / FSP
+% ================================================================
+\begin{frame}{The Chemical Master Equation}
+
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      Distribution $p(n,t)$ over integer counts, one linear ODE:
+      \[ \dot p = A\,p . \]
+      \begin{itemize}\setlength\itemsep{0.3em}
+        \item $\mathbf 1^\top A=0$ (mass-conserving); steady state $=$ null vector.
+        \item $p$ is the full distribution: tails, multiple peaks, rare events.
+      \end{itemize}
+
+      \smallskip
+      \begin{block}{Finite State Projection}\small
+        Restrict to a finite support $\Sset$ and integrate
+        \[ p(t{+}\Delta t)=e^{\Delta t\,A_\Sset}\,p\quad(\mathtt{expv}). \]
+        Expand $\Sset$ where probability flows out, discard the tail. Cost $\sim|\Sset|$.
+      \end{block}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \textbf{Bistable birth--death (Schl\"ogl):}\\[1pt]
+      {\small $2X \rightleftharpoons 3X,\quad \emptyset \rightleftharpoons X$ \ \
+      (state-dependent $b(n),d(n)$)}
+      \begin{center}
+      \begin{tikzpicture}[scale=0.80,every node/.style={font=\small},>=stealth]
+        \foreach \n in {0,1,2,3,4}{
+          \draw[thick,fill=myblue!15,rounded corners=2pt]
+            (\n*1.5,0) rectangle (\n*1.5+0.9,0.7);
+          \node at (\n*1.5+0.45,0.35) {$\n$};
+        }
+        \node at (4*1.5+1.15,0.35) {$\cdots$};
+        \foreach \n in {0,1,2,3}{
+          \draw[->,fastblue,thick,bend left=30]
+            (\n*1.5+0.9,0.58) to node[above,font=\tiny]{$b(\n)$} ({(\n+1)*1.5},0.58);
+          \draw[->,slowred,thick,bend left=30]
+            ({(\n+1)*1.5},0.12) to node[below,font=\tiny]{$d(\n{+}1)$} (\n*1.5+0.9,0.12);
+        }
+      \end{tikzpicture}
+      \end{center}
+      \vspace{0.4em}
+      \begin{center}
+      \begin{tikzpicture}[scale=0.62]
+        \foreach \n/\h in {0/0.10,1/0.35,2/0.60,3/0.45,4/0.20,5/0.08,6/0.05,7/0.06,8/0.12,9/0.30,10/0.55,11/0.62,12/0.40,13/0.18}{
+          \fill[myblue!60] (\n*0.62,0) rectangle (\n*0.62+0.52,\h*1.9);
+          \draw[black!30] (\n*0.62,0) rectangle (\n*0.62+0.52,\h*1.9);
+        }
+        \draw[black!40] (0,0)--(14*0.62,0);
+        \foreach \n in {0,3,6,9,12}{\node[below,font=\tiny] at (\n*0.62+0.26,0) {\n};}
+        \node[above,font=\scriptsize] at (2*0.62,1.18) {lo};
+        \node[above,font=\scriptsize] at (11*0.62,1.22) {hi};
+        \node[below,font=\tiny,mygray] at (7*0.62,-0.36){stationary $p(n)$: two peaks};
+      \end{tikzpicture}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  A2a.  Restriction R
+% ================================================================
+\begin{frame}{Restriction $R$: sum fine mass into cells}
+
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Definition 1 (Partition \& restriction)}\small
+        Partition the fine support into disjoint cells $\Sset=\bigsqcup_c \Sset_c$;
+        each microstate $f\in\Sset$ lies in exactly one cell $c$. The restriction
+        $R\in\mathbb R^{|\mathcal C|\times|\Sset|}$ is
+        \[
+          R_{cf}=\mathbf 1[f\in c],\qquad
+          (R\,p)_c=\sum_{f\in c}p_f .
+        \]
+      \end{block}
+
+      {\small The coarse variable is the cell label. A cell is \emph{any} group of
+      microstates: a count-basin, a block of voxels, an aggregate. The example
+      below uses three arbitrary cells $c_1,c_2,c_3$.}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[>=stealth,scale=0.74,every node/.style={font=\tiny}]
+        \def\bw{0.42}
+        \fill[fastblue!8]    (0,-0.02)     rectangle (3*\bw,1.80);
+        \fill[intercolor!9]  (3*\bw,-0.02) rectangle (6*\bw,1.80);
+        \fill[coarsegreen!10](6*\bw,-0.02) rectangle (9*\bw,1.80);
+        \foreach \n/\h in {0/0.45,1/0.80,2/0.50,3/0.12,4/0.08,5/0.14,6/0.50,7/0.85,8/0.55}{
+          \fill[myblue!60] (\n*\bw+0.06,0) rectangle (\n*\bw+\bw-0.06,\h*1.7);
+          \draw[black!25]  (\n*\bw+0.06,0) rectangle (\n*\bw+\bw-0.06,\h*1.7);
+        }
+        \draw[black!45] (-0.04,0)--(9*\bw+0.04,0);
+        \node[mygray] at (4.5*\bw,1.74){fine distribution $p_f$};
+        \foreach \a/\b in {0/3,3/6,6/9}{
+          \draw[decorate,decoration={brace,mirror,amplitude=3pt},black!50]
+            (\a*\bw+0.06,-0.08)--(\b*\bw-0.06,-0.08);
+        }
+        \node[black!65] at (1.5*\bw,-0.42){$c_1$};
+        \node[black!65] at (4.5*\bw,-0.42){$c_2$};
+        \node[black!65] at (7.5*\bw,-0.42){$c_3$};
+        \draw[->,slowred,line width=1.2pt] (4.5*\bw,-0.72)--(4.5*\bw,-1.50);
+        \node[slowred!85!black,right] at (4.5*\bw+0.10,-1.11){$R:\ \textstyle\sum_{f\in c}p_f$};
+        \def\base{-2.55}
+        \foreach \c/\h in {0/0.88,1/0.17,2/0.95}{
+          \fill[coarsegreen!55] ({(3*\c+0.8)*\bw},\base) rectangle ({(3*\c+2.2)*\bw},\base+\h);
+          \draw[black!30]       ({(3*\c+0.8)*\bw},\base) rectangle ({(3*\c+2.2)*\bw},\base+\h);
+        }
+        \draw[black!45] (-0.04,\base)--(9*\bw+0.04,\base);
+        \node[mygray] at (4.5*\bw,\base-0.24){coarse cells $q_c$};
+      \end{tikzpicture}
+      \end{center}
+      \vspace{0.2em}
+      {\centering\tiny $(R\,p)_c=\sum_{f\in c}p_f$ \ (cell-wise sum)\par}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  A2b.  Prolongation P and the Galerkin operator A_c = R A P
+% ================================================================
+\begin{frame}{Prolongation $P$: distribute by the within-cell conditional}
+
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \begin{block}{Definition 2 (Prolongation)}\small
+        Fix within-cell weights $\varphi_f=\pi(f\mid c)$, the \emph{stationary
+        conditional} ($\sum_{f\in c}\varphi_f=1$). Then
+        $P\in\mathbb R^{|\Sset|\times|\mathcal C|}$ is
+        \[
+          P_{fc}=\varphi_f\,\mathbf 1[f\in c],\qquad
+          (P\,q)_f=q_c\,\varphi_f\ \ (f\in c).
+        \]
+        \emph{Galerkin coarse generator} $A_c\coloneqq R\,A\,P$.
+      \end{block}
+
+      \begin{block}{Lemma 1 (Consistency)}\small
+        $R\,P=I_{|\mathcal C|}$ and $\mathbf 1^\top A_c=0$. ($\|RP-I\|=2.2\mathrm{e}{-16}$.)
+      \end{block}
+
+      {\footnotesize Taking $\varphi=\pi(\cdot\mid c)$ is the
+      \textbf{structure-preserving} (stationary-weighted) choice: it restores each
+      cell's conditional shape, so multimodal structure survives $P\!\circ\!R$. Uniform
+      weights $\varphi_f=1/|\Sset_c|$ do \emph{not} preserve the slow dynamics
+      (later: the rate).}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[>=stealth,scale=0.74,every node/.style={font=\tiny}]
+        \def\bw{0.42}
+        \def\tbase{2.50}
+        \foreach \c/\h in {0/0.88,1/0.17,2/0.95}{
+          \fill[coarsegreen!55] ({(3*\c+0.8)*\bw},\tbase) rectangle ({(3*\c+2.2)*\bw},\tbase+\h);
+          \draw[black!30]       ({(3*\c+0.8)*\bw},\tbase) rectangle ({(3*\c+2.2)*\bw},\tbase+\h);
+        }
+        \draw[black!45] (-0.04,\tbase)--(9*\bw+0.04,\tbase);
+        \node[mygray] at (4.5*\bw,\tbase+1.16){coarse cells $q_c$};
+        \draw[->,coarsegreen!55!black,line width=1.2pt] (4.5*\bw,\tbase-0.12)--(4.5*\bw,1.92);
+        \node[coarsegreen!45!black,right] at (4.5*\bw+0.10,2.18){$P:\ q_c\,\varphi_f$};
+        \fill[fastblue!8]    (0,-0.02)     rectangle (3*\bw,1.80);
+        \fill[intercolor!9]  (3*\bw,-0.02) rectangle (6*\bw,1.80);
+        \fill[coarsegreen!10](6*\bw,-0.02) rectangle (9*\bw,1.80);
+        \foreach \n/\h in {0/0.45,1/0.80,2/0.50,3/0.12,4/0.08,5/0.14,6/0.50,7/0.85,8/0.55}{
+          \fill[myblue!60] (\n*\bw+0.06,0) rectangle (\n*\bw+\bw-0.06,\h*1.7);
+          \draw[black!25]  (\n*\bw+0.06,0) rectangle (\n*\bw+\bw-0.06,\h*1.7);
+        }
+        \draw[slowred!70,thick,dashed]
+          (0.5*\bw,0.45*1.7)--(1.5*\bw,0.80*1.7)--(2.5*\bw,0.50*1.7);
+        \draw[slowred!70,thick,dashed]
+          (3.5*\bw,0.12*1.7)--(4.5*\bw,0.08*1.7)--(5.5*\bw,0.14*1.7);
+        \draw[slowred!70,thick,dashed]
+          (6.5*\bw,0.50*1.7)--(7.5*\bw,0.85*1.7)--(8.5*\bw,0.55*1.7);
+        \draw[black!45] (-0.04,0)--(9*\bw+0.04,0);
+        \node[mygray] at (4.5*\bw,-0.36){fine $=q_c\,\varphi_f$ \ (\textcolor{slowred!75!black}{shape $\varphi$})};
+      \end{tikzpicture}
+      \end{center}
+      \vspace{0.2em}
+      {\centering\tiny $(P\,q)_f=q_c\,\varphi_f$, \ $\varphi_f=\pi(f\mid c)$\par}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  A3.  Splitting and the V-cycle
+% ================================================================
+\begin{frame}{Operator splitting and the V-cycle}
+
+  \begin{columns}[T]
+    \begin{column}{0.47\textwidth}
+      \[ A=A_{\rm fast}+A_{\rm slow} \]
+      \begin{itemize}\setlength\itemsep{0.3em}
+        \item $A_{\rm fast}$: within-basin relaxation, large $|\lambda|$
+              $\to$ \textbf{smoother} $S$
+        \item $A_{\rm slow}$: basin switching $\to$ \textbf{coarse grid} $A_c$
+      \end{itemize}
+      \smallskip
+      $S$ damps the fast error from $A_{\rm fast}$; the coarse solve on $A_c$
+      corrects the slow error left behind. The V-cycle alternates the two,
+      for the backward-Euler step $(I-\Delta t\,A)x=b$:
+      \begin{enumerate}\setlength\itemsep{0.18em}
+        \item pre-smooth $x\leftarrow S^{\nu}x$
+        \item residual $r=b-(I-\Delta t\,A)x$
+        \item coarse solve $(I-\Delta t\,A_c)\,e_c=R\,r$
+        \item correct $x\leftarrow x+P\,e_c$
+        \item post-smooth $x\leftarrow S^{\nu}x$
+      \end{enumerate}
+      Recurse on $A_c$ for a full V-cycle.
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[>=stealth,scale=0.86,every node/.style={font=\scriptsize}]
+        \foreach \y/\lbl/\col in {2/L0/myblue,1/L1/{intercolor!80!black},0/L2/{coarsegreen!65!black}}{
+          \draw[\col!40,thin] (-0.2,\y)--(6.2,\y);
+          \node[\col,font=\tiny,left] at (-0.25,\y) {\textbf{\lbl}};
+        }
+        \node[circle,fill=myblue!70,inner sep=1.6pt] (a) at (0.4,2){};
+        \node[circle,fill=intercolor!80,inner sep=1.6pt] (b) at (1.7,1){};
+        \node[circle,fill=coarsegreen!75,inner sep=1.8pt] (c) at (3.0,0){};
+        \node[circle,fill=intercolor!80,inner sep=1.6pt] (d) at (4.3,1){};
+        \node[circle,fill=myblue!70,inner sep=1.6pt] (e) at (5.6,2){};
+        \draw[->,slowred!75,thick] (a)--(b) node[midway,above left,font=\tiny,slowred!80]{$R$};
+        \draw[->,slowred!75,thick] (b)--(c) node[midway,above left,font=\tiny,slowred!80]{$R$};
+        \draw[coarsegreen!65!black,line width=1.4pt] (c) circle (3.6pt);
+        \draw[->,fastblue,thick] (c)--(d) node[midway,above right,font=\tiny,fastblue]{$P$};
+        \draw[->,fastblue,thick] (d)--(e) node[midway,above right,font=\tiny,fastblue]{$P$};
+        \node[font=\tiny,below] at (0.4,1.95) {pre-smooth};
+        \node[font=\tiny,below=1pt] at (3.0,-0.05) {coarse solve};
+        \node[font=\tiny,below] at (5.6,1.95) {post-smooth};
+      \end{tikzpicture}
+      \end{center}
+
+      \medskip
+      \begin{block}{Measured (bistable Schl\"ogl, $K{=}5$)}
+        \footnotesize
+        coarsening $8547\!\to\!6$ ($1424\times$);\ contraction $0.75$/cycle;\
+        residual $3.5\mathrm{e}{-2}\!\to\!3.1\mathrm{e}{-5}$ in 25 cycles;\
+        rel.\ err vs direct $1.5\times10^{-4}$.
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ################################################################
+% #  ACT 2 — THE SPATIAL RDME (the payoff: ring scaling, rate-faithful, space coarsening)
+% ################################################################
+
+% ================================================================
+%  B1.  RDME
+% ================================================================
+\begin{frame}{The spatial problem: the reaction--diffusion master equation}
+
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      $K\times K$ grid; voxel $\mathbf k$ holds count $n_\mathbf{k}$. Diffusion is a
+      \textbf{first-order (linear) reaction} $X_\mathbf{k}\to X_\mathbf{l}$ at rate
+      $d=D/h^2$, so space coarsening is \emph{exact} (Theorem 1).
+      \[
+        A=\underbrace{\textstyle\sum_\mathbf{k} A^{\rm rx}_\mathbf{k}}_{\text{reaction (diag.)}}
+         +\underbrace{\textstyle\sum_{\langle\mathbf k,\mathbf l\rangle} A^{\rm diff}_{\mathbf k\mathbf l}}_{X_\mathbf{k}\to X_\mathbf{l}\ \text{(off-diag.)}}
+      \]
+      \begin{itemize}\setlength\itemsep{0.35em}
+        \item \textbf{Joint} law, up to $n_{\max}^{K^2}$; a $200{\times}200$ grid is
+              $n_{\max}^{40000}$, never assembled.
+        \item Neighbour-only coupling $\Rightarrow$ smooth, near-steady away from the front.
+      \end{itemize}
+
+      \begin{alertblock}{Role of the coarse operator}
+        One operator $A_c=RAP$ serves two purposes: it solves the joint at scale,
+        and reduces the model to $\sim$200 states that preserve the switching rate.
+      \end{alertblock}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \begin{center}
+      % 1D voxel chain
+      \begin{tikzpicture}[scale=0.6,>=stealth,every node/.style={font=\scriptsize}]
+        \foreach \k in {1,2,3,4}{
+          \fill[myblue!22] (\k*1.5,0) circle (0.40);
+          \draw[myblue!75,thick] (\k*1.5,0) circle (0.40);
+          \node[myblue!55!black] at (\k*1.5,0){\k};
+        }
+        \foreach \k in {1,2,3}{
+          \draw[<->,intercolor!85!black,line width=0.9pt]
+            (\k*1.5+0.44,0)--({(\k+1)*1.5-0.44},0)
+            node[midway,above=-1pt,font=\tiny,intercolor!70!black]{$d$};
+        }
+      \end{tikzpicture}\\[1pt]
+      {\tiny 1D voxel chain ($K{=}4$): \textcolor{myblue!70!black}{nodes react},
+       \textcolor{intercolor!75!black}{edges diffuse}}\\[6pt]
+      % assembled generator
+      \begin{tikzpicture}[scale=0.52,>=stealth,every node/.style={font=\tiny}]
+        \def\s{1.05}
+        \foreach \j in {0,1,2,3}{\node[myblue!55!black]
+          at (\j*\s+0.5*\s,0.40){\the\numexpr\j+1\relax};}
+        \foreach \i in {0,1,2,3}{\node[myblue!55!black]
+          at (-0.40,-\i*\s-0.5*\s){\the\numexpr\i+1\relax};}
+        \foreach \i in {0,1,2,3}\foreach \j in {0,1,2,3}{
+          \draw[black!12] (\j*\s,-\i*\s) rectangle (\j*\s+\s,-\i*\s-\s);
+        }
+        \foreach \i in {0,1,2,3}{
+          \fill[myblue!28] (\i*\s,-\i*\s) rectangle (\i*\s+\s,-\i*\s-\s);
+          \node at (\i*\s+0.5*\s,-\i*\s-0.5*\s) {$A^{\rm rx}$};
+        }
+        \foreach \i in {0,1,2}{
+          \fill[intercolor!40] (\i*\s+\s,-\i*\s) rectangle (\i*\s+2*\s,-\i*\s-\s);
+          \node at (\i*\s+1.5*\s,-\i*\s-0.5*\s) {$d$};
+          \fill[intercolor!40] (\i*\s,-\i*\s-\s) rectangle (\i*\s+\s,-\i*\s-2*\s);
+          \node at (\i*\s+0.5*\s,-\i*\s-1.5*\s) {$d$};
+        }
+        \node[black!30] at (3.0*\s,-0.5*\s) {$0$};
+        \node[black!30] at (1.0*\s,-3.5*\s) {$0$};
+        \draw[thick] (-0.12,0.12)--(-0.12,-4*\s-0.12)--(0.18,-4*\s-0.12);
+        \draw[thick] (-0.12,0.12)--(0.18,0.12);
+        \draw[thick] (4*\s+0.12,0.12)--(4*\s+0.12,-4*\s-0.12)--(4*\s-0.18,-4*\s-0.12);
+        \draw[thick] (4*\s+0.12,0.12)--(4*\s-0.18,0.12);
+      \end{tikzpicture}
+      \end{center}
+      \vspace{0.2em}
+      {\centering\tiny \textcolor{myblue}{diagonal} $=$ per-voxel CME ($A^{\rm rx}$);\ \
+      \textcolor{intercolor!85!black}{off-diagonal} $=$ diffusion ($d$)\par}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B2.  Multigrid scales on the spatial ring joint
+% ================================================================
+\begin{frame}{Bounded iteration count across state-space size}
+  \begin{center}
+    \includegraphics[width=0.80\textwidth]{fig_amg_scaling}
+  \end{center}
+  \vspace{-0.5em}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \centering\footnotesize
+      \begin{tabular}{rrrr}
+        \toprule
+        $K$ & $|\Sset|$ & levels & GMRES its \\
+        \midrule
+        2 & 2{,}601 & 2 & 23 \\
+        3 & 132{,}651 & 5 & 31 \\
+        4 & \textbf{6{,}765{,}201} & 8 & \textbf{32} \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      {\footnotesize
+      \textbf{Ring joint (RDME)}: bistable Schl\"ogl, $K$-voxel ring.
+      $|\Sset|\times2600$, iterations $23\!\to\!32$, size-independent. 6.8M states
+      solved to $6\mathrm{e}{-9}$ in 55\,s; direct LU infeasible.
+      \par\smallskip
+      Construction: double-pairwise aggregation $+$ plain Galerkin (preserves the
+      M-matrix) $+$ V-cycle-preconditioned GMRES.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B3a.  Setup: the metastable rate is an eigenvalue
+% ================================================================
+\begin{frame}{The metastable rate is an eigenvalue}
+
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      Spectrum of $A$: $0=\lambda_1>\mathrm{Re}\,\lambda_2\ge\cdots$; the stationary
+      law $\pi$ is the $\lambda_1{=}0$ mode.
+      \begin{itemize}\setlength\itemsep{0.35em}
+        \item Bistability gives a \textbf{spectral gap}: one eigenvalue $\lambda_2$
+              lies near $0$, isolated from the bulk.
+        \item Its mode is the basin imbalance; relaxation
+              $p(t)-\pi\sim e^{\lambda_2 t}$.
+        \item $|\lambda_2|$ \emph{is} the basin-switching rate,
+              $\approx 1/\langle T_{\rm switch}\rangle$: the rare event SSA cannot
+              sample.
+      \end{itemize}
+
+      \medskip
+      \begin{block}{Experiment}\small
+        For each ring size $K$, compute $\lambda_2$ on (i) the fine joint $A$
+        (truth, feasible only at small $K$) and (ii) the $\sim$200-state coarse
+        operator $A_c=RAP$, with $\pi$-weighted vs uniform $P$.
+      \end{block}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[scale=1.0,>=stealth,every node/.style={font=\scriptsize}]
+        \draw[->,thick] (0.5,0)--(-5.3,0) node[left]{$\mathrm{Re}\,\lambda$};
+        \draw (0,-0.12)--(0,0.12);
+        \fill[coarsegreen!70!black] (0,0) circle (2.6pt);
+        \node[above] at (0,0.14) {$\lambda_1{=}0$};
+        \node[below,coarsegreen!55!black,font=\tiny] at (0,-0.18){stationary $\pi$};
+        \fill[slowred] (-0.8,0) circle (2.4pt);
+        \node[above] at (-0.8,0.14) {$\lambda_2$};
+        \node[below,slowred,font=\tiny,align=center] at (-0.8,-0.20){slow:\\switching};
+        \foreach \x in {-3.0,-3.4,-3.8,-4.2,-4.6}{
+          \fill[fastblue!75] (\x,0) circle (2.0pt);
+        }
+        \node[below,fastblue,font=\tiny,align=center] at (-3.8,-0.22){fast:\\within-basin};
+        \draw[<->,mygray] (-0.95,0.6)--(-2.85,0.6);
+        \node[above,mygray,font=\tiny] at (-1.9,0.6){spectral gap};
+      \end{tikzpicture}
+      \end{center}
+      \vspace{0.4em}
+      {\centering\tiny isolated $\lambda_2$ $\Rightarrow$ metastability; the bulk is
+      the fast within-basin relaxation\par}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B3b.  Rate-faithful coarsening of the ring: the metastable rate
+% ================================================================
+\begin{frame}{Recovering the rare-event \emph{rate} from $\sim$200 states}
+  \begin{center}
+    \includegraphics[width=0.72\textwidth]{fig_rate_faithful}
+  \end{center}
+  \vspace{-1.0em}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \centering\footnotesize
+      \begin{tabular}{rrrcc}
+        \toprule
+        $K$ & $|\Sset|$ & coarse & $-\lambda_2$ & rel.\ err \\
+        \midrule
+        2 & 2{,}601     & 101 & 0.0460 & $0.65\%$ \\
+        3 & 132{,}651   & 151 & 0.0526 & $0.99\%$ \\
+        4 & \textbf{6{,}765{,}201} & 201 & \textbf{0.0636} & n/a \\
+        \bottomrule
+      \end{tabular}
+
+      \smallskip
+      {\scriptsize $K{=}4$: fine ref.\ infeasible; rate \emph{obtained} from
+      201 states. (uniform-$P$ yields $0.187$.)}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      {\footnotesize
+      Reduce the ring onto total count $Y=\sum_v n_v$: a $\sim$200-state coarse
+      master equation reproduces $\lambda_2$ to $<1\%$, but only with
+      \textbf{stationary-weighted} $\pi(s\mid Y)$; uniform-$P$ errs by $150\%$.
+      \par\smallskip
+      $\pi$ is the $\lambda{=}0$ (stationary) mode ($\sim$30 AMG solves):
+      \textbf{no rare transition sampled} (unlike SSA).}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B2.  Space-axis coarsening — merge voxels
+% ================================================================
+\begin{frame}{Coarsening the space axis: merge voxels}
+
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      Counts coarsened; now coarsen \emph{space}. Diffusion (the linear hop
+      $X_i\to X_j$) equilibrates \textcolor{fastblue}{quickly} within a region;
+      the \textcolor{slowred}{slow} mode is the coarse profile.
+
+      \medskip
+      Same $A_c=R\,A\,P$, cell $=$ \textbf{block of voxels}:
+      \begin{itemize}\setlength\itemsep{0.4em}
+        \item coarse variable $Y=\sum_{v\in c} n_v$.
+        \item per-voxel weights $\varphi_f=\pi(\cdot\mid c)$, as before.
+        \item affine network: $\varphi$ is \textbf{binomial / multinomial} in
+              closed form (no solve).
+        \item nonlinear (Schl\"ogl ring): $\varphi$ is the AMG stationary
+              conditional.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \begin{center}
+      \begin{tikzpicture}[>=stealth,scale=0.9,every node/.style={font=\scriptsize}]
+        % two fine voxels
+        \draw[thick,fill=fastblue!18,rounded corners=2pt](0,2.4)rectangle(1.1,3.3);
+        \node at (0.55,2.85){$n_1$};
+        \draw[thick,fill=fastblue!18,rounded corners=2pt](1.3,2.4)rectangle(2.4,3.3);
+        \node at (1.85,2.85){$n_2$};
+        \draw[<->,fastblue,thin](1.12,2.85)--(1.28,2.85);
+        \node[fastblue,font=\tiny] at (1.2,3.5){$X_1\!\leftrightarrow\!X_2$};
+        % coarse super-voxel
+        \draw[thick,fill=coarsegreen!20,rounded corners=3pt](0.3,0.3)rectangle(2.1,1.2);
+        \node at (1.2,0.75){$Y=n_1{+}n_2$};
+        % R / P arrows
+        \draw[->,slowred,thick](0.7,2.35)--(0.7,1.25)
+          node[midway,left,font=\tiny,slowred]{$R$ (sum)};
+        \draw[->,coarsegreen!60!black,thick](1.7,1.25)--(1.7,2.35)
+          node[midway,right,font=\tiny,coarsegreen!55!black]{$P$ (split)};
+        \node[align=center,font=\tiny] at (1.2,-0.15)
+          {$\varphi=\mathrm{Bin}(Y,\tfrac12)$\\(within-cell equilibrium)};
+      \end{tikzpicture}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B3.  Exact for linear; small error otherwise
+% ================================================================
+\begin{frame}{Exact for linear reactions; vanishing error otherwise}
+
+  \begin{block}{Theorem 1 (Exact coarsening for linear networks)}\small
+    If every reaction propensity is affine in the counts and diffusion is linear,
+    then the within-cell conditional $\varphi=\pi(\cdot\mid c)$ is exactly
+    (multi)nomial and the Galerkin operator $A_c=R\,A\,P$ generates the coarse
+    variable \emph{exactly}: the closure error is zero.
+  \end{block}
+
+  \begin{columns}[T]
+    \begin{column}{0.62\textwidth}
+      \begin{center}
+        \includegraphics[width=\linewidth]{fig_closure_highcopy}
+      \end{center}
+    \end{column}
+    \begin{column}{0.36\textwidth}
+      {\small
+      \textbf{Nonlinear $\alpha$.} For a smooth propensity the leading closure error is
+      \[
+        \tfrac12\,\alpha''(\langle n\rangle)\,\mathrm{Var}(n)
+        =O\!\big(1/\langle n\rangle\big)\xrightarrow[\text{high copy}]{}0 .
+      \]
+      \begin{itemize}\setlength\itemsep{0.4em}
+        \item \textbf{Linear:} exact to machine precision, every copy number.
+        \item \textbf{Nonlinear:} error $\propto 1/\langle n\rangle$.
+        \item Coarsen \textbf{where counts are high} (bulk); keep the front fine.
+      \end{itemize}}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B4.  Adaptive refinement: two flux criteria
+% ================================================================
+\begin{frame}{Adaptive refinement: two flux criteria}
+
+  {\small\textbf{Space axis}: coarsen the bulk, keep the fine grid where the front moves.}
+  \[
+    \Phi_\mathbf{k}=D\,\langle n\rangle\ \ (\text{total flux}),\qquad
+    \phi_\mathbf{k}=D\!\!\sum_{n>n_{\rm un}}\!\! n\,p(n)\ \ (\text{per-molecule flux})
+  \]
+
+  \begin{columns}[T]
+    \begin{column}{0.40\textwidth}
+      {\small
+      \begin{itemize}\setlength\itemsep{0.5em}
+        \item $\Phi$ misses a \textbf{bottleneck}: low mean, transition-competent
+              tail.
+        \item $\phi$ counts only molecules above $n_{\rm un}$, those that
+              nucleate a neighbour.
+        \item \textbf{refine if $\Phi$ \emph{or} $\phi>\mathrm{tol}$.}
+      \end{itemize}}
+    \end{column}
+    \begin{column}{0.58\textwidth}
+      \begin{center}
+        \includegraphics[width=\linewidth]{fig_flux_criterion}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B5.  Result: 1D BDD exact two-grid
+% ================================================================
+\begin{frame}{1D birth--death--diffusion: exact two-grid}
+  \begin{columns}[T]
+    \begin{column}{0.60\textwidth}
+      \begin{center}
+        \includegraphics[width=\linewidth]{fig_bdd_1d_profile}
+      \end{center}
+    \end{column}
+    \begin{column}{0.38\textwidth}
+      {\small
+      \textbf{Linear} chain $\Rightarrow$ coarsening is \textbf{exact}, with no
+      closure error.
+      \begin{itemize}\setlength\itemsep{0.4em}
+        \item coarse solve matches the fine FSP: rel.\ err $2.2\times10^{-4}$
+        \item full joint $\sim\!10^{15}$ at $K{=}12$; FSP support plateaus $\sim\!3000$
+        \item $|\Sset|$ tracks the active band, not $K$
+      \end{itemize}}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+
+% ================================================================
+%  B6.  Result: Schlögl 2D critical droplet
+% ================================================================
+\begin{frame}{Bistable Schl\"ogl: critical droplet on a $60{\times}60$ grid}
+  \begin{center}
+    \includegraphics[height=0.66\textheight,keepaspectratio]{fig_schlogl_2d_droplet}
+  \end{center}
+  \vspace{-0.4em}
+  {\scriptsize
+    Schl\"ogl RDME, $60{\times}60$, $D{=}2$; initial radii $R{=}2,5,12$.
+    Colour $=P(n>n_{\rm un})$ (\textcolor{slowred!80}{red} lo, white front,
+    \textcolor{fastblue}{blue} hi). \textbf{Right:} high-basin fraction vs.\ time,
+    all radii grow. Bulk voxels frozen at a basin; only the thin front ring evolves.}
+\end{frame}
+
+
+% ================================================================
+%  Summary
+% ================================================================
+\begin{frame}{Summary}
+  \begin{itemize}\setlength\itemsep{0.7em}
+    \item \textbf{One principle, two axes.} Merging voxels and grouping
+          count-basins are the \emph{same} coarsening; multigrid applies either,
+          recursively.
+    \item \textbf{Known prolongation.} $P=$ the within-cell steady state;
+          $A_c=RAP$ is \textbf{exact for linear networks}, with
+          $O(1/\langle n\rangle)$ error at high copy number.
+    \item \textbf{Adaptive grid.} Total \emph{and} per-molecule flux keep the front
+          fine and the bulk coarse; $|\Sset|$ tracks the active band, not the domain.
+    \item \textbf{Measured \& scalable.} A complete V-cycle: $1424\times$
+          coarsening, $1.5\times10^{-4}$ vs direct; exact on the linear chain.
+          As a GMRES preconditioner it is \textbf{size-independent}: $23\!\to\!32$
+          iterations as $|\Sset|$ grows $2.6\mathrm{k}\!\to\!6.8\mathrm{M}$.
+    \item \textbf{Scope.} Exact under timescale separation; degrades when
+          correlations extend (a broad 2D interface), where the slow subspace is
+          no longer low-dimensional.
+  \end{itemize}
+\end{frame}
+
+
+\end{document}
