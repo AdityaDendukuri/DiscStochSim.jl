@@ -20,8 +20,8 @@ Two panels:
 Output: paper/figures/fig_bdd_1d_profile.png
 """
 
-using DiscStochSim, Printf, LinearAlgebra, SparseArrays, Plots
-using DiscStochSim: StateSpace, build_generator
+using DiscStochSim, Catalyst, Printf, LinearAlgebra, SparseArrays, Plots
+using DiscStochSim: StateSpace, build_generator, build_rdme_joint, chain
 
 # ── linear birth–death–diffusion on a 1-D chain ─────────────────────────────────
 const λ    = 3.0      # immigration rate at the source voxel
@@ -29,13 +29,15 @@ const k_d  = 1.0      # death rate coefficient
 const D    = 1.5      # diffusion coefficient (dx = 1)
 const NMAX = 16       # per-voxel count truncation
 
-build_sys(K) = build_graph_rdme(
-    K, Val(1), chain_edges(K),
-    v -> v == 1 ?
-        LocalReaction{1}[ LocalReaction{1}(( 1,), nv -> λ),
-                          LocalReaction{1}((-1,), nv -> k_d * nv[1]) ] :
-        LocalReaction{1}[ LocalReaction{1}((-1,), nv -> k_d * nv[1]) ],
-    (D,))
+# voxel 1 has a localized immigration source; every voxel has death + diffusion
+const rn_source = @reaction_network begin
+    $λ,   ∅ --> X
+    $k_d, X --> ∅
+end
+const rn_bulk = @reaction_network begin
+    $k_d, X --> ∅
+end
+build_sys(K) = build_rdme_joint(v -> v == 1 ? rn_source : rn_bulk, chain(K); D = D)
 
 chain_bc(K) = x -> all(0 <= n <= NMAX for n in Tuple(x))
 

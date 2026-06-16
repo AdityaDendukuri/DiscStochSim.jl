@@ -23,20 +23,20 @@ the (Φ_tot, Φ_pm) plane, coloured by whether they actually nucleate the neighb
 
 Output: paper/figures/fig_flux_criterion.{png,pdf}
 =#
-using DiscStochSim, Printf, LinearAlgebra, SparseArrays, CairoMakie
-using DiscStochSim: build_graph_rdme, chain_edges, LocalReaction,
+using DiscStochSim, Catalyst, Printf, LinearAlgebra, SparseArrays, CairoMakie
+using DiscStochSim: build_rdme_joint, chain,
                     StateSpace, add_state!, build_generator, build_basin_qsd
 using ExponentialUtilities: expv
 
 # ── single-voxel bistable Schlögl (roots ≈ 1 / 8 / 22) ──────────────────────────
 c2=0.02; c1=0.2; c3=1.0667; c4=0.72; D=2.0
 nmax = 28
-schlogl_rxns = [
-    LocalReaction{1}(( 1,), nv -> c3),
-    LocalReaction{1}((-1,), nv -> c4 * nv[1]),
-    LocalReaction{1}(( 1,), nv -> c1 * nv[1] * (nv[1]-1) / 2),
-    LocalReaction{1}((-1,), nv -> c2 * nv[1] * (nv[1]-1) * (nv[1]-2) / 6),
-]
+schlogl_rn = @reaction_network begin
+    $c3, ∅ --> X
+    $c4, X --> ∅
+    $c1, 2X --> 3X
+    $c2, 3X --> 2X
+end
 birth(n) = c3 + c1*n*(n-1)/2
 death(n) = c4*n + c2*n*(n-1)*(n-2)/6
 Lsv = zeros(nmax+1, nmax+1)
@@ -52,7 +52,7 @@ qhi = zeros(nmax+1); qhi[((n_un+1):nmax).+1] .= bq.qsd[2]   # high-basin QSD
 
 # ── 2-voxel joint generator (exact) ─────────────────────────────────────────────
 K2 = 2
-sys = build_graph_rdme(K2, Val(1), chain_edges(K2), v -> schlogl_rxns, (D,))
+sys = build_rdme_joint(schlogl_rn, chain(K2); D = D)
 bc  = x -> all(0 <= n <= nmax for n in Tuple(x))
 sp = StateSpace{CartesianIndex{K2}, Float64}()
 for n1 in 0:nmax, n2 in 0:nmax

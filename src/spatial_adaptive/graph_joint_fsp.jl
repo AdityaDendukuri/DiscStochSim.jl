@@ -31,7 +31,7 @@ end
     GraphJointFSP(graph, sys; bc=nonneg, ε_prune=1e-8, krylov_m=30)
 
 Build a persisted-joint FSP for the channel system `sys` (e.g. from
-`build_schlogl_graph_system`) on `graph`. `bc` is the rstep boundary condition;
+`build_rdme_joint`) on `graph`. `bc` is the rstep boundary condition;
 the default admits any nonnegative state (support is bounded by pruning, not by a
 fixed n_max). Pass a conservation predicate (e.g. `x -> sum(Tuple(x)) <= N`) for
 mass-conserved systems — that is conservation, not an n_max cap.

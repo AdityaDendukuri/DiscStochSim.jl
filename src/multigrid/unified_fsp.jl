@@ -5,8 +5,7 @@
 # `StateSpace` of realised configurations and a `DiscreteStochasticSystem`
 # (stoichiometry + propensities).  Each system — 2-D birth–death, Schlögl ring,
 # Schlögl 2-D, annihilation — supplies its own `DiscreteStochasticSystem` via the
-# existing builders (`build_graph_rdme_system`, `build_schlogl_graph_system`, …);
-# this stepper is identical for all of them.
+# unified builder `build_rdme_joint`; this stepper is identical for all of them.
 #
 # One step is a θ-method implicit move on the CME generator A:
 #

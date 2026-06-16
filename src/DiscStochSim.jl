@@ -50,6 +50,9 @@ include("rdme/solve.jl")
 # Graph-generalised RDME (depends on rdme_model, operators, solve)
 include("rdme/graph_rdme.jl")
 
+# Unified RDME generator: any Catalyst network × VoxelGraph → joint DiscreteStochasticSystem
+include("rdme/unified_rdme.jl")
+
 # Graded variable-width RDME operator (depends on VoxelGraph + SchloglModel1D)
 include("rdme/graded_grid.jl")
 
@@ -102,7 +105,7 @@ export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, expand_flux
 export build_generator, reconstruct_generator
 export AMGLevel, build_sa_amg, amg_solve, amg_vcycle!, amg_be_step
 export UnifiedFSP
-export LocalReaction, build_graph_rdme, ring_edges, chain_edges
+export build_rdme_joint
 export voxel_species_means, voxel_hi_prob, voxel_species_cov
 export BlockFSP, block_means, partition_mesh_edges, block_subsystem
 export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, KrylovFSPDiagnostics, prune_threshold!
@@ -146,11 +149,8 @@ export patch_edges_1d, patch_edges_2d, patch_edges_from_cmap
 export patch_qsd_correlation
 # Graph RDME exports
 export VoxelGraph, chain, grid_2d, grid_3d, degrees, adjacency_list
-export build_schlogl_graph_system, solve_rdme_graph
 export GradedCell, GradedGrid, build_graded_grid, active_from_means
 export graded_diffusion_rates, build_graded_schlogl_system, to_voxel_graph, n_cells
-export GraphRDMESolution, config_probs
-export coarsen_graph, graph_flux_pairs
 # Persisted-joint graph FSP (graph-multigrid hybrid fine kernel)
 export GraphJointFSP, graph_voxel_means, graph_voxel_cov, graph_config_prob
 export graph_voxel_marginal, graph_voxel_marginals
