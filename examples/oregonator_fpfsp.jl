@@ -48,11 +48,20 @@ end
 
 results_dir = joinpath(@__DIR__, "results")
 mkpath(results_dir)
+
+# Log-subsample per-step diagnostics to ~2000 points
+let t_full = diag.t_log, n_save = 2000
+    t_grid  = range(t_full[1], t_full[end]; length=n_save)
+    raw_idx = searchsortedfirst.(Ref(t_full), t_grid)
+    global log_idx = unique(clamp.(raw_idx, 1, length(t_full)))
+end
+
 out = Dict(
-    "dt_log"      => diag.dt_log,
-    "t_log"       => diag.t_log,
-    "size_log"    => diag.size_log,
+    "dt_log"      => diag.dt_log[log_idx],
+    "t_log"       => diag.t_log[log_idx],
+    "size_log"    => diag.size_log[log_idx],
     "snap_t"      => sol.t,
+    "snap_traj"   => traj,            # rows = snapshots, cols = X/Y/Z
     "snap_sizes"  => sol.state_space_sizes,
     "total_iters" => diag.total_iters,
     "wall_time"   => t_wall,

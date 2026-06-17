@@ -109,7 +109,7 @@ rober_fp = deserialize(joinpath(RESDIR, "robertson_fpfsp.jls"))
 rober_k  = deserialize(joinpath(RESDIR, "robertson_krylov.jls"))
 
 dt_r_fp_full  = rober_fp["dt_log"];  t_r_fp_full  = rober_fp["t_log"]
-acc_τ_k_all  = rober_k["acc_τ"];   acc_t_k_all = rober_k["acc_t"]
+acc_τ_k_all  = rober_k["τ_log"];   acc_t_k_all = rober_k["time_log"]
 
 # Log-subsample FP-FSP: pick ~2000 points log-spaced in time
 # (stride-based would massively oversample the burst region)

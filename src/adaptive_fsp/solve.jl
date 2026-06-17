@@ -27,6 +27,13 @@ Algorithm parameters for the adaptive Finite State Projection method.
   Bottleneck system), which would otherwise produce a single giant step.
   Set `dt_max = 1/λ_downstream`; leave as `Inf` if the flux step is
   already sufficient (κ = λ_max/Φ_out ≤ 1/ε_dt throughout).
+- `use_incremental::Bool = true`: If `true` (default), use `reconstruct_generator`
+  (incremental forward enumeration) for the generator build. If `false`, use
+  `build_generator` (standard full rebuild) at every step. Setting `false` is
+  useful for performance comparisons.
+- `record_step_time::Bool = false`: If `true`, record wall-clock time for each
+  iteration in `AdaptiveFSPDiagnostics.step_time_log`. Disabled by default to
+  avoid timer overhead in production runs.
 
 ## Time-step formula
 
@@ -48,6 +55,8 @@ Base.@kwdef struct AdaptiveFSP
     expand_method::Symbol = :stoich
     expand_threshold::Float64 = 0.1
     dt_max::Float64 = Inf
+    use_incremental::Bool = true
+    record_step_time::Bool = false
     # Optional progress callback: called every save_interval steps with
     # (t_current, t_log, mean_trajectory_matrix).  Use terminal_progress()
     # to get a live UnicodePlots display in the terminal.
@@ -63,6 +72,7 @@ Per-step diagnostic data from an AdaptiveFSP solve.
 - `t_log`: simulated time after each iteration.
 - `size_log`: projection size `|S|` after each iteration.
 - `flux_log`: internal flux `Φ = Σᵢ pᵢ·wᵢ` (compressed generator diagonal) at each iteration.
+- `step_time_log`: wall-clock time (seconds) for each iteration (empty unless `record_step_time=true`).
 - `total_iters`: total number of iterations executed.
 """
 struct AdaptiveFSPDiagnostics
@@ -70,6 +80,7 @@ struct AdaptiveFSPDiagnostics
     t_log::Vector{Float64}
     size_log::Vector{Int}
     flux_log::Vector{Float64}
+    step_time_log::Vector{Float64}
     total_iters::Int
 end
 
@@ -108,6 +119,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     t_log         = Float64[]
     size_log_diag = Int[]
     flux_log      = Float64[]
+    step_time_log = Float64[]
 
     t = Float64(t0)
     iter = 0
@@ -118,6 +130,7 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
 
     while t < tf && iter < alg.max_iter
         iter += 1
+        t_step_start = alg.record_step_time ? time_ns() : UInt64(0)
 
         # 1) Expand state space
         if alg.expand_method === :ssa
@@ -129,9 +142,14 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
             expand!(sp, model, bc; depth=alg.expansion_depth)
         end
 
-        # 2) Build generator (incremental rebuild reusing previous matrix)
-        A, in_flow, out_flow, exit_rate_boundary =
-            reconstruct_generator(sp, model, rates, t, A_old, gids_old)
+        # 2) Build generator (incremental or full rebuild)
+        if alg.use_incremental
+            A, in_flow, out_flow, exit_rate_boundary =
+                reconstruct_generator(sp, model, rates, t, A_old, gids_old)
+        else
+            A, in_flow, out_flow, exit_rate_boundary =
+                build_generator(sp, model, rates, t)
+        end
 
         # Cache generator state for next iteration's incremental rebuild
         A_old = A
@@ -163,6 +181,9 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         push!(t_log, t)
         push!(size_log_diag, length(sp))
         push!(flux_log, Φ)
+        if alg.record_step_time
+            push!(step_time_log, (time_ns() - t_step_start) * 1e-9)
+        end
 
         # 8) Save snapshot
         if iter % alg.save_interval == 0 || t >= tf
@@ -186,6 +207,6 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
     end
 
     sol  = FSPSolution{E}(sol_t, sol_snaps, sol_sizes, n_species)
-    diag = AdaptiveFSPDiagnostics(dt_log, t_log, size_log_diag, flux_log, iter)
+    diag = AdaptiveFSPDiagnostics(dt_log, t_log, size_log_diag, flux_log, step_time_log, iter)
     (sol, diag)
 end
