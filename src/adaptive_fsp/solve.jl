@@ -165,8 +165,13 @@ function CommonSolve.solve(prob::FSPProblem{E,T}, alg::AdaptiveFSP) where {E,T}
         dt_flux = Φ > 0 ? alg.ε_dt / Φ : (tf - t)
         dt = min(dt_flux, alg.expansion_depth * alg.dt_max, tf - t)
 
-        # 4) Propagate probability (subcycle if dt*||A||_1 is too large)
+        # 4) Propagate probability. Krylov expv can hit a LAPACK edge case for
+        # tiny matrices, so use a dense exponential when |S| is small.
+        if length(sp) <= 4
+            sp.probs = exp(Matrix(A) .* dt) * sp.probs
+        else
             sp.probs = expv(dt, A, sp.probs)
+        end
 
         # 5) Flux-aware pruning + renormalization
         compress!(sp, model, rates, t, alg.prob_quantile;
