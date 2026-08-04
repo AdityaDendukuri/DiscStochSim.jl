@@ -4,349 +4,495 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ d4000001-4000-4000-8000-000000000001
+# ╔═╡ 6720d580-8ac2-11f1-918d-656b1710a6d0
 begin
-	using Catalyst, CommonSolve
+	using Catalyst, CommonSolve, OrdinaryDiffEqDefault
 	using Plots, UnicodePlots, Distributions
-	using ExponentialUtilities, Expokit
-	using LinearAlgebra, SparseArrays, Statistics, Random
-	include(joinpath(@__DIR__, "../src/DiscStochSim.jl"))
+	using ExponentialUtilities, Expokit, JumpProcesses
+	include("../src/DiscStochSim.jl")
 	using .DiscStochSim
 end
 
-# ╔═╡ d4000002-4000-4000-8000-000000000002
-md"""
-# General state-first ELSE, applied to the Burrage toggle
+# ╔═╡ 5e67a96b-8993-41d4-81b4-823aa39baacb
+rn = @reaction_network begin
+    kB, S + E --> SE
+    kD, SE --> S + E
+    kP, SE --> P + E
+end
 
-The reusable ELSE code only needs:
-
-\$\$
-(J,R,\mathcal B),
-\$\$
-
-where \$J\$ is a list of internal states, \$R\$ is the killed generator on
-\$J\$, and \$\mathcal B\$ contains every physical transition leaving \$J\$.
-
-The generic implementation is in `src/else.jl`. Starting at state \$a\$, it
-solves
-
-\$\$
-z=Z e_a,
-\qquad
-z^{(2)}=Zz,
-\qquad
-Z=-R^{-1}.
-\$\$
-
-If \$\Delta_b\$ is the total rate leaving \$J\$ from state \$b\$, it samples the
-pre-exit state first:
-
-\$\$
-\Pr(B=b\mid a)=\Delta_bz_b.
-\$\$
-
-Then use Mark's conditional mean time
-
-\$\$
-\mathbb E[\tau\mid B=b,a]
-=
-\frac{z_b^{(2)}}{z_b}.
-\$\$
-
-No matrix exponential or Fourier calculation is used. The Burrage-specific
-code below only defines the model, the two state sets, and the plot.
-"""
-
-# ╔═╡ d4000003-4000-4000-8000-000000000003
+# ╔═╡ fd3bfa06-1604-4169-b0ed-5f271126bd64
 begin
-    reactions = @reaction_network begin
-        @species U(t) V(t)
-        @parameters η α1 β1 K1 d1 dU α2 β2 K2 d2
-
-        η * (α1 + β1 * K1^3 / (K1^3 + V^3)), 0 --> U
-        d1 + dU,                              U --> 0
-        η * (α2 + β2 * K2^3 / (K2^3 + U^3)), 0 --> V
-        d2,                                   V --> 0
-    end
-
-    model = DiscreteStochasticSystem(reactions)
-
-    parameters = (
-        η=1.0,
-        α1=20.0,
-        β1=400.0,
-        K1=100.0,
-        d1=1.0,
-        dU=0.1 / 1.1,
-        α2=20.0,
-        β2=400.0,
-        K2=100.0,
-        d2=1.0,
-    )
-
-    rates = collect(values(parameters))
+	u0 = [:S => 50, :E => 10, :SE => 0, :P => 0]
+	ps = [:kB => 0.01, :kD => 0.1, :kP => 0.1]
+	values(ps) |> collect
 end
 
-# ╔═╡ d4000004-4000-4000-8000-000000000004
-begin
-    U_birth(v) =
-        parameters.η * (
-            parameters.α1 +
-            parameters.β1 * parameters.K1^3 /
-            (parameters.K1^3 + v^3)
-        )
+# ╔═╡ c8dad9b7-6512-4848-a62f-360d858c5a79
+values(u0)
 
-    U_death(u) = (parameters.d1 + parameters.dU) * u
+# ╔═╡ 93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+dss = DiscStochSim.DiscreteStochasticSystem(rn)
 
-    V_birth(u) =
-        parameters.η * (
-            parameters.α2 +
-            parameters.β2 * parameters.K2^3 /
-            (parameters.K2^3 + u^3)
-        )
+# ╔═╡ 99692eb0-d80b-4bca-9baf-ddc8ee0516b1
+function expand_nonabsorbing!(
+    space,
+    dss,
+    rates;
+    depth=1,
+    atol=1e-12
+)
+    for _ in 1:depth
+        current_states = copy(space.states)
 
-    V_death(v) = parameters.d2 * v
-end
+        for x in current_states
+            props_x = [α(x, rates, 0.0) for α in dss.propensities]
 
-# ╔═╡ 728b5123-9011-4904-be95-61fc3a6897cf
-function toggle_transitions(state)
-    u, v = Tuple(state)
-    transitions = Pair{CartesianIndex{2},Float64}[]
+            for r in eachindex(dss.stoichvecs)
+                # Reaction cannot fire from x
+                props_x[r] <= atol && continue
 
-    push!(transitions, CartesianIndex(u + 1, v) => U_birth(v))
-    push!(transitions, CartesianIndex(u, v + 1) => V_birth(u))
-    u > 0 &&
-        push!(transitions, CartesianIndex(u - 1, v) => U_death(u))
-    v > 0 &&
-        push!(transitions, CartesianIndex(u, v - 1) => V_death(v))
+                y = x + dss.stoichvecs[r]
 
-    transitions
-end
+                # Reject chemically invalid states
+                any(v -> v < 0, Tuple(y)) && continue
 
-# ╔═╡ 1038a12e-749f-4a41-9547-c46d567c0213
-function make_basin(U_high, grid_limit)
-    states = StateSpace{CartesianIndex, Float64}()
+                # Keep globally terminal states outside the subnetwork
+                props_y = [α(y, rates, 0.0) for α in dss.propensities]
+                sum(props_y) <= atol && continue
 
-    for u in 0:grid_limit
-        for v in 0:grid_limit
-            inside = U_high ? u >= v : v >= u
-            inside && add_state!(states, CartesianIndex(u, v), 0.0)
+                if !haskey(space.index, y)
+                    DiscStochSim.add_state!(space, y)
+                end
+            end
         end
     end
 
-    R, _, _, _ = build_generator(
-        states,
-        model,
+    return space
+end
+
+# ╔═╡ 59231485-ab13-4cfb-9d9c-c41970d6f6ef
+function normalize_probability(p; atol=1e-12)
+    q = copy(p)
+
+    # Reject meaningful negative values
+    minimum(q) < -atol &&
+        error("Probability vector contains a significant negative entry: $(minimum(q))")
+
+    # Remove numerical roundoff
+    q .= max.(q, 0.0)
+
+    total = sum(q)
+    total > 0 || error("Probability vector has zero total mass.")
+
+    return q ./ total
+end
+
+# ╔═╡ 9d43f4c7-8ecc-4301-9c65-854dc7a42d05
+function propensities(x, dss, rates)
+    return [α(x, rates, 0.0) for α in dss.propensities]
+end
+
+# ╔═╡ 66ed0fc5-d749-484d-8acd-d0121973761e
+function is_absorbing(x, dss, rates; atol=1e-14)
+    props = propensities(x, dss, rates)
+    return sum(props) <= atol
+end
+
+# ╔═╡ 5941e8ca-33f5-4bcc-8c58-e0b2dcaebebf
+function batched_fess_step(
+    x,
+    count,
+    dss,
+    rates;
+    depth=1,
+    atol=1e-12
+)
+    props_x = [α(x, rates, 0.0) for α in dss.propensities]
+
+    if sum(props_x) <= atol
+        return (
+            next_counts = Dict(x => count),
+            Δt = 0.0,
+            terminated = true,
+            subnetwork_size = 1
+        )
+    end
+
+    space = DiscStochSim.StateSpace{CartesianIndex, Float64}()
+    DiscStochSim.add_state!(space, x, 1.0)
+
+    expand_nonabsorbing!(
+        space,
+        dss,
+        rates;
+        depth=depth,
+        atol=atol
+    )
+
+    A = DiscStochSim.build_generator(
+        space,
+        dss,
         rates,
         0.0;
-        absorbing=true,
+        absorbing=true
+    )[1]
+
+    p = space.probs
+    u = -(A \ p)
+
+    u .= max.(u, 0.0)
+
+    w = -vec(sum(A; dims=1))
+    exit_probability =
+        normalize_probability(w .* u; atol=atol)
+
+    # Number of trajectories exiting from each pre-exit state
+    exit_counts = rand(
+        Multinomial(count, exit_probability)
     )
 
-    exits = Dict(
-        state => [
-            transition
-            for transition in toggle_transitions(state)
-            if !haskey(states.index, first(transition))
+    next_counts = Dict{CartesianIndex, Int}()
+
+    for exit_index in eachindex(exit_counts)
+        n_exit = exit_counts[exit_index]
+        n_exit == 0 && continue
+
+        x_exit = space.states[exit_index]
+
+        props_exit = [
+            α(x_exit, rates, 0.0)
+            for α in dss.propensities
         ]
-        for state in states.states
-        if any(
-            !haskey(states.index, first(transition))
-            for transition in toggle_transitions(state)
-        )
-    )
 
-    ELSESubnetwork(
-        states.states,
-        R,
-        exits;
-        name=U_high ? :U_high : :V_high,
+        outward_reactions = Int[]
+        outward_rates = Float64[]
+
+        for r in eachindex(dss.stoichvecs)
+            props_exit[r] <= atol && continue
+
+            destination =
+                x_exit + dss.stoichvecs[r]
+
+            if !haskey(space.index, destination)
+                push!(outward_reactions, r)
+                push!(outward_rates, props_exit[r])
+            end
+        end
+
+        isempty(outward_reactions) &&
+            error("No outward reaction from $x_exit")
+
+        outward_probability =
+            normalize_probability(outward_rates; atol=atol)
+
+        reaction_counts = rand(
+            Multinomial(n_exit, outward_probability)
+        )
+
+        for j in eachindex(outward_reactions)
+            n_reaction = reaction_counts[j]
+            n_reaction == 0 && continue
+
+            r = outward_reactions[j]
+            x_next = x_exit + dss.stoichvecs[r]
+
+            next_counts[x_next] =
+                get(next_counts, x_next, 0) + n_reaction
+        end
+    end
+
+    # Unconditional group mean exit time
+    Δt = sum(u)
+
+    return (
+        next_counts = next_counts,
+        Δt = Δt,
+        terminated = false,
+        subnetwork_size = length(space.states)
     )
 end
 
-# ╔═╡ d4000006-4000-4000-8000-000000000006
-md"""
-`ELSESubnetwork` checks that the supplied exits account for every column loss
-in ``R``, then factorizes ``-R`` once. The same factorization is reused for
-every entry state and every trajectory.
-"""
+# ╔═╡ adc3aebb-353c-422c-9a41-cc898521acc0
+function fess_step(x, dss, rates; depth=1, atol=1e-12)
+    # Check whether the current state is terminal
+    props_x = [α(x, rates, 0.0) for α in dss.propensities]
 
-# ╔═╡ d4000007-4000-4000-8000-000000000007
-basin_for(state, basins) =
-    state[1] >= state[2] ? basins.U : basins.V
+    if sum(props_x) <= atol
+        return x, 0.0, true, 1
+    end
 
-# ╔═╡ d4000009-4000-4000-8000-000000000009
-md"""
-For a single path, `else_step` samples one pre-exit state and one physical exit
-channel. For a population, `else_population_step` draws one multinomial column
-for every occupied entry state.
-"""
+    # Build local nonabsorbing subnetwork
+    space = DiscStochSim.StateSpace{CartesianIndex, Float64}()
+    DiscStochSim.add_state!(space, x, 1.0)
+    expand_nonabsorbing!(space, dss, rates; depth=depth, atol=atol)
 
-# ╔═╡ d400000a-4000-4000-8000-00000000000a
-md"""
-## One ELSE trajectory
+    subnetwork_size = length(space.states)
 
-One loop iteration replaces all reactions inside one complete basin.
-"""
+    # Truncated subnetwork generator
+    A = DiscStochSim.build_generator(
+        space,
+        dss,
+        rates,
+        0.0;
+        absorbing=true
+    )[1]
 
-# ╔═╡ d400000b-4000-4000-8000-00000000000b
-md"""
-The complete single-trajectory loop is now the model-independent
-`else_trajectory` function.
-"""
+    # Occupation vector from the entrance distribution
+    p = space.probs
+    u = -(A \ p)
 
-# ╔═╡ d400000c-4000-4000-8000-00000000000c
-md"""
-## Many trajectories, constructed together
+    minimum(u) < -atol &&
+        error("Occupation vector contains a negative entry: $(minimum(u))")
 
-For every occupied entry state, one column is constructed:
+    u .= max.(u, 0.0)
 
-\$\$
-M^{(N)}_{\cdot a}
-\sim
-\operatorname{Multinomial}
-\left(n_a,\{\Delta_bZ_{ba}\}_b\right).
-\$\$
+    # Distribution of the state immediately before exit
+    w = -vec(sum(A; dims=1))
+    exit_probability = normalize_probability(w .* u; atol=atol)
 
-The code never loops over the individual trajectories.
-"""
+    exit_index = rand(Categorical(exit_probability))
+    x_exit = space.states[exit_index]
 
-# ╔═╡ d400000d-4000-4000-8000-00000000000d
-md"""
-The population loop is likewise the generic `else_population` function. It can
-partition a mixed population among any number of subnetworks using
-`subnetwork_for(state)`.
-"""
+    # Conditional mean exit time given the sampled pre-exit state
+    e_exit = zeros(length(u))
+    e_exit[exit_index] = 1.0
 
-# ╔═╡ d400000e-4000-4000-8000-00000000000e
-md"""
-## Run controls
+    zrow_exit = -(A' \ e_exit)
 
-The physical grid is large, so execution is paused initially.
-"""
+    u[exit_index] > atol ||
+        error("Sampled exit state has zero occupation.")
 
-# ╔═╡ d400000f-4000-4000-8000-00000000000f
+    conditional_occupation =
+        u .* zrow_exit ./ u[exit_index]
+
+    Δt = sum(conditional_occupation)
+
+    isfinite(Δt) ||
+        error("Non-finite conditional exit time at state $x")
+
+    Δt > atol ||
+        error("Nonpositive conditional exit time at state $x: Δt = $Δt")
+
+    # Find enabled reactions that leave the subnetwork
+    props_exit = [α(x_exit, rates, 0.0) for α in dss.propensities]
+
+    outward_reactions = Int[]
+    outward_rates = Float64[]
+
+    for r in eachindex(dss.stoichvecs)
+        props_exit[r] <= atol && continue
+
+        destination = x_exit + dss.stoichvecs[r]
+
+        if !haskey(space.index, destination)
+            push!(outward_reactions, r)
+            push!(outward_rates, props_exit[r])
+        end
+    end
+
+    isempty(outward_reactions) &&
+        error("No outward reaction found from pre-exit state $x_exit.")
+
+    outward_rates =
+        normalize_probability(outward_rates; atol=atol)
+
+    reaction =
+        outward_reactions[rand(Categorical(outward_rates))]
+
+    x_next = x_exit + dss.stoichvecs[reaction]
+
+    return x_next, Δt, false, subnetwork_size
+end
+
+# ╔═╡ 3268cecc-3ae0-4e11-ac3e-a3300b95af2e
+function sample_fess_trajectory(
+    x₀,
+    tf,
+    dss,
+    rates;
+    depth=1,
+    atol=1e-12,
+    max_steps=100_000
+)
+    times = [0.0]
+    states = [x₀]
+
+    step_times = Float64[]
+    subnetwork_sizes = Int[]
+
+    t = 0.0
+    x = x₀
+
+    for step in 1:max_steps
+        t >= tf && break
+
+        push!(step_times, t)
+
+        x_next, Δt, terminated, subnetwork_size =
+            fess_step(
+                x,
+                dss,
+                rates;
+                depth=depth,
+                atol=atol
+            )
+
+        push!(subnetwork_sizes, subnetwork_size)
+
+        if terminated
+            if times[end] < tf
+                push!(times, tf)
+                push!(states, x)
+            end
+            break
+        end
+
+        isfinite(Δt) ||
+            error("Non-finite exit time at step $step, state $x")
+
+        Δt > atol ||
+            error("Time failed to advance at step $step: Δt = $Δt")
+
+        if t + Δt >= tf
+            push!(times, tf)
+            push!(states, x)
+            break
+        end
+
+        t += Δt
+        x = x_next
+
+        push!(times, t)
+        push!(states, x)
+
+        if step == max_steps
+            error(
+                "Exceeded $max_steps steps at time $t and state $x"
+            )
+        end
+    end
+
+    return (
+        times = times,
+        states = states,
+        step_times = step_times,
+        subnetwork_sizes = subnetwork_sizes
+    )
+end
+
+# ╔═╡ 16a80ec7-6641-47c5-a01c-a04cd6cc29ca
 begin
-    run_else = true
-
-    grid_limit = 680
-    number_of_else_steps = 4
-    ensemble_size = 1_000_000
+	x₀ = CartesianIndex(50, 10, 0, 0)
+	rates = [0.01, 0.1, 0.1]
+	tf = 200.0
+	
+	traj = sample_fess_trajectory(
+	    x₀,
+	    tf,
+	    dss,
+	    rates;
+	    depth=1
+	)
 end
 
-# ╔═╡ d4000010-4000-4000-8000-000000000010
-basins = if run_else
-    (
-        U=make_basin(true, grid_limit),
-        V=make_basin(false, grid_limit),
-    )
-else
-    nothing
+# ╔═╡ 4fc27157-d483-4c8d-bd19-80f71953cbf1
+function plot_fess_traj(times, states)
+	S  = getindex.(Tuple.(states), 1)
+	E  = getindex.(Tuple.(states), 2)
+	SE = getindex.(Tuple.(states), 3)
+	P  = getindex.(Tuple.(states), 4)
+	
+	plot(
+	    times,
+	    [S E SE P];
+	    seriestype = :steppost,
+	    label = ["S" "E" "SE" "P"],
+	    xlabel = "Time",
+	    ylabel = "Molecule count",
+	    linewidth = 2
+	)
 end
 
-# ╔═╡ d4000011-4000-4000-8000-000000000011
-single_result = if run_else
-    else_trajectory(
-        state -> basin_for(state, basins),
-        CartesianIndex(85, 5),
-        number_of_else_steps,
-        rng=MersenneTwister(1),
-    )
-else
-    nothing
+# ╔═╡ 24084b9e-15d8-4c1f-abfb-98bf18381fe5
+plot_fess_traj(traj.times, traj.states)
+
+# ╔═╡ b5454709-4800-456f-8fab-1358d25c197e
+begin
+	tspan = (0., tf)
+	jprob = JumpProblem(rn, u0, tspan, ps);
+	jump_sol = solve(jprob);
+	plot(jump_sol)
 end
 
-# ╔═╡ d4000012-4000-4000-8000-000000000012
-if single_result === nothing
-    md"Set `run_else = true` to run the single and population versions."
-else
-    let
-        U_values = [state[1] for state in single_result.states]
-        V_values = [state[2] for state in single_result.states]
+# ╔═╡ 0ac7bb8f-de76-472c-b097-d1afdf143e78
+jump_sol.t |> length
 
-        plot(
-            single_result.times,
-            U_values;
-            seriestype=:steppost,
-            lw=2.5,
-            color=:steelblue,
-            label="U",
-            xlabel="time",
-            ylabel="molecule count",
-            title="One state-first ELSE trajectory",
-            size=(780, 440),
-        )
-        plot!(
-            single_result.times,
-            V_values;
-            seriestype=:steppost,
-            lw=2.5,
-            color=:darkorange,
-            label="V",
-        )
-    end
+# ╔═╡ 1d094f51-5877-48fc-9993-dc7401b3b1cc
+@info length(jump_sol.t), length(times)
+
+# ╔═╡ 2986233a-f214-4564-b72a-463f66e204b6
+begin
+	ode = ODEProblem(rn, u0, tspan, ps)
+	
+	# Simulate ODE and plot results.
+	sol = solve(ode)
+	plot(sol; lw = 5)
 end
 
-# ╔═╡ d4000013-4000-4000-8000-000000000013
-population_result = if run_else
-    else_population(
-        state -> basin_for(state, basins),
-        CartesianIndex(85, 5),
-        ensemble_size,
-        number_of_else_steps,
-        rng=MersenneTwister(2),
-    )
-else
-    nothing
+# ╔═╡ a2b71cdf-cbbb-4a1c-b59c-f51f70278320
+plot(
+    eachindex(traj.subnetwork_sizes),
+    traj.subnetwork_sizes;
+    marker=:circle,
+    xlabel="FESS step",
+    ylabel="Subnetwork size",
+    label=false
+)
+
+# ╔═╡ 845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+      fsp_prob = FSPProblem(rn, 
+							CartesianIndex(N, 0, 0), 
+							(0.0, 50.0), 
+							rates; 
+							bounds=(0, N))
+	
+      fsp_alg  = AdaptiveFSP(ε_dt = 1.0, 
+                             expand_method = :stoich,
+                             expansion_depth = 2,     
+                             prob_quantile = 0.2, 
+                             flux_tolerance = 1e-5,   
+                             save_interval = 20)
+	
+      fsp_sol, = solve(fsp_prob, fsp_alg)
+end
+function probability_C_is_zero(fsp_sol, time_index)
+    C_distribution = marginal(fsp_sol, time_index, 3)
+    zero_index = findfirst(==(0), C_distribution.values)
+
+    return zero_index === nothing ? 0.0 : C_distribution.probs[zero_index]
 end
 
-# ╔═╡ d4000014-4000-4000-8000-000000000014
-population_result === nothing ?
-    nothing :
-    population_result.history
+survival_probability = [
+    probability_C_is_zero(fsp_sol, i)
+    for i in eachindex(fsp_sol)
+]
 
-# ╔═╡ d4000015-4000-4000-8000-000000000015
-if population_result === nothing
-    nothing
-else
-    let
-        field = fill(NaN, grid_limit + 1, grid_limit + 1)
-        U_occupation = population_result.occupations[:U_high]
-        V_occupation = population_result.occupations[:V_high]
-        U_maximum = maximum(U_occupation)
-        V_maximum = maximum(V_occupation)
+fsp_mfpt = 0.0
 
-        for (state, occupation) in zip(
-            basins.U.states,
-            U_occupation,
-        )
-            occupation > 0 &&
-                (field[state[1] + 1, state[2] + 1] =
-                    log10(occupation / U_maximum))
-        end
+for i in 1:(length(fsp_sol.t) - 1)
+    Δt = fsp_sol.t[i + 1] - fsp_sol.t[i]
+    average_survival =
+        (survival_probability[i] + survival_probability[i + 1]) / 2
 
-        for (state, occupation) in zip(
-            basins.V.states,
-            V_occupation,
-        )
-            occupation > 0 &&
-                (field[state[1] + 1, state[2] + 1] =
-                    log10(occupation / V_maximum))
-        end
-
-        Plots.heatmap(
-            0:grid_limit,
-            0:grid_limit,
-            permutedims(field);
-            clims=(-6, 0),
-            color=:viridis,
-            xlabel="U",
-            ylabel="V",
-            title="ELSE basin shapes (normalized separately)",
-            colorbar_title="log₁₀ relative occupation",
-            size=(600, 540),
-        )
-    end
+    fsp_mfpt += average_survival * Δt
 end
+  ╠═╡ =#
+
+# ╔═╡ 6226cf93-6978-47f1-9499-1027d145e49f
+
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -356,11 +502,9 @@ CommonSolve = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+OrdinaryDiffEqDefault = "50262376-6c5a-4cf5-baba-aaf4f84d72d7"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 
 [compat]
@@ -369,6 +513,8 @@ CommonSolve = "~0.2.12"
 Distributions = "~0.25.130"
 Expokit = "~0.2.0"
 ExponentialUtilities = "~1.33.0"
+JumpProcesses = "~9.29.2"
+OrdinaryDiffEqDefault = "~2.3.0"
 Plots = "~1.41.6"
 UnicodePlots = "~3.8.4"
 """
@@ -379,7 +525,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "f63c2b00d2af9c262e686cff29c03628a42b5403"
+project_hash = "d5aeb4d5664e484d382660e34815c139a9244f59"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "0a81a018463de6c3f4f2c9360121c562e5add9e4"
@@ -1803,6 +1949,39 @@ version = "1.1.4"
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.3.0"
 
+[[deps.NonlinearSolve]]
+deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "Setfield", "SimpleNonlinearSolve", "StaticArraysCore", "SymbolicIndexingInterface"]
+git-tree-sha1 = "fa24055b9baafe663b6782063bff9c856609f2d2"
+uuid = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
+version = "4.21.1"
+
+    [deps.NonlinearSolve.extensions]
+    NonlinearSolveFastLevenbergMarquardtExt = "FastLevenbergMarquardt"
+    NonlinearSolveFixedPointAccelerationExt = "FixedPointAcceleration"
+    NonlinearSolveLeastSquaresOptimExt = "LeastSquaresOptim"
+    NonlinearSolveMINPACKExt = "MINPACK"
+    NonlinearSolveNLSolversExt = "NLSolvers"
+    NonlinearSolveNLsolveExt = ["NLsolve", "LineSearches"]
+    NonlinearSolvePETScExt = ["PETSc", "MPI", "SparseArrays"]
+    NonlinearSolveSIAMFANLEquationsExt = "SIAMFANLEquations"
+    NonlinearSolveSpeedMappingExt = "SpeedMapping"
+    NonlinearSolveSundialsExt = "Sundials"
+
+    [deps.NonlinearSolve.weakdeps]
+    FastLevenbergMarquardt = "7a0df574-e128-4d35-8cbd-3d84502bf7ce"
+    FixedPointAcceleration = "817d07cb-a79a-5c30-9a31-890123675176"
+    LeastSquaresOptim = "0fc2ff8b-aaa3-5acd-a817-1944a5e08891"
+    LineSearches = "d3d80556-e9d4-5f37-9878-2ab0fcc64255"
+    MINPACK = "4854310b-de5a-5eb6-a2a5-c1dee2bd17f9"
+    MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
+    NLSolvers = "337daf1e-9722-11e9-073e-8b9effe078ba"
+    NLsolve = "2774e3e8-f4cf-5e23-947b-6d7e65073b56"
+    PETSc = "ace2c81b-2b5f-4b1e-a30d-d662738edfe0"
+    SIAMFANLEquations = "084e46ad-d928-497d-ad5e-07fa361a48c4"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    SpeedMapping = "f1835b91-879b-4a3f-a438-e4baacf14412"
+    Sundials = "c3572dad-4567-51f8-b174-8c6c989267f4"
+
 [[deps.NonlinearSolveBase]]
 deps = ["ADTypes", "Adapt", "ArrayInterface", "CommonSolve", "Compat", "ConcreteStructs", "DifferentiationInterface", "EnzymeCore", "FastClosures", "FunctionWrappers", "FunctionWrappersWrappers", "LinearAlgebra", "LogExpFunctions", "Markdown", "MaybeInplace", "PreallocationTools", "PrecompileTools", "Preferences", "Printf", "RecursiveArrayTools", "SciMLBase", "SciMLJacobianOperators", "SciMLLogging", "SciMLOperators", "SciMLStructures", "Setfield", "StaticArraysCore", "SymbolicIndexingInterface", "TimerOutputs"]
 git-tree-sha1 = "a7665ca27bf147c0de4f035e622330bec37f4c99"
@@ -1840,6 +2019,26 @@ deps = ["ADTypes", "ArrayInterface", "CommonSolve", "ConcreteStructs", "FiniteDi
 git-tree-sha1 = "5d7b4e007c5eb0b2b8ad188209d55e24018817be"
 uuid = "5959db7a-ea39-4486-b5fe-2dd0bf03d60d"
 version = "2.2.0"
+
+[[deps.NonlinearSolveQuasiNewton]]
+deps = ["ArrayInterface", "CommonSolve", "ConcreteStructs", "LinearAlgebra", "LinearSolve", "MaybeInplace", "NonlinearSolveBase", "PrecompileTools", "Reexport", "SciMLBase", "SciMLLogging", "SciMLOperators", "StaticArraysCore"]
+git-tree-sha1 = "c43b2febecc5c2b85d113f24744405dc380d4779"
+uuid = "9a2c21bd-3a47-402d-9113-8faf9a0ee114"
+version = "1.14.0"
+weakdeps = ["ForwardDiff"]
+
+    [deps.NonlinearSolveQuasiNewton.extensions]
+    NonlinearSolveQuasiNewtonForwardDiffExt = "ForwardDiff"
+
+[[deps.NonlinearSolveSpectralMethods]]
+deps = ["CommonSolve", "ConcreteStructs", "LineSearch", "MaybeInplace", "NonlinearSolveBase", "PrecompileTools", "Reexport", "SciMLBase", "SciMLLogging"]
+git-tree-sha1 = "cb18c69f8dfd9422a9095fde6b6cd0eed9e5e164"
+uuid = "26075421-4e9a-44e1-8bd1-420ed7ad02b2"
+version = "1.7.3"
+weakdeps = ["ForwardDiff"]
+
+    [deps.NonlinearSolveSpectralMethods.extensions]
+    NonlinearSolveSpectralMethodsForwardDiffExt = "ForwardDiff"
 
 [[deps.OffsetArrays]]
 git-tree-sha1 = "117432e406b5c023f665fa73dc26e79ec3630151"
@@ -1894,6 +2093,12 @@ git-tree-sha1 = "94ba93778373a53bfd5a0caaf7d809c445292ff4"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.8.2"
 
+[[deps.OrdinaryDiffEqBDF]]
+deps = ["ADTypes", "ArrayInterface", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqSDIRK", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "bc31896e93eacdcf707ec3b4e8ea7c46fec9f29c"
+uuid = "6ad6398a-0878-4a85-9266-38940aa047c8"
+version = "2.4.0"
+
 [[deps.OrdinaryDiffEqCore]]
 deps = ["ADTypes", "Accessors", "Adapt", "ArrayInterface", "BinaryHeaps", "CommonSolve", "ConstructionBase", "DiffEqBase", "DocStringExtensions", "EnumX", "EnzymeCore", "FastBroadcast", "FastClosures", "FastPower", "FindFirstFunctions", "FunctionWrappers", "FunctionWrappersWrappers", "InteractiveUtils", "LinearAlgebra", "Logging", "MacroTools", "MuladdMacro", "PrecompileTools", "Preferences", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLLogging", "SciMLOperators", "SciMLStructures", "SymbolicIndexingInterface", "TruncatedStacktraces"]
 git-tree-sha1 = "ee36b306c1f7010fe81ed5544786754a6f141d4f"
@@ -1909,6 +2114,57 @@ version = "4.7.1"
     Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
     Polyester = "f517fe37-dbe3-4b94-8317-1923a5111588"
     SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[[deps.OrdinaryDiffEqDefault]]
+deps = ["ADTypes", "DiffEqBase", "EnumX", "LinearAlgebra", "LinearSolve", "OrdinaryDiffEqBDF", "OrdinaryDiffEqCore", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "OrdinaryDiffEqVerner", "PrecompileTools", "Preferences", "Reexport", "SciMLBase"]
+git-tree-sha1 = "19a0cc552aec84af608b3a6c10cbbba63fc74836"
+uuid = "50262376-6c5a-4cf5-baba-aaf4f84d72d7"
+version = "2.3.0"
+
+[[deps.OrdinaryDiffEqDifferentiation]]
+deps = ["ADTypes", "ArrayInterface", "ConcreteStructs", "ConstructionBase", "DiffEqBase", "DifferentiationInterface", "FastBroadcast", "FiniteDiff", "ForwardDiff", "FunctionWrappersWrappers", "LinearAlgebra", "LinearSolve", "OrdinaryDiffEqCore", "SciMLBase", "SciMLOperators", "SparseMatrixColorings", "StaticArraysCore"]
+git-tree-sha1 = "e57948c6b09cf5f84acf2415af70b32012e50126"
+uuid = "4302a76b-040a-498a-8c04-15b101fed76b"
+version = "3.4.1"
+weakdeps = ["SparseArrays"]
+
+    [deps.OrdinaryDiffEqDifferentiation.extensions]
+    OrdinaryDiffEqDifferentiationSparseArraysExt = "SparseArrays"
+
+[[deps.OrdinaryDiffEqNonlinearSolve]]
+deps = ["ADTypes", "ArrayInterface", "ConstructionBase", "DiffEqBase", "FastBroadcast", "FastClosures", "ForwardDiff", "LinearAlgebra", "LinearSolve", "MuladdMacro", "NonlinearSolve", "NonlinearSolveBase", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "PreallocationTools", "RecursiveArrayTools", "SciMLBase", "SciMLOperators", "SimpleNonlinearSolve", "SparseArrays", "StaticArraysCore"]
+git-tree-sha1 = "1035f7cde0784d9b6be0e6109fc86b30aa4d02b4"
+uuid = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
+version = "2.4.0"
+
+[[deps.OrdinaryDiffEqRosenbrock]]
+deps = ["ADTypes", "DiffEqBase", "DifferentiationInterface", "FastBroadcast", "FiniteDiff", "ForwardDiff", "LinearAlgebra", "LinearSolve", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqRosenbrockTableaus", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase"]
+git-tree-sha1 = "6bad871889f01bdc737b899609bc92732fd8e29b"
+uuid = "43230ef6-c299-4910-a778-202eb28ce4ce"
+version = "2.4.2"
+
+[[deps.OrdinaryDiffEqRosenbrockTableaus]]
+git-tree-sha1 = "edd12a8982ed2a464770a57c43eebb301173b8a8"
+uuid = "b4bd8bb3-f80f-41d2-9b21-73a655b304b9"
+version = "2.4.0"
+
+[[deps.OrdinaryDiffEqSDIRK]]
+deps = ["ADTypes", "CommonSolve", "ConstructionBase", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqNonlinearSolve", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "e89c429d5c193d9014099e9c6499b54d6f43a2b4"
+uuid = "2d112036-d095-4a1e-ab9a-08536f3ecdbf"
+version = "2.8.1"
+
+[[deps.OrdinaryDiffEqTsit5]]
+deps = ["CommonSolve", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MuladdMacro", "OrdinaryDiffEqCore", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "5f5867239b7ab1b08a7c20108e092351e4e2fe07"
+uuid = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+version = "2.1.0"
+
+[[deps.OrdinaryDiffEqVerner]]
+deps = ["DiffEqBase", "FastBroadcast", "LinearAlgebra", "MuladdMacro", "OrdinaryDiffEqCore", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "0f99348df489875df97d8c15a5b997a1285d8c8c"
+uuid = "79d7bb75-1356-48c1-b8c0-6832512096c2"
+version = "2.2.0"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -2405,6 +2661,28 @@ weakdeps = ["AMD"]
 
     [deps.SparseColumnPivotedQR.extensions]
     SparseColumnPivotedQRAMDExt = "AMD"
+
+[[deps.SparseMatrixColorings]]
+deps = ["ADTypes", "DocStringExtensions", "LinearAlgebra", "PrecompileTools", "Random", "SparseArrays"]
+git-tree-sha1 = "f63d76c7b7c329cf11badd564fd8ba877b09c3fe"
+uuid = "0a514795-09f3-496d-8182-132a7b665d35"
+version = "0.4.27"
+
+    [deps.SparseMatrixColorings.extensions]
+    SparseMatrixColoringsCUDAExt = ["CUDA", "cuSPARSE"]
+    SparseMatrixColoringsCliqueTreesExt = "CliqueTrees"
+    SparseMatrixColoringsColorsExt = "Colors"
+    SparseMatrixColoringsGPUArraysExt = "GPUArrays"
+    SparseMatrixColoringsJuMPExt = ["JuMP", "MathOptInterface"]
+
+    [deps.SparseMatrixColorings.weakdeps]
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    CliqueTrees = "60701a23-6482-424a-84db-faee86b9b1f8"
+    Colors = "5ae59095-9a9b-59fe-a467-6f913c188581"
+    GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+    JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+    MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
+    cuSPARSE = "b26da814-b3bc-49ef-b0ee-c816305aa060"
 
 [[deps.SpecialFunctions]]
 deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
@@ -2993,26 +3271,27 @@ version = "1.13.0+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═d4000001-4000-4000-8000-000000000001
-# ╟─d4000002-4000-4000-8000-000000000002
-# ╠═d4000003-4000-4000-8000-000000000003
-# ╠═d4000004-4000-4000-8000-000000000004
-# ╠═728b5123-9011-4904-be95-61fc3a6897cf
-# ╠═1038a12e-749f-4a41-9547-c46d567c0213
-# ╟─d4000006-4000-4000-8000-000000000006
-# ╠═d4000007-4000-4000-8000-000000000007
-# ╟─d4000009-4000-4000-8000-000000000009
-# ╟─d400000a-4000-4000-8000-00000000000a
-# ╠═d400000b-4000-4000-8000-00000000000b
-# ╟─d400000c-4000-4000-8000-00000000000c
-# ╠═d400000d-4000-4000-8000-00000000000d
-# ╟─d400000e-4000-4000-8000-00000000000e
-# ╠═d400000f-4000-4000-8000-00000000000f
-# ╠═d4000010-4000-4000-8000-000000000010
-# ╠═d4000011-4000-4000-8000-000000000011
-# ╠═d4000012-4000-4000-8000-000000000012
-# ╠═d4000013-4000-4000-8000-000000000013
-# ╠═d4000014-4000-4000-8000-000000000014
-# ╠═d4000015-4000-4000-8000-000000000015
+# ╠═6720d580-8ac2-11f1-918d-656b1710a6d0
+# ╠═5e67a96b-8993-41d4-81b4-823aa39baacb
+# ╠═fd3bfa06-1604-4169-b0ed-5f271126bd64
+# ╠═c8dad9b7-6512-4848-a62f-360d858c5a79
+# ╠═0ac7bb8f-de76-472c-b097-d1afdf143e78
+# ╠═93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+# ╠═99692eb0-d80b-4bca-9baf-ddc8ee0516b1
+# ╠═59231485-ab13-4cfb-9d9c-c41970d6f6ef
+# ╠═9d43f4c7-8ecc-4301-9c65-854dc7a42d05
+# ╠═66ed0fc5-d749-484d-8acd-d0121973761e
+# ╠═5941e8ca-33f5-4bcc-8c58-e0b2dcaebebf
+# ╠═adc3aebb-353c-422c-9a41-cc898521acc0
+# ╠═3268cecc-3ae0-4e11-ac3e-a3300b95af2e
+# ╠═16a80ec7-6641-47c5-a01c-a04cd6cc29ca
+# ╠═4fc27157-d483-4c8d-bd19-80f71953cbf1
+# ╠═24084b9e-15d8-4c1f-abfb-98bf18381fe5
+# ╠═b5454709-4800-456f-8fab-1358d25c197e
+# ╠═1d094f51-5877-48fc-9993-dc7401b3b1cc
+# ╠═2986233a-f214-4564-b72a-463f66e204b6
+# ╠═a2b71cdf-cbbb-4a1c-b59c-f51f70278320
+# ╟─845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═6226cf93-6978-47f1-9499-1027d145e49f
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

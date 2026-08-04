@@ -7,105 +7,567 @@ using InteractiveUtils
 # ╔═╡ 6720d580-8ac2-11f1-918d-656b1710a6d0
 begin
 	using Catalyst, CommonSolve
-	using Plots, UnicodePlots
-	using ExponentialUtilities, Expokit
+	using Plots, UnicodePlots, Distributions
+	using ExponentialUtilities, Expokit, JumpProcesses
 	include("../src/DiscStochSim.jl")
 	using .DiscStochSim
 end
 
 # ╔═╡ 5e67a96b-8993-41d4-81b4-823aa39baacb
 rn = @reaction_network begin
-	 @species A(t) B(t) C(t) 
-	 @parameters k1 k2 k3
-	 (k1, k2), A <--> B
-	 k3, B --> C + A  
+    k1, X --> 2X
+    k2, X + Y --> 2Y
+    k3, Y --> 0
 end
 
-# ╔═╡ 17f64b5d-3081-47b1-9a8e-4c6ef043064f
-# Create an ODE that can be simulated.
-	u0 = [:A => 100.0, :B => 0, :C => 0]
+# ╔═╡ fd3bfa06-1604-4169-b0ed-5f271126bd64
+begin
+	u0 = [:X => 50, :Y => 100]
+	ps = [:k1 => 1.0, :k2 => 0.005, :k3 => 0.6]
+	values(ps) |> collect
+end
 
-# ╔═╡ de93d598-8c95-4acb-b57d-d9c80c9ceafa
-tspan = (0., 200.)
+# ╔═╡ f1ccb469-bdf6-4eaa-8bee-7cf3aac46be6
+jumpratelaw.(reactions(rn))
 
-# ╔═╡ 5dc48249-f290-4e59-859c-0bb4a830380c
-ps = [:k1 => 0.1, :k2 => 0.1, :k3 => 1e-3]
+# ╔═╡ c8dad9b7-6512-4848-a62f-360d858c5a79
+values(u0)
 
-# ╔═╡ a7b1c1ee-2931-40eb-a71f-875a93af439f
-jprob = JumpProblem(rn, u0, tspan, ps);
+# ╔═╡ 93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+dss = DiscStochSim.DiscreteStochasticSystem(rn)
 
-# ╔═╡ da79fcdf-64b8-47de-b92e-0887a6250f52
-jump_sol = solve(jprob);
+# ╔═╡ 16a80ec7-6641-47c5-a01c-a04cd6cc29ca
+begin
+	x₀ = CartesianIndex(50, 100)
+	rates = [1.0, 0.005, 0.6]
+	tf = 30.0
+	fess_options = FESSOptions(
+		capacity=60,
+		cut_threshold=1e-3,
+		expansion_depth=1,
+	)
+
+	redrawn_traj = fess_trajectory(
+		x₀, tf, dss, rates;
+		persistent=false,
+		options=fess_options,
+	)
+	persistent_traj = fess_trajectory(
+		x₀, tf, dss, rates;
+		persistent=true,
+		options=fess_options,
+	)
+end
+
+# ╔═╡ 4fc27157-d483-4c8d-bd19-80f71953cbf1
+function plot_fess_traj(times, states; title="")
+	X  = getindex.(Tuple.(states), 1)
+	Y  = getindex.(Tuple.(states), 2)
+
+	plot(
+	    times,
+	    [X Y];
+	    seriestype = :steppost,
+	    label = ["X", "Y"],
+	    xlabel = "Time",
+	    ylabel = "Molecule count",
+	    title = title,
+	    linewidth = 1
+	)
+end
+
+# ╔═╡ de6ceee5-826a-456a-a43c-c5e0fa97b760
+md"""
+## Multiple trajectories
+
+Each trajectory keeps its own state, clock, and random-number stream. At every
+step, all unfinished starting states and their expansions are placed in one
+network. The generator is built and factorized once, and all unique starting
+states are solved together as multiple right-hand sides. Each trajectory
+then samples its own exit and conditional time from the corresponding column.
+
+The trajectories do not need synchronized physical times because this model is
+time homogeneous. The common reporting grid is used only after simulation.
+"""
+
+# ╔═╡ 7bb92cf8-a01a-43b8-a4a3-b9518798ce23
+begin
+    trajectory_count = 10
+    reporting_interval = 0.05
+
+    persistent_runs = fess_ensemble(
+        x₀,
+        trajectory_count,
+        tf,
+        dss,
+        rates;
+        persistent=true,
+        options=fess_options,
+        saveat=reporting_interval
+    )
+
+    redrawn_runs = fess_ensemble(
+        x₀,
+        trajectory_count,
+        tf,
+        dss,
+        rates;
+        persistent=false,
+        options=fess_options,
+        saveat=reporting_interval
+    )
+end
+
+# ╔═╡ 150c3025-9135-44e4-af92-d386a12cafcc
+begin
+    persistent_means = hcat(
+        first.(persistent_runs.mean_states),
+        last.(persistent_runs.mean_states)
+    )
+    redrawn_means = hcat(
+        first.(redrawn_runs.mean_states),
+        last.(redrawn_runs.mean_states)
+    )
+
+    trajectory_mean_plot = plot(
+        plot(
+            persistent_runs.times,
+            persistent_means;
+            label=["X" "Y"],
+            xlabel="Time",
+            ylabel="Mean across trajectories",
+            title="Persistent FESS, multiple trajectories",
+            linewidth=2
+        ),
+        plot(
+            redrawn_runs.times,
+            redrawn_means;
+            label=["X" "Y"],
+            xlabel="Time",
+            ylabel="Mean across trajectories",
+            title="Redrawn FESS, multiple trajectories",
+            linewidth=2
+        );
+        layout=(1, 2),
+        link=:y,
+        size=(1000, 400)
+    )
+end
+
+# ╔═╡ 6ccf8740-0467-448f-979a-4418244ab114
+trajectory_summaries = (
+    persistent=fess_summary(persistent_runs),
+    redrawn=fess_summary(redrawn_runs)
+)
+
+# ╔═╡ 618d56d0-e142-45f9-88bc-e02f6e6f8c47
+begin
+    number_of_steps = 300
+    step_experiment = compare_fess_steps(
+        x₀,
+        number_of_steps,
+        dss,
+        rates;
+        n_trajectories=20,
+        options=fess_options,
+    )
+    step_experiment.rows
+end
+
+# ╔═╡ 58e47391-213a-4241-8764-b33150adc389
+length(persistent_runs.times)
+
+# ╔═╡ 98002169-2860-44ca-9417-7693386c5bae
+begin
+    trajectory_indices = 1:trajectory_count
+    trajectory_diagnostic_plot = plot(
+        bar(
+            trajectory_indices,
+            hcat(
+                persistent_runs.step_counts,
+                redrawn_runs.step_counts
+            );
+            xlabel="Trajectory",
+            ylabel="FESS steps",
+            label=["Persistent" "Redrawn"],
+            title="Work per trajectory"
+        ),
+        bar(
+            trajectory_indices,
+            hcat(
+                persistent_runs.maximum_network_sizes,
+                redrawn_runs.maximum_network_sizes
+            );
+            xlabel="Trajectory",
+            ylabel="States",
+            label=["Persistent" "Redrawn"],
+            title="Maximum network size"
+        ),
+        plot(
+            persistent_runs.times,
+            hcat(
+                first.(persistent_runs.variance_states),
+                last.(persistent_runs.variance_states),
+                first.(redrawn_runs.variance_states),
+                last.(redrawn_runs.variance_states)
+            );
+            xlabel="Time",
+            ylabel="Sample variance",
+            label=["Persistent X" "Persistent Y" "Redrawn X" "Redrawn Y"],
+            title="Spread across trajectories"
+        ),
+        bar(
+            ["Persistent", "Redrawn"],
+            [persistent_runs.wall_time, redrawn_runs.wall_time];
+            ylabel="Seconds",
+            label=false,
+            title="Multiple-trajectory runtime"
+        );
+        layout=(2, 2),
+        size=(1000, 750)
+    )
+end
+
+# ╔═╡ b5454709-4800-456f-8fab-1358d25c197e
+begin
+	tspan = (0., tf)
+	jprob = JumpProblem(rn, u0, tspan, ps);
+	jump_sol = solve(jprob);
+	nothing
+end
 
 # ╔═╡ 0ac7bb8f-de76-472c-b097-d1afdf143e78
-plot(jump_sol; lw = 1)
+jump_sol.t |> length
 
-# ╔═╡ adc3aebb-353c-422c-9a41-cc898521acc0
+# ╔═╡ 2986233a-f214-4564-b72a-463f66e204b6
 begin
-    N = 1000 # A+B+C conserved = initial A
-    dss = DiscStochSim.DiscreteStochasticSystem(rn)
-    rates = [0.1, 0.1, 1e-3] # k1, k2, k3
-	
-    space = DiscStochSim.StateSpace{CartesianIndex, Float64}()
-    for a in 0:N
-		DiscStochSim.add_state!(space, CartesianIndex(a, N-a, 0), 0.0)
-    end
+	using DifferentialEquations
+	ode = ODEProblem(rn, u0, tspan, ps)
 
-    R = DiscStochSim.build_generator(space, dss, rates, 0.0; absorbing=true)[1]
+	# Simulate ODE and plot results.
+	sol = solve(ode)
+	nothing
 end
 
-# ╔═╡ 9ea3564f-d0a7-497f-9277-645857e74e75
-begin
-	e_init = zeros(N + 1)
-    e_init[space.index[CartesianIndex(N, 0, 0)]] = 1.0   # start at all-A
+# ╔═╡ 24084b9e-15d8-4c1f-abfb-98bf18381fe5
+plot(
+    plot_fess_traj(
+        persistent_traj.times,
+        persistent_traj.states;
+        title="Persistent single-trajectory FESS"
+    ),
+    plot_fess_traj(
+        redrawn_traj.times,
+        redrawn_traj.states;
+        title="Redrawn single-trajectory FESS"
+    ),
+    plot(
+        jump_sol;
+        title="SSA",
+        xlabel="Time",
+        ylabel="Molecule count",
+        linewidth=1
+    ),
+    plot(
+        sol;
+        title="ODE",
+        xlabel="Time",
+        ylabel="Molecule count",
+        linewidth=2
+    );
+    layout=(2, 2),
+    link=:y,
+    size=(1000, 750)
+)
 
-    occ  = -(Matrix(R) \ e_init)               # Z e_init = occupation times
-    mfpt = sum(occ)                            # 1ᵀ Z e_init
+# ╔═╡ 1d094f51-5877-48fc-9993-dc7401b3b1cc
+let removal_stats = getfield.(persistent_traj.steps, :shedding)
+    @info (
+        SSA_steps=length(jump_sol.t),
+        persistent_steps=length(persistent_traj.steps),
+        redrawn_steps=length(redrawn_traj.steps),
+        multiple_redrawn_steps=sum(redrawn_runs.step_counts),
+        multiple_persistent_steps=sum(persistent_runs.step_counts),
+        persistent_max_residual=maximum(
+            getfield.(persistent_traj.steps, :residual)
+        ),
+        redrawn_max_residual=maximum(
+            getfield.(redrawn_traj.steps, :residual)
+        ),
+        persistent_max_actual_removal_loss=maximum(
+            getfield.(removal_stats, :actual_relative_loss)
+        ),
+        persistent_max_single_removal_loss=maximum(
+            getfield.(removal_stats, :maximum_single_cut_loss)
+        ),
+        persistent_capacity_forced_removals=sum(
+            getfield.(removal_stats, :capacity_cuts)
+        )
+    )
 end
 
-# ╔═╡ db9594ce-364e-4ad9-a69f-54ba34da2a4a
+# ╔═╡ a2b71cdf-cbbb-4a1c-b59c-f51f70278320
 begin
-      fsp_prob = FSPProblem(rn, 
-							CartesianIndex(N, 0, 0), 
-							(0.0, 200.0), 
-							rates; 
-							bounds=(0, N))
-	
-      fsp_alg  = AdaptiveFSP(ε_dt = 1.0, 
+    persistent_sizes = getfield.(persistent_traj.steps, :network_size)
+    redrawn_sizes = getfield.(redrawn_traj.steps, :network_size)
+    removed_counts = getfield.(
+        getfield.(persistent_traj.steps, :shedding), :removed
+    )
+    size_plot = scatter(
+        eachindex(persistent_sizes), persistent_sizes;
+        ylabel="Network size", label="Persistent"
+    )
+    scatter!(
+        size_plot, eachindex(redrawn_sizes), redrawn_sizes; label="Redrawn"
+    )
+    plot(
+        size_plot,
+    bar(
+        eachindex(removed_counts),
+        removed_counts;
+        xlabel="FESS step",
+        ylabel="States removed",
+        label=false
+    );
+    layout=(2, 1),
+    link=:x
+    )
+end
+
+# ╔═╡ c970476e-ad6c-459c-9678-6f8b5a1c9cf3
+begin
+    persistent_means_per_step =
+        getfield.(persistent_traj.steps, :mean_waiting_time)
+    redrawn_means_per_step = getfield.(redrawn_traj.steps, :mean_waiting_time)
+    residence_plot = plot(
+        eachindex(persistent_means_per_step), persistent_means_per_step;
+        xlabel="FESS step", ylabel="Analytical mean residence time",
+        label="Persistent", linewidth=2
+    )
+    plot!(
+        residence_plot,
+        eachindex(redrawn_means_per_step), redrawn_means_per_step;
+        label="Redrawn", linewidth=2
+    )
+end
+
+# ╔═╡ e835573a-c698-4817-b8c7-f035efa6fa1f
+begin
+    diagnostic_steps = eachindex(persistent_traj.steps)
+    residuals = getfield.(persistent_traj.steps, :residual)
+    network_sizes = getfield.(persistent_traj.steps, :network_size)
+    removal_stats = getfield.(persistent_traj.steps, :shedding)
+    removed = getfield.(removal_stats, :removed)
+    estimated_losses = getfield.(removal_stats, :estimated_relative_loss)
+    actual_losses = getfield.(removal_stats, :actual_relative_loss)
+    plot(
+        plot(
+            diagnostic_steps,
+            max.(residuals, eps(Float64));
+            yscale=:log10,
+            ylabel="Scaled residual",
+            label="Persistent"
+        ),
+        plot(
+            diagnostic_steps,
+            network_sizes;
+            ylabel="States",
+            label="Persistent"
+        ),
+        plot(
+            diagnostic_steps,
+            removed;
+            xlabel="FESS step",
+            ylabel="States removed",
+            label="Persistent"
+        ),
+        plot(
+            diagnostic_steps,
+            hcat(
+                max.(estimated_losses, eps(Float64)),
+                max.(actual_losses, eps(Float64))
+            );
+            yscale=:log10,
+            xlabel="FESS step",
+            ylabel="Relative residence-time loss",
+            label=["Estimated" "Verified"]
+        );
+        layout=(2, 2),
+        size=(1000, 750)
+    )
+end
+
+# ╔═╡ c0fc6e3c-0771-412f-9d67-d29780773a69
+fsp_prob = FSPProblem(rn, CartesianIndex(50, 100), (0.0, 30.0), rates;
+							bounds=(0, 600))
+
+# ╔═╡ 4a45c89d-4b85-4bcc-b961-723a79163600
+fsp_alg  = AdaptiveFSP(ε_dt = 1.0,
                              expand_method = :stoich,
-                             expansion_depth = 2,     
-                             prob_quantile = 0.2, 
-                             flux_tolerance = 1e-5,   
+                             expansion_depth = 2,
+                             prob_quantile = 0.4,
+                             flux_tolerance = 0,
                              save_interval = 20)
-	
-      fsp_sol, = solve(fsp_prob, fsp_alg)
+
+# ╔═╡ a8ecf1d7-9318-4e48-b1f4-5e1ee564ff4e
+fsp_sol, = solve(fsp_prob, fsp_alg)
+
+# ╔═╡ ed42a2b4-7251-4640-9d53-2c9712196e0c
+begin
+	using LinearAlgebra
+	state_space = StateSpace{CartesianIndex,Float64}()
+	for s in fsp_sol.snapshots[50][1]
+		add_state!(state_space, s, 1.0)
+	end
+	local A = build_generator(
+              state_space,
+              dss,
+              rates,
+              0.0;
+              absorbing = true,
+          )[1]
+	evals = eigvals(Matrix(A))
+	scatter(real(evals), imag(evals))
 end
+
+# ╔═╡ 58f94eb7-d4b1-47c4-adb6-2bf84d5bc8d0
+plot(fsp_sol.t[2:end], fsp_sol.t |> diff)
+
+# ╔═╡ fc640e32-ebf7-47ed-92ba-1f0b6c21a80c
+plot(fsp_sol.t,  [length(s[1]) for s ∈ fsp_sol.snapshots])
+
+# ╔═╡ ea695c43-649f-4a1a-957d-4a51fadb161e
+fsp_sol.snapshots[100][1]
+
+# ╔═╡ 58f431c4-ff0a-409d-90a3-b4933e20cd71
+#=╠═╡
+A = build_generator(
+              fsp_static_space(fsp_sol.snapshots[100][1]),
+              dss,
+              rates,
+              0.0;
+              absorbing = true,
+          )[1]
+  ╠═╡ =#
 
 # ╔═╡ 845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═╡ disabled = true
+#=╠═╡
 begin
-      surv = map(1:length(fsp_sol)) do i
-              mc = marginal(fsp_sol, i, 3)               # marginal of species C (index 3)
-              j  = findfirst(==(0), mc.values)
-              j === nothing ? 0.0 : mc.probs[j]
-      end
-      fsp_mfpt = sum(0.5 .* (surv[1:end-1] .+ surv[2:end]) .* diff(fsp_sol.t))   # trapezoid ∫S dt
+      fsp_prob = FSPProblem(rn,
+							CartesianIndex(N, 0, 0),
+							(0.0, 50.0),
+							rates;
+							bounds=(0, N))
+
+      fsp_alg  = AdaptiveFSP(ε_dt = 1.0,
+                             expand_method = :stoich,
+                             expansion_depth = 2,
+                             prob_quantile = 0.2,
+                             flux_tolerance = 1e-5,
+                             save_interval = 20)
+
+      fsp_sol, = solve(fsp_prob, fsp_alg)
 end
+function probability_C_is_zero(fsp_sol, time_index)
+    C_distribution = marginal(fsp_sol, time_index, 3)
+    zero_index = findfirst(==(0), C_distribution.values)
+
+    return zero_index === nothing ? 0.0 : C_distribution.probs[zero_index]
+end
+
+survival_probability = [
+    probability_C_is_zero(fsp_sol, i)
+    for i in eachindex(fsp_sol)
+]
+
+fsp_mfpt = 0.0
+
+for i in 1:(length(fsp_sol.t) - 1)
+    Δt = fsp_sol.t[i + 1] - fsp_sol.t[i]
+    average_survival =
+        (survival_probability[i] + survival_probability[i + 1]) / 2
+
+    fsp_mfpt += average_survival * Δt
+end
+  ╠═╡ =#
+
+# ╔═╡ fca94d1e-5e5c-4ee7-a13d-756c0bc69316
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+      etol = 1e-6
+      err = Inf
+	local tf = 7.0
+
+      u₀ = CartesianIndex(50, 100)
+      bounds = (0, 500)
+      boundary_condition(x) = RectLatticeBoundaryCondition(x, bounds)
+
+      fsp_static_space = StateSpace{CartesianIndex,Float64}()
+      add_state!(fsp_static_space, u₀, 2.0)
+
+      while err > etol
+          old_size = length(fsp_static_space)
+
+          expand!(
+              fsp_static_space,
+              dss,
+              boundary_condition;
+              depth = 1,
+          )
+
+          p₀ = zeros(length(fsp_static_space))
+          p₀[fsp_static_space.index[u₀]] = 1.0
+
+          A = build_generator(
+              fsp_static_space,
+              dss,
+              rates,
+              0.0;
+              absorbing = true,
+          )[1]
+
+		   #@show fsp_static_space.probs
+          fsp_static_space.probs = expmv(tf, A, p₀)
+			   #@show fsp_static_space.probs
+
+          err = 1.0 - sum(fsp_static_space.probs)
+
+
+	@show err, length(fsp_static_space)
+          length(fsp_static_space) == old_size && err > etol &&              error("Bounds exhausted before reaching tolerance")
+      end
+
+      (; fsp_static_space, err)
+  end
+  ╠═╡ =#
+
+# ╔═╡ f5b07d5d-6ad4-499b-ab96-a572d1872321
+400 * 300
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
 CommonSolve = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
+DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
+JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 
 [compat]
 Catalyst = "~16.2.2"
 CommonSolve = "~0.2.12"
+DifferentialEquations = "~8.0.2"
+Distributions = "~0.25.130"
 Expokit = "~0.2.0"
 ExponentialUtilities = "~1.33.0"
+JumpProcesses = "~9.29.2"
 Plots = "~1.41.6"
 UnicodePlots = "~3.8.4"
 """
@@ -116,7 +578,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "b5f2989324483de7a6537127087b568ed8338199"
+project_hash = "52f6c04dc52cc4f5da9a01e932220851c83490ee"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "0a81a018463de6c3f4f2c9360121c562e5add9e4"
@@ -570,6 +1032,12 @@ git-tree-sha1 = "79a2aca180a85c690c58a020d47b426954b590f8"
 uuid = "b552c78f-8df3-52c6-915a-8e097449b14b"
 version = "1.16.0"
 
+[[deps.DifferentialEquations]]
+deps = ["OrdinaryDiffEq", "Reexport", "SciMLBase"]
+git-tree-sha1 = "47174e2aa0d3744b35d84a0f4658b6e67b04a3d7"
+uuid = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+version = "8.0.2"
+
 [[deps.DifferentiationInterface]]
 deps = ["ADTypes", "LinearAlgebra"]
 git-tree-sha1 = "dbd46a5cd0e79a97438b0ebbec42e744e8f436fe"
@@ -641,6 +1109,24 @@ version = "0.4.28"
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 version = "1.11.0"
+
+[[deps.Distributions]]
+deps = ["AliasTables", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "Roots", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
+git-tree-sha1 = "d2facc77c08c1c2bfb1a77c148edd05b3db5410b"
+uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
+version = "0.25.130"
+
+    [deps.Distributions.extensions]
+    DistributionsChainRulesCoreExt = "ChainRulesCore"
+    DistributionsDensityInterfaceExt = "DensityInterface"
+    DistributionsSparseConnectivityTracerExt = "SparseConnectivityTracer"
+    DistributionsTestExt = "Test"
+
+    [deps.Distributions.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    DensityInterface = "b429d917-457f-4dbc-8f4c-0cc954292b1d"
+    SparseConnectivityTracer = "9f842d2f-2579-4b1d-911e-f412cf18a3f5"
+    Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [[deps.DocStringExtensions]]
 git-tree-sha1 = "7442a5dfe1ebb773c29cc2962a8980f47221d76c"
@@ -819,18 +1305,13 @@ deps = ["LinearAlgebra"]
 git-tree-sha1 = "5bad39456d9f0166184fce2248783dd9862645c1"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
 version = "1.17.0"
+weakdeps = ["PDMats", "SparseArrays", "StaticArrays", "Statistics"]
 
     [deps.FillArrays.extensions]
     FillArraysPDMatsExt = "PDMats"
     FillArraysSparseArraysExt = "SparseArrays"
     FillArraysStaticArraysExt = "StaticArrays"
     FillArraysStatisticsExt = "Statistics"
-
-    [deps.FillArrays.weakdeps]
-    PDMats = "90014a1f-27ba-587c-ab20-58faa44d9150"
-    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-    Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [[deps.FindFirstFunctions]]
 deps = ["PrecompileTools"]
@@ -956,6 +1437,11 @@ git-tree-sha1 = "6fada551286ab6ea4ca1628cb2de9f166a2ec966"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
 version = "0.73.26+0"
 
+[[deps.Gamma]]
+git-tree-sha1 = "86f86b6168a016ed88e4ae4e64577b98c3b59e8e"
+uuid = "a0844989-3bd2-4988-8bea-c9407ab0941b"
+version = "1.1.0"
+
 [[deps.GenericSchur]]
 deps = ["LinearAlgebra", "Printf"]
 git-tree-sha1 = "a694e2a57394e409f7a11ee0977362a9fafcb8c7"
@@ -1015,6 +1501,12 @@ deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll",
 git-tree-sha1 = "f923f9a774fcf3f5cb761bfa43aeadd689714813"
 uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
 version = "8.5.1+0"
+
+[[deps.HypergeometricFunctions]]
+deps = ["Gamma", "LinearAlgebra"]
+git-tree-sha1 = "31bb6c92405c084617facc1d7ed9eb6c402d061e"
+uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
+version = "0.3.30"
 
 [[deps.ImplicitDiscreteSolve]]
 deps = ["CommonSolve", "ConcreteStructs", "DiffEqBase", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "OrdinaryDiffEqCore", "Reexport", "SciMLBase", "SymbolicIndexingInterface"]
@@ -1516,6 +2008,39 @@ version = "1.1.4"
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.3.0"
 
+[[deps.NonlinearSolve]]
+deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "Setfield", "SimpleNonlinearSolve", "StaticArraysCore", "SymbolicIndexingInterface"]
+git-tree-sha1 = "fa24055b9baafe663b6782063bff9c856609f2d2"
+uuid = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
+version = "4.21.1"
+
+    [deps.NonlinearSolve.extensions]
+    NonlinearSolveFastLevenbergMarquardtExt = "FastLevenbergMarquardt"
+    NonlinearSolveFixedPointAccelerationExt = "FixedPointAcceleration"
+    NonlinearSolveLeastSquaresOptimExt = "LeastSquaresOptim"
+    NonlinearSolveMINPACKExt = "MINPACK"
+    NonlinearSolveNLSolversExt = "NLSolvers"
+    NonlinearSolveNLsolveExt = ["NLsolve", "LineSearches"]
+    NonlinearSolvePETScExt = ["PETSc", "MPI", "SparseArrays"]
+    NonlinearSolveSIAMFANLEquationsExt = "SIAMFANLEquations"
+    NonlinearSolveSpeedMappingExt = "SpeedMapping"
+    NonlinearSolveSundialsExt = "Sundials"
+
+    [deps.NonlinearSolve.weakdeps]
+    FastLevenbergMarquardt = "7a0df574-e128-4d35-8cbd-3d84502bf7ce"
+    FixedPointAcceleration = "817d07cb-a79a-5c30-9a31-890123675176"
+    LeastSquaresOptim = "0fc2ff8b-aaa3-5acd-a817-1944a5e08891"
+    LineSearches = "d3d80556-e9d4-5f37-9878-2ab0fcc64255"
+    MINPACK = "4854310b-de5a-5eb6-a2a5-c1dee2bd17f9"
+    MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
+    NLSolvers = "337daf1e-9722-11e9-073e-8b9effe078ba"
+    NLsolve = "2774e3e8-f4cf-5e23-947b-6d7e65073b56"
+    PETSc = "ace2c81b-2b5f-4b1e-a30d-d662738edfe0"
+    SIAMFANLEquations = "084e46ad-d928-497d-ad5e-07fa361a48c4"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    SpeedMapping = "f1835b91-879b-4a3f-a438-e4baacf14412"
+    Sundials = "c3572dad-4567-51f8-b174-8c6c989267f4"
+
 [[deps.NonlinearSolveBase]]
 deps = ["ADTypes", "Adapt", "ArrayInterface", "CommonSolve", "Compat", "ConcreteStructs", "DifferentiationInterface", "EnzymeCore", "FastClosures", "FunctionWrappers", "FunctionWrappersWrappers", "LinearAlgebra", "LogExpFunctions", "Markdown", "MaybeInplace", "PreallocationTools", "PrecompileTools", "Preferences", "Printf", "RecursiveArrayTools", "SciMLBase", "SciMLJacobianOperators", "SciMLLogging", "SciMLOperators", "SciMLStructures", "Setfield", "StaticArraysCore", "SymbolicIndexingInterface", "TimerOutputs"]
 git-tree-sha1 = "a7665ca27bf147c0de4f035e622330bec37f4c99"
@@ -1553,6 +2078,26 @@ deps = ["ADTypes", "ArrayInterface", "CommonSolve", "ConcreteStructs", "FiniteDi
 git-tree-sha1 = "5d7b4e007c5eb0b2b8ad188209d55e24018817be"
 uuid = "5959db7a-ea39-4486-b5fe-2dd0bf03d60d"
 version = "2.2.0"
+
+[[deps.NonlinearSolveQuasiNewton]]
+deps = ["ArrayInterface", "CommonSolve", "ConcreteStructs", "LinearAlgebra", "LinearSolve", "MaybeInplace", "NonlinearSolveBase", "PrecompileTools", "Reexport", "SciMLBase", "SciMLLogging", "SciMLOperators", "StaticArraysCore"]
+git-tree-sha1 = "c43b2febecc5c2b85d113f24744405dc380d4779"
+uuid = "9a2c21bd-3a47-402d-9113-8faf9a0ee114"
+version = "1.14.0"
+weakdeps = ["ForwardDiff"]
+
+    [deps.NonlinearSolveQuasiNewton.extensions]
+    NonlinearSolveQuasiNewtonForwardDiffExt = "ForwardDiff"
+
+[[deps.NonlinearSolveSpectralMethods]]
+deps = ["CommonSolve", "ConcreteStructs", "LineSearch", "MaybeInplace", "NonlinearSolveBase", "PrecompileTools", "Reexport", "SciMLBase", "SciMLLogging"]
+git-tree-sha1 = "cb18c69f8dfd9422a9095fde6b6cd0eed9e5e164"
+uuid = "26075421-4e9a-44e1-8bd1-420ed7ad02b2"
+version = "1.7.3"
+weakdeps = ["ForwardDiff"]
+
+    [deps.NonlinearSolveSpectralMethods.extensions]
+    NonlinearSolveSpectralMethodsForwardDiffExt = "ForwardDiff"
 
 [[deps.OffsetArrays]]
 git-tree-sha1 = "117432e406b5c023f665fa73dc26e79ec3630151"
@@ -1607,6 +2152,18 @@ git-tree-sha1 = "94ba93778373a53bfd5a0caaf7d809c445292ff4"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.8.2"
 
+[[deps.OrdinaryDiffEq]]
+deps = ["ADTypes", "CommonSolve", "DocStringExtensions", "OrdinaryDiffEqBDF", "OrdinaryDiffEqCore", "OrdinaryDiffEqDefault", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "OrdinaryDiffEqVerner", "SciMLBase", "SciMLLogging"]
+git-tree-sha1 = "a58f689483a9e3c9a4ae2e2e26d6c2fab397fd03"
+uuid = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+version = "7.1.3"
+
+[[deps.OrdinaryDiffEqBDF]]
+deps = ["ADTypes", "ArrayInterface", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqSDIRK", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "bc31896e93eacdcf707ec3b4e8ea7c46fec9f29c"
+uuid = "6ad6398a-0878-4a85-9266-38940aa047c8"
+version = "2.4.0"
+
 [[deps.OrdinaryDiffEqCore]]
 deps = ["ADTypes", "Accessors", "Adapt", "ArrayInterface", "BinaryHeaps", "CommonSolve", "ConstructionBase", "DiffEqBase", "DocStringExtensions", "EnumX", "EnzymeCore", "FastBroadcast", "FastClosures", "FastPower", "FindFirstFunctions", "FunctionWrappers", "FunctionWrappersWrappers", "InteractiveUtils", "LinearAlgebra", "Logging", "MacroTools", "MuladdMacro", "PrecompileTools", "Preferences", "Random", "RecursiveArrayTools", "Reexport", "SciMLBase", "SciMLLogging", "SciMLOperators", "SciMLStructures", "SymbolicIndexingInterface", "TruncatedStacktraces"]
 git-tree-sha1 = "ee36b306c1f7010fe81ed5544786754a6f141d4f"
@@ -1623,10 +2180,71 @@ version = "4.7.1"
     Polyester = "f517fe37-dbe3-4b94-8317-1923a5111588"
     SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
+[[deps.OrdinaryDiffEqDefault]]
+deps = ["ADTypes", "DiffEqBase", "EnumX", "LinearAlgebra", "LinearSolve", "OrdinaryDiffEqBDF", "OrdinaryDiffEqCore", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "OrdinaryDiffEqVerner", "PrecompileTools", "Preferences", "Reexport", "SciMLBase"]
+git-tree-sha1 = "19a0cc552aec84af608b3a6c10cbbba63fc74836"
+uuid = "50262376-6c5a-4cf5-baba-aaf4f84d72d7"
+version = "2.3.0"
+
+[[deps.OrdinaryDiffEqDifferentiation]]
+deps = ["ADTypes", "ArrayInterface", "ConcreteStructs", "ConstructionBase", "DiffEqBase", "DifferentiationInterface", "FastBroadcast", "FiniteDiff", "ForwardDiff", "FunctionWrappersWrappers", "LinearAlgebra", "LinearSolve", "OrdinaryDiffEqCore", "SciMLBase", "SciMLOperators", "SparseMatrixColorings", "StaticArraysCore"]
+git-tree-sha1 = "e57948c6b09cf5f84acf2415af70b32012e50126"
+uuid = "4302a76b-040a-498a-8c04-15b101fed76b"
+version = "3.4.1"
+weakdeps = ["SparseArrays"]
+
+    [deps.OrdinaryDiffEqDifferentiation.extensions]
+    OrdinaryDiffEqDifferentiationSparseArraysExt = "SparseArrays"
+
+[[deps.OrdinaryDiffEqNonlinearSolve]]
+deps = ["ADTypes", "ArrayInterface", "ConstructionBase", "DiffEqBase", "FastBroadcast", "FastClosures", "ForwardDiff", "LinearAlgebra", "LinearSolve", "MuladdMacro", "NonlinearSolve", "NonlinearSolveBase", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "PreallocationTools", "RecursiveArrayTools", "SciMLBase", "SciMLOperators", "SimpleNonlinearSolve", "SparseArrays", "StaticArraysCore"]
+git-tree-sha1 = "1035f7cde0784d9b6be0e6109fc86b30aa4d02b4"
+uuid = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
+version = "2.4.0"
+
+[[deps.OrdinaryDiffEqRosenbrock]]
+deps = ["ADTypes", "DiffEqBase", "DifferentiationInterface", "FastBroadcast", "FiniteDiff", "ForwardDiff", "LinearAlgebra", "LinearSolve", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqRosenbrockTableaus", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase"]
+git-tree-sha1 = "6bad871889f01bdc737b899609bc92732fd8e29b"
+uuid = "43230ef6-c299-4910-a778-202eb28ce4ce"
+version = "2.4.2"
+
+[[deps.OrdinaryDiffEqRosenbrockTableaus]]
+git-tree-sha1 = "edd12a8982ed2a464770a57c43eebb301173b8a8"
+uuid = "b4bd8bb3-f80f-41d2-9b21-73a655b304b9"
+version = "2.4.0"
+
+[[deps.OrdinaryDiffEqSDIRK]]
+deps = ["ADTypes", "CommonSolve", "ConstructionBase", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MacroTools", "MuladdMacro", "OrdinaryDiffEqCore", "OrdinaryDiffEqDifferentiation", "OrdinaryDiffEqNonlinearSolve", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "e89c429d5c193d9014099e9c6499b54d6f43a2b4"
+uuid = "2d112036-d095-4a1e-ab9a-08536f3ecdbf"
+version = "2.8.1"
+
+[[deps.OrdinaryDiffEqTsit5]]
+deps = ["CommonSolve", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MuladdMacro", "OrdinaryDiffEqCore", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "5f5867239b7ab1b08a7c20108e092351e4e2fe07"
+uuid = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+version = "2.1.0"
+
+[[deps.OrdinaryDiffEqVerner]]
+deps = ["DiffEqBase", "FastBroadcast", "LinearAlgebra", "MuladdMacro", "OrdinaryDiffEqCore", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "0f99348df489875df97d8c15a5b997a1285d8c8c"
+uuid = "79d7bb75-1356-48c1-b8c0-6832512096c2"
+version = "2.2.0"
+
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
 version = "10.44.0+1"
+
+[[deps.PDMats]]
+deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
+git-tree-sha1 = "123266c25174ef6c8d4718920abc206452cf8de6"
+uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
+version = "0.11.41"
+weakdeps = ["StatsBase"]
+
+    [deps.PDMats.extensions]
+    StatsBaseExt = "StatsBase"
 
 [[deps.Pango_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "FriBidi_jll", "Glib_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl"]
@@ -1785,6 +2403,18 @@ git-tree-sha1 = "672c938b4b4e3e0169a07a5f227029d4905456f2"
 uuid = "e99dba38-086e-5de3-a5b1-6e4c66e897c3"
 version = "6.10.2+1"
 
+[[deps.QuadGK]]
+deps = ["DataStructures", "LinearAlgebra"]
+git-tree-sha1 = "5e8e8b0ab68215d7a2b14b9921a946fee794749e"
+uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
+version = "2.11.3"
+
+    [deps.QuadGK.extensions]
+    QuadGKEnzymeExt = "Enzyme"
+
+    [deps.QuadGK.weakdeps]
+    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+
 [[deps.REPL]]
 deps = ["InteractiveUtils", "JuliaSyntaxHighlighting", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
@@ -1874,6 +2504,40 @@ deps = ["UUIDs"]
 git-tree-sha1 = "62389eeff14780bfe55195b7204c0d8738436d64"
 uuid = "ae029012-a4dd-5104-9daa-d747884805df"
 version = "1.3.1"
+
+[[deps.Rmath]]
+deps = ["Random", "Rmath_jll"]
+git-tree-sha1 = "5b3d50eb374cea306873b371d3f8d3915a018f0b"
+uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
+version = "0.9.0"
+
+[[deps.Rmath_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "58cdd8fb2201a6267e1db87ff148dd6c1dbd8ad8"
+uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
+version = "0.5.1+0"
+
+[[deps.Roots]]
+deps = ["Accessors", "CommonSolve", "Printf"]
+git-tree-sha1 = "7fb25a964849d90a0446366cdefca822e0e84900"
+uuid = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
+version = "3.0.6"
+
+    [deps.Roots.extensions]
+    RootsChainRulesCoreExt = "ChainRulesCore"
+    RootsForwardDiffExt = "ForwardDiff"
+    RootsIntervalRootFindingExt = "IntervalRootFinding"
+    RootsSymPyExt = "SymPy"
+    RootsSymPyPythonCallExt = "SymPyPythonCall"
+    RootsUnitfulExt = "Unitful"
+
+    [deps.Roots.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+    IntervalRootFinding = "d2bf35a9-74e0-55ec-b149-d360ff49b807"
+    SymPy = "24249f21-da20-56a4-8eb1-6a02cf4ae2e6"
+    SymPyPythonCall = "bc8888f7-b21e-4b7c-a06a-5d9c9496438c"
+    Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [[deps.RuntimeGeneratedFunctions]]
 deps = ["ExprTools", "SHA", "Serialization"]
@@ -2063,6 +2727,28 @@ weakdeps = ["AMD"]
     [deps.SparseColumnPivotedQR.extensions]
     SparseColumnPivotedQRAMDExt = "AMD"
 
+[[deps.SparseMatrixColorings]]
+deps = ["ADTypes", "DocStringExtensions", "LinearAlgebra", "PrecompileTools", "Random", "SparseArrays"]
+git-tree-sha1 = "f63d76c7b7c329cf11badd564fd8ba877b09c3fe"
+uuid = "0a514795-09f3-496d-8182-132a7b665d35"
+version = "0.4.27"
+
+    [deps.SparseMatrixColorings.extensions]
+    SparseMatrixColoringsCUDAExt = ["CUDA", "cuSPARSE"]
+    SparseMatrixColoringsCliqueTreesExt = "CliqueTrees"
+    SparseMatrixColoringsColorsExt = "Colors"
+    SparseMatrixColoringsGPUArraysExt = "GPUArrays"
+    SparseMatrixColoringsJuMPExt = ["JuMP", "MathOptInterface"]
+
+    [deps.SparseMatrixColorings.weakdeps]
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    CliqueTrees = "60701a23-6482-424a-84db-faee86b9b1f8"
+    Colors = "5ae59095-9a9b-59fe-a467-6f913c188581"
+    GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+    JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+    MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
+    cuSPARSE = "b26da814-b3bc-49ef-b0ee-c816305aa060"
+
 [[deps.SpecialFunctions]]
 deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
 git-tree-sha1 = "6547cbdd8ce32efba0d21c5a40fa96d1a3548f9f"
@@ -2128,6 +2814,20 @@ git-tree-sha1 = "e4d7a1a0edc20af42689ea6f4f3587a2175d50ee"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 version = "0.34.12"
 
+[[deps.StatsFuns]]
+deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
+git-tree-sha1 = "91a5737baed20ee31f3faea0e51f57461f6a689e"
+uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
+version = "2.2.1"
+
+    [deps.StatsFuns.extensions]
+    StatsFunsChainRulesCoreExt = "ChainRulesCore"
+    StatsFunsInverseFunctionsExt = "InverseFunctions"
+
+    [deps.StatsFuns.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
+
 [[deps.StructUtils]]
 deps = ["Dates", "UUIDs"]
 git-tree-sha1 = "82bee338d650aa515f31866c460cb7e3bcef90b8"
@@ -2147,6 +2847,10 @@ version = "2.8.2"
 [[deps.StyledStrings]]
 uuid = "f489334b-da3d-4c2e-b8f0-e476e12c162b"
 version = "1.11.0"
+
+[[deps.SuiteSparse]]
+deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
+uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 
 [[deps.SuiteSparse_jll]]
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
@@ -2634,15 +3338,37 @@ version = "1.13.0+0"
 # ╔═╡ Cell order:
 # ╠═6720d580-8ac2-11f1-918d-656b1710a6d0
 # ╠═5e67a96b-8993-41d4-81b4-823aa39baacb
-# ╠═17f64b5d-3081-47b1-9a8e-4c6ef043064f
-# ╠═de93d598-8c95-4acb-b57d-d9c80c9ceafa
-# ╠═5dc48249-f290-4e59-859c-0bb4a830380c
-# ╠═a7b1c1ee-2931-40eb-a71f-875a93af439f
-# ╠═da79fcdf-64b8-47de-b92e-0887a6250f52
+# ╠═fd3bfa06-1604-4169-b0ed-5f271126bd64
+# ╠═f1ccb469-bdf6-4eaa-8bee-7cf3aac46be6
+# ╠═c8dad9b7-6512-4848-a62f-360d858c5a79
 # ╠═0ac7bb8f-de76-472c-b097-d1afdf143e78
-# ╠═adc3aebb-353c-422c-9a41-cc898521acc0
-# ╠═9ea3564f-d0a7-497f-9277-645857e74e75
-# ╠═db9594ce-364e-4ad9-a69f-54ba34da2a4a
-# ╠═845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+# ╠═16a80ec7-6641-47c5-a01c-a04cd6cc29ca
+# ╠═4fc27157-d483-4c8d-bd19-80f71953cbf1
+# ╠═24084b9e-15d8-4c1f-abfb-98bf18381fe5
+# ╠═de6ceee5-826a-456a-a43c-c5e0fa97b760
+# ╠═7bb92cf8-a01a-43b8-a4a3-b9518798ce23
+# ╠═150c3025-9135-44e4-af92-d386a12cafcc
+# ╠═6ccf8740-0467-448f-979a-4418244ab114
+# ╠═618d56d0-e142-45f9-88bc-e02f6e6f8c47
+# ╠═58e47391-213a-4241-8764-b33150adc389
+# ╠═98002169-2860-44ca-9417-7693386c5bae
+# ╠═b5454709-4800-456f-8fab-1358d25c197e
+# ╠═1d094f51-5877-48fc-9993-dc7401b3b1cc
+# ╠═2986233a-f214-4564-b72a-463f66e204b6
+# ╠═a2b71cdf-cbbb-4a1c-b59c-f51f70278320
+# ╠═c970476e-ad6c-459c-9678-6f8b5a1c9cf3
+# ╠═e835573a-c698-4817-b8c7-f035efa6fa1f
+# ╠═c0fc6e3c-0771-412f-9d67-d29780773a69
+# ╠═4a45c89d-4b85-4bcc-b961-723a79163600
+# ╠═a8ecf1d7-9318-4e48-b1f4-5e1ee564ff4e
+# ╠═58f94eb7-d4b1-47c4-adb6-2bf84d5bc8d0
+# ╠═fc640e32-ebf7-47ed-92ba-1f0b6c21a80c
+# ╠═ea695c43-649f-4a1a-957d-4a51fadb161e
+# ╠═58f431c4-ff0a-409d-90a3-b4933e20cd71
+# ╠═ed42a2b4-7251-4640-9d53-2c9712196e0c
+# ╟─845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═fca94d1e-5e5c-4ee7-a13d-756c0bc69316
+# ╠═f5b07d5d-6ad4-499b-ab96-a572d1872321
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

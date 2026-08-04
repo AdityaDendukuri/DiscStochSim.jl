@@ -4,349 +4,297 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ d4000001-4000-4000-8000-000000000001
+# ╔═╡ 6720d580-8ac2-11f1-918d-656b1710a6d0
 begin
 	using Catalyst, CommonSolve
 	using Plots, UnicodePlots, Distributions
-	using ExponentialUtilities, Expokit
-	using LinearAlgebra, SparseArrays, Statistics, Random
-	include(joinpath(@__DIR__, "../src/DiscStochSim.jl"))
+	using ExponentialUtilities, Expokit, JumpProcesses
+	include("src/DiscStochSim.jl")
 	using .DiscStochSim
 end
 
-# ╔═╡ d4000002-4000-4000-8000-000000000002
-md"""
-# General state-first ELSE, applied to the Burrage toggle
+# ╔═╡ 5e67a96b-8993-41d4-81b4-823aa39baacb
+rn = @reaction_network begin
+    k1, X --> 2X
+    k2, X + Y --> 2Y
+    k3, Y --> 0
+end
 
-The reusable ELSE code only needs:
-
-\$\$
-(J,R,\mathcal B),
-\$\$
-
-where \$J\$ is a list of internal states, \$R\$ is the killed generator on
-\$J\$, and \$\mathcal B\$ contains every physical transition leaving \$J\$.
-
-The generic implementation is in `src/else.jl`. Starting at state \$a\$, it
-solves
-
-\$\$
-z=Z e_a,
-\qquad
-z^{(2)}=Zz,
-\qquad
-Z=-R^{-1}.
-\$\$
-
-If \$\Delta_b\$ is the total rate leaving \$J\$ from state \$b\$, it samples the
-pre-exit state first:
-
-\$\$
-\Pr(B=b\mid a)=\Delta_bz_b.
-\$\$
-
-Then use Mark's conditional mean time
-
-\$\$
-\mathbb E[\tau\mid B=b,a]
-=
-\frac{z_b^{(2)}}{z_b}.
-\$\$
-
-No matrix exponential or Fourier calculation is used. The Burrage-specific
-code below only defines the model, the two state sets, and the plot.
-"""
-
-# ╔═╡ d4000003-4000-4000-8000-000000000003
+# ╔═╡ fd3bfa06-1604-4169-b0ed-5f271126bd64
 begin
-    reactions = @reaction_network begin
-        @species U(t) V(t)
-        @parameters η α1 β1 K1 d1 dU α2 β2 K2 d2
-
-        η * (α1 + β1 * K1^3 / (K1^3 + V^3)), 0 --> U
-        d1 + dU,                              U --> 0
-        η * (α2 + β2 * K2^3 / (K2^3 + U^3)), 0 --> V
-        d2,                                   V --> 0
-    end
-
-    model = DiscreteStochasticSystem(reactions)
-
-    parameters = (
-        η=1.0,
-        α1=20.0,
-        β1=400.0,
-        K1=100.0,
-        d1=1.0,
-        dU=0.1 / 1.1,
-        α2=20.0,
-        β2=400.0,
-        K2=100.0,
-        d2=1.0,
-    )
-
-    rates = collect(values(parameters))
+	u0 = [:X => 50, :Y => 100]
+	ps = [:k1 => 1.0, :k2 => 0.005, :k3 => 0.6]
+	values(ps) |> collect
 end
 
-# ╔═╡ d4000004-4000-4000-8000-000000000004
-begin
-    U_birth(v) =
-        parameters.η * (
-            parameters.α1 +
-            parameters.β1 * parameters.K1^3 /
-            (parameters.K1^3 + v^3)
-        )
+# ╔═╡ c8dad9b7-6512-4848-a62f-360d858c5a79
+values(u0)
 
-    U_death(u) = (parameters.d1 + parameters.dU) * u
+# ╔═╡ 93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+dss = DiscStochSim.DiscreteStochasticSystem(rn)
 
-    V_birth(u) =
-        parameters.η * (
-            parameters.α2 +
-            parameters.β2 * parameters.K2^3 /
-            (parameters.K2^3 + u^3)
-        )
+# ╔═╡ 59231485-ab13-4cfb-9d9c-c41970d6f6ef
+function normalize_probability(p; atol=1e-12)
+    q = copy(p)
 
-    V_death(v) = parameters.d2 * v
+    # Reject meaningful negative values
+    minimum(q) < -atol &&
+        error("Probability vector contains a significant negative entry: $(minimum(q))")
+
+    # Remove numerical roundoff
+    q .= max.(q, 0.0)
+
+    total = sum(q)
+    total > 0 || error("Probability vector has zero total mass.")
+
+    return q ./ total
 end
 
-# ╔═╡ 728b5123-9011-4904-be95-61fc3a6897cf
-function toggle_transitions(state)
-    u, v = Tuple(state)
-    transitions = Pair{CartesianIndex{2},Float64}[]
-
-    push!(transitions, CartesianIndex(u + 1, v) => U_birth(v))
-    push!(transitions, CartesianIndex(u, v + 1) => V_birth(u))
-    u > 0 &&
-        push!(transitions, CartesianIndex(u - 1, v) => U_death(u))
-    v > 0 &&
-        push!(transitions, CartesianIndex(u, v - 1) => V_death(v))
-
-    transitions
+# ╔═╡ 9d43f4c7-8ecc-4301-9c65-854dc7a42d05
+function propensities(x, dss, rates)
+    return [α(x, rates, 0.0) for α in dss.propensities]
 end
 
-# ╔═╡ 1038a12e-749f-4a41-9547-c46d567c0213
-function make_basin(U_high, grid_limit)
-    states = StateSpace{CartesianIndex, Float64}()
+# ╔═╡ 66ed0fc5-d749-484d-8acd-d0121973761e
+function is_absorbing(x, dss, rates; atol=1e-14)
+    props = propensities(x, dss, rates)
+    return sum(props) <= atol
+end
 
-    for u in 0:grid_limit
-        for v in 0:grid_limit
-            inside = U_high ? u >= v : v >= u
-            inside && add_state!(states, CartesianIndex(u, v), 0.0)
+# ╔═╡ 99692eb0-d80b-4bca-9baf-ddc8ee0516b1
+function expand_nonabsorbing!(space, dss, rates; depth=1)
+    for _ in 1:depth
+        current_states = copy(space.states)
+
+        for x in current_states
+            for ν in dss.stoichvecs
+                y = x + ν
+
+                any(Tuple(y) .< 0) && continue
+                is_absorbing(y, dss, rates) && continue
+
+                if !haskey(space.index, y)
+                    DiscStochSim.add_state!(space, y)
+                end
+            end
         end
     end
 
-    R, _, _, _ = build_generator(
-        states,
-        model,
+    return space
+end
+
+# ╔═╡ adc3aebb-353c-422c-9a41-cc898521acc0
+function fess_step(x, dss, rates; depth=1, atol=1e-12)
+    props = [α(x, rates, 0.0) for α in dss.propensities]
+
+    # No reaction can fire: the trajectory has terminated
+    if sum(props) <= atol
+        return x, 0.0, true
+    end
+
+    space = DiscStochSim.StateSpace{CartesianIndex, Float64}()
+    DiscStochSim.add_state!(space, x, 1.0)
+    expand_nonabsorbing!(space, dss, rates; depth=depth)
+
+    A = DiscStochSim.build_generator(
+        space,
+        dss,
         rates,
         0.0;
-        absorbing=true,
-    )
+        absorbing=true
+    )[1]
 
-    exits = Dict(
-        state => [
-            transition
-            for transition in toggle_transitions(state)
-            if !haskey(states.index, first(transition))
-        ]
-        for state in states.states
-        if any(
-            !haskey(states.index, first(transition))
-            for transition in toggle_transitions(state)
-        )
-    )
+    p = space.probs
+    u = -(A \ p)
 
-    ELSESubnetwork(
-        states.states,
-        R,
-        exits;
-        name=U_high ? :U_high : :V_high,
-    )
+    w = -vec(sum(A; dims=1))
+    exit_probability = normalize_probability(w .* u)
+
+    exit_index = rand(Categorical(exit_probability))
+    x_exit = space.states[exit_index]
+
+    exit_props = [α(x_exit, rates, 0.0) for α in dss.propensities]
+
+    outward_reactions = Int[]
+    outward_rates = Float64[]
+
+    for r in eachindex(dss.stoichvecs)
+        destination = x_exit + dss.stoichvecs[r]
+
+        if !haskey(space.index, destination) && exit_props[r] > atol
+            push!(outward_reactions, r)
+            push!(outward_rates, exit_props[r])
+        end
+    end
+
+    isempty(outward_reactions) &&
+        error("No outward reaction from pre-exit state $x_exit")
+
+    outward_rates = normalize_probability(outward_rates)
+    reaction = outward_reactions[rand(Categorical(outward_rates))]
+
+    x_next = x_exit + dss.stoichvecs[reaction]
+    Δt = sum(u)
+
+    return x_next, Δt, false
 end
 
-# ╔═╡ d4000006-4000-4000-8000-000000000006
-md"""
-`ELSESubnetwork` checks that the supplied exits account for every column loss
-in ``R``, then factorizes ``-R`` once. The same factorization is reused for
-every entry state and every trajectory.
-"""
+# ╔═╡ 3268cecc-3ae0-4e11-ac3e-a3300b95af2e
+function sample_fess_trajectory(
+    x₀,
+    tf,
+    dss,
+    rates;
+    depth=1,
+    atol=1e-12,
+    max_steps=100_000
+)
+    times = [0.0]
+    states = [x₀]
 
-# ╔═╡ d4000007-4000-4000-8000-000000000007
-basin_for(state, basins) =
-    state[1] >= state[2] ? basins.U : basins.V
+    t = 0.0
+    x = x₀
 
-# ╔═╡ d4000009-4000-4000-8000-000000000009
-md"""
-For a single path, `else_step` samples one pre-exit state and one physical exit
-channel. For a population, `else_population_step` draws one multinomial column
-for every occupied entry state.
-"""
+    for step in 1:max_steps
+        t >= tf && break
 
-# ╔═╡ d400000a-4000-4000-8000-00000000000a
-md"""
-## One ELSE trajectory
+        props = [α(x, rates, 0.0) for α in dss.propensities]
 
-One loop iteration replaces all reactions inside one complete basin.
-"""
+        # Globally terminal state
+        if sum(props) <= atol
+            push!(times, tf)
+            push!(states, x)
+            return times, states
+        end
 
-# ╔═╡ d400000b-4000-4000-8000-00000000000b
-md"""
-The complete single-trajectory loop is now the model-independent
-`else_trajectory` function.
-"""
+        x_next, Δt, terminated =
+            fess_step(x, dss, rates; depth=depth, atol=atol)
 
-# ╔═╡ d400000c-4000-4000-8000-00000000000c
-md"""
-## Many trajectories, constructed together
+        #@info "FESS trajectory step" step t x x_next Δt props
 
-For every occupied entry state, one column is constructed:
+        if terminated
+            push!(times, tf)
+            push!(states, x)
+            return times, states
+        end
 
-\$\$
-M^{(N)}_{\cdot a}
-\sim
-\operatorname{Multinomial}
-\left(n_a,\{\Delta_bZ_{ba}\}_b\right).
-\$\$
+        isfinite(Δt) ||
+            error("Non-finite exit time at state $x: Δt = $Δt")
 
-The code never loops over the individual trajectories.
-"""
+        Δt > atol ||
+            error("Time failed to advance at state $x: Δt = $Δt")
 
-# ╔═╡ d400000d-4000-4000-8000-00000000000d
-md"""
-The population loop is likewise the generic `else_population` function. It can
-partition a mixed population among any number of subnetworks using
-`subnetwork_for(state)`.
-"""
+        x_next != x ||
+            error("FESS returned the same state $x, so the trajectory cannot progress.")
 
-# ╔═╡ d400000e-4000-4000-8000-00000000000e
-md"""
-## Run controls
+        if t + Δt >= tf
+            push!(times, tf)
+            push!(states, x)
+            return times, states
+        end
 
-The physical grid is large, so execution is paused initially.
-"""
+        t += Δt
+        x = x_next
 
-# ╔═╡ d400000f-4000-4000-8000-00000000000f
+        push!(times, t)
+        push!(states, x)
+    end
+
+    error("Exceeded $max_steps steps at t=$t and state=$x")
+end
+
+# ╔═╡ 16a80ec7-6641-47c5-a01c-a04cd6cc29ca
 begin
-    run_else = true
-
-    grid_limit = 680
-    number_of_else_steps = 4
-    ensemble_size = 1_000_000
+	x₀ = CartesianIndex(50, 100)
+	rates = [1.0, 0.005, 0.6]
+	tf = 30.0
+	
+	times, states = sample_fess_trajectory(
+	    x₀,
+	    tf,
+	    dss,
+	    rates;
+	    depth=1
+	)
 end
 
-# ╔═╡ d4000010-4000-4000-8000-000000000010
-basins = if run_else
-    (
-        U=make_basin(true, grid_limit),
-        V=make_basin(false, grid_limit),
-    )
-else
-    nothing
+# ╔═╡ 4fc27157-d483-4c8d-bd19-80f71953cbf1
+function plot_fess_traj(times, states; title="")
+	X  = getindex.(Tuple.(states), 1)
+	Y  = getindex.(Tuple.(states), 2)
+	
+	plot(
+	    times,
+	    [X Y];
+	    seriestype = :steppost,
+	    label = ["X", "Y"],
+	    xlabel = "Time",
+	    ylabel = "Molecule count",
+	    title = title,
+	    linewidth = 1
+	)
 end
 
-# ╔═╡ d4000011-4000-4000-8000-000000000011
-single_result = if run_else
-    else_trajectory(
-        state -> basin_for(state, basins),
-        CartesianIndex(85, 5),
-        number_of_else_steps,
-        rng=MersenneTwister(1),
-    )
-else
-    nothing
+# ╔═╡ 24084b9e-15d8-4c1f-abfb-98bf18381fe5
+plot_fess_traj(times, states)
+
+# ╔═╡ b5454709-4800-456f-8fab-1358d25c197e
+begin
+	jprob = JumpProblem(rn, u0, (0., tf), ps);
+	jump_sol = solve(jprob);
+	plot(jump_sol)
 end
 
-# ╔═╡ d4000012-4000-4000-8000-000000000012
-if single_result === nothing
-    md"Set `run_else = true` to run the single and population versions."
-else
-    let
-        U_values = [state[1] for state in single_result.states]
-        V_values = [state[2] for state in single_result.states]
+# ╔═╡ 0ac7bb8f-de76-472c-b097-d1afdf143e78
+jump_sol.t |> length
 
-        plot(
-            single_result.times,
-            U_values;
-            seriestype=:steppost,
-            lw=2.5,
-            color=:steelblue,
-            label="U",
-            xlabel="time",
-            ylabel="molecule count",
-            title="One state-first ELSE trajectory",
-            size=(780, 440),
-        )
-        plot!(
-            single_result.times,
-            V_values;
-            seriestype=:steppost,
-            lw=2.5,
-            color=:darkorange,
-            label="V",
-        )
-    end
+# ╔═╡ 1d094f51-5877-48fc-9993-dc7401b3b1cc
+@info length(jump_sol.t), length(times)
+
+# ╔═╡ 845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═╡ disabled = true
+#=╠═╡
+begin
+      fsp_prob = FSPProblem(rn, 
+							CartesianIndex(N, 0, 0), 
+							(0.0, 50.0), 
+							rates; 
+							bounds=(0, N))
+	
+      fsp_alg  = AdaptiveFSP(ε_dt = 1.0, 
+                             expand_method = :stoich,
+                             expansion_depth = 2,     
+                             prob_quantile = 0.2, 
+                             flux_tolerance = 1e-5,   
+                             save_interval = 20)
+	
+      fsp_sol, = solve(fsp_prob, fsp_alg)
+end
+function probability_C_is_zero(fsp_sol, time_index)
+    C_distribution = marginal(fsp_sol, time_index, 3)
+    zero_index = findfirst(==(0), C_distribution.values)
+
+    return zero_index === nothing ? 0.0 : C_distribution.probs[zero_index]
 end
 
-# ╔═╡ d4000013-4000-4000-8000-000000000013
-population_result = if run_else
-    else_population(
-        state -> basin_for(state, basins),
-        CartesianIndex(85, 5),
-        ensemble_size,
-        number_of_else_steps,
-        rng=MersenneTwister(2),
-    )
-else
-    nothing
+survival_probability = [
+    probability_C_is_zero(fsp_sol, i)
+    for i in eachindex(fsp_sol)
+]
+
+fsp_mfpt = 0.0
+
+for i in 1:(length(fsp_sol.t) - 1)
+    Δt = fsp_sol.t[i + 1] - fsp_sol.t[i]
+    average_survival =
+        (survival_probability[i] + survival_probability[i + 1]) / 2
+
+    fsp_mfpt += average_survival * Δt
 end
+  ╠═╡ =#
 
-# ╔═╡ d4000014-4000-4000-8000-000000000014
-population_result === nothing ?
-    nothing :
-    population_result.history
+# ╔═╡ 6226cf93-6978-47f1-9499-1027d145e49f
 
-# ╔═╡ d4000015-4000-4000-8000-000000000015
-if population_result === nothing
-    nothing
-else
-    let
-        field = fill(NaN, grid_limit + 1, grid_limit + 1)
-        U_occupation = population_result.occupations[:U_high]
-        V_occupation = population_result.occupations[:V_high]
-        U_maximum = maximum(U_occupation)
-        V_maximum = maximum(V_occupation)
-
-        for (state, occupation) in zip(
-            basins.U.states,
-            U_occupation,
-        )
-            occupation > 0 &&
-                (field[state[1] + 1, state[2] + 1] =
-                    log10(occupation / U_maximum))
-        end
-
-        for (state, occupation) in zip(
-            basins.V.states,
-            V_occupation,
-        )
-            occupation > 0 &&
-                (field[state[1] + 1, state[2] + 1] =
-                    log10(occupation / V_maximum))
-        end
-
-        Plots.heatmap(
-            0:grid_limit,
-            0:grid_limit,
-            permutedims(field);
-            clims=(-6, 0),
-            color=:viridis,
-            xlabel="U",
-            ylabel="V",
-            title="ELSE basin shapes (normalized separately)",
-            colorbar_title="log₁₀ relative occupation",
-            size=(600, 540),
-        )
-    end
-end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -356,11 +304,8 @@ CommonSolve = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 
 [compat]
@@ -369,6 +314,7 @@ CommonSolve = "~0.2.12"
 Distributions = "~0.25.130"
 Expokit = "~0.2.0"
 ExponentialUtilities = "~1.33.0"
+JumpProcesses = "~9.29.2"
 Plots = "~1.41.6"
 UnicodePlots = "~3.8.4"
 """
@@ -379,7 +325,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "f63c2b00d2af9c262e686cff29c03628a42b5403"
+project_hash = "79514d033e9fbbf34bf7570f38de1a2479b19c9e"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "0a81a018463de6c3f4f2c9360121c562e5add9e4"
@@ -2993,26 +2939,24 @@ version = "1.13.0+0"
 """
 
 # ╔═╡ Cell order:
-# ╠═d4000001-4000-4000-8000-000000000001
-# ╟─d4000002-4000-4000-8000-000000000002
-# ╠═d4000003-4000-4000-8000-000000000003
-# ╠═d4000004-4000-4000-8000-000000000004
-# ╠═728b5123-9011-4904-be95-61fc3a6897cf
-# ╠═1038a12e-749f-4a41-9547-c46d567c0213
-# ╟─d4000006-4000-4000-8000-000000000006
-# ╠═d4000007-4000-4000-8000-000000000007
-# ╟─d4000009-4000-4000-8000-000000000009
-# ╟─d400000a-4000-4000-8000-00000000000a
-# ╠═d400000b-4000-4000-8000-00000000000b
-# ╟─d400000c-4000-4000-8000-00000000000c
-# ╠═d400000d-4000-4000-8000-00000000000d
-# ╟─d400000e-4000-4000-8000-00000000000e
-# ╠═d400000f-4000-4000-8000-00000000000f
-# ╠═d4000010-4000-4000-8000-000000000010
-# ╠═d4000011-4000-4000-8000-000000000011
-# ╠═d4000012-4000-4000-8000-000000000012
-# ╠═d4000013-4000-4000-8000-000000000013
-# ╠═d4000014-4000-4000-8000-000000000014
-# ╠═d4000015-4000-4000-8000-000000000015
+# ╠═6720d580-8ac2-11f1-918d-656b1710a6d0
+# ╠═5e67a96b-8993-41d4-81b4-823aa39baacb
+# ╠═fd3bfa06-1604-4169-b0ed-5f271126bd64
+# ╠═c8dad9b7-6512-4848-a62f-360d858c5a79
+# ╠═0ac7bb8f-de76-472c-b097-d1afdf143e78
+# ╠═93da1c86-7e91-47a6-9f18-a7ba5dc5e787
+# ╠═99692eb0-d80b-4bca-9baf-ddc8ee0516b1
+# ╠═59231485-ab13-4cfb-9d9c-c41970d6f6ef
+# ╠═9d43f4c7-8ecc-4301-9c65-854dc7a42d05
+# ╠═66ed0fc5-d749-484d-8acd-d0121973761e
+# ╠═adc3aebb-353c-422c-9a41-cc898521acc0
+# ╠═3268cecc-3ae0-4e11-ac3e-a3300b95af2e
+# ╠═16a80ec7-6641-47c5-a01c-a04cd6cc29ca
+# ╠═4fc27157-d483-4c8d-bd19-80f71953cbf1
+# ╠═24084b9e-15d8-4c1f-abfb-98bf18381fe5
+# ╠═b5454709-4800-456f-8fab-1358d25c197e
+# ╠═1d094f51-5877-48fc-9993-dc7401b3b1cc
+# ╟─845e4bf6-1410-4700-a9ec-8e425a980ef6
+# ╠═6226cf93-6978-47f1-9499-1027d145e49f
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

@@ -195,3 +195,5 @@ using Random
         @test sum(m.probs) ≈ 1.0 atol=0.01
     end
 end
+
+include("test_fess.jl")

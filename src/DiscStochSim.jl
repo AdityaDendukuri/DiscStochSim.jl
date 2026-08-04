@@ -16,6 +16,7 @@ include("boundary_conditions.jl")
 include("state_space.jl")
 include("generator.jl")
 include("else.jl")
+include("fess/fess.jl")
 
 # Adaptive FSP solver
 include("adaptive_fsp/problem.jl")
@@ -31,6 +32,12 @@ export StateSpace, add_state!, remove_states!, expand!, expand_ssa!, expand_flux
 export build_generator, reconstruct_generator
 export ELSESubnetwork, else_law, else_step, else_trajectory
 export else_population_step, else_population
+export FESSOptions, FESSNetwork, FESSWorkspace, FESSSubnetwork
+export FESSSheddingStats, FESSStep, FESSTrajectory, FESSEnsemble
+export augment!, occupation, second_occupation, escape_time
+export escape_probabilities, conditional_time, cut_time_losses, shed!
+export fess_step!, fess_step, fess_trajectory, fess_fixed_steps
+export fess_ensemble, fess_summary, compare_fess_steps
 export FSPProblem, FSPSolution, AdaptiveFSP, AdaptiveFSPDiagnostics, KrylovFSP, KrylovFSPDiagnostics, prune_threshold!
 using CommonSolve: solve
 export solve
